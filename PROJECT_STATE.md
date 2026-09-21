@@ -15,6 +15,7 @@ Last updated: 2026-09-21
   `docs/edit-mode-phase3.md`
 - EditMode Phase 4 (presets + no-prompt auto edit): complete — see `docs/edit-mode-phase4.md`
 - EditMode Phase 5 (render, export, EditMode QA): complete — see `docs/edit-mode-phase5.md`
+- EditMode Phase 6 (AI chat editor): complete — see `docs/edit-mode-phase6.md`
 
 ## Product Flow — Analysis-First, Platform-Aware Clip Creation
 
@@ -876,6 +877,58 @@ Transcript writes are idempotent. A retried processing job replaces the prior se
 - WHISPER_DEVICE defaults to cpu.
 - WHISPER_COMPUTE_TYPE defaults to int8.
 - The first transcription downloads the configured converted Whisper model if it is not cached.
+
+## EditMode Phase 6 — AI Chat Editor
+
+A natural-language front end to the EditMode editor. It is a front end, not a second editor: a
+sentence becomes a structured command bundle that the canonical layer executes through the same
+`applyElementCommand` / `normalizeVideoTrack` / `validateTimeline` path the manual editor and the
+preset planner use. Full detail in `docs/edit-mode-phase6.md`.
+
+- Pipeline: message + selection + playhead → bounded handle-addressed context (with deterministic
+  transcript search) → deterministic planner, or the LLM under `CHAT_INTENT_SCHEMA` → validation →
+  grounding/resolution → server-held PROPOSAL → user Apply → `applyAssistantBundle` → exactly ONE
+  `EditHistory` row (actor `ASSISTANT`, action `APPLY_ASSISTANT_EDIT`), so one chat request is one
+  undo step.
+- Proposal-first without exception. Even a cosmetic change shows a plain-sentence preview; raw
+  command JSON is never surfaced. `plan` writes no edit: same revision, elements, style settings and
+  history count before and after.
+- The model addresses nothing directly. Elements and assets are exposed only behind `el3` /
+  `asset1` handles or the target kinds `SELECTED` / `LAST` / `ROLE` / `AT_TIME` / `REF`; parameters
+  are filtered to a fixed allow-list, so FFmpeg, shell strings and raw ids cannot survive
+  validation.
+- Timestamps are never invented: every time value is bounds-checked against the live timeline, and a
+  `TRANSCRIPT`-grounded range must match a window the backend's own `searchTranscript` produced. A
+  topic mentioned twice resolves to `AMBIGUOUS` and becomes a question.
+- Destructive commands (`TRIM`/`SPLIT`/`DELETE`/`REMOVE`) require confidence ≥ 0.75; reversible
+  cosmetic commands require ≥ 0.6.
+- `AT_TIME` targets bind during execution, not at plan time, so a mid-clip cut (split → split →
+  delete) stays correct as each split changes which segment covers a second.
+- A cut that shortens the timeline emits explicit `SET_ELEMENT_TIMING` refits for overflowing
+  overlays, ordered BEFORE the cut — load-bearing, because the canonical layer validates after every
+  command.
+- Chat thread lives in `EditProject.settings.chat`, bounded (40 messages / 2000 chars / 8 remembered
+  element ids). It is conversation state, not project state: it does not move the revision, it is
+  excluded from history snapshots, and `historyMutation` deliberately preserves it across undo.
+- Proposals are held in process for 15 min (`EDIT_MODE_CHAT_PROPOSAL_TTL_MS`), 8 per project. The
+  client sends only a `proposalId`. RESTART LIMITATION: pending proposals are lost on restart and
+  Apply then returns `PROPOSAL_NOT_FOUND`; nothing can be half-applied.
+- Stale handling: a proposal records `baseRevision` and `plannedDurationSec`. It is safely rebased
+  when every resolved element still exists and (for time-carrying plans) the timeline length is
+  unchanged; otherwise it is marked `STALE`.
+- Routing reuses the existing `editingPlan` role — no new provider, key or role, and no frozen file
+  touched. `editingPlan` is absent from the router's frozen OFFLINE allowlist, so OFFLINE chat
+  planning is deterministic-only. `EDIT_MODE_CHAT_LLM_ENABLED=false` disables the model path.
+- **No schema change.** `EditHistoryActor.ASSISTANT`, the `ASSISTANT` element origin and the
+  free-form `settings` JSON already existed.
+- Isolation verified: no `ProcessingJob` / `ClipCandidate` / `GeneratedClip`, no frozen service
+  reference, no FFmpeg or shell reach, and applying a chat edit never triggers an export. Export
+  stays deterministic and LLM-free.
+- API (all under `/edit-mode`): `GET :id/chat`, `POST :id/chat/plan`, `POST :id/chat/apply`,
+  `POST :id/chat/cancel`.
+- Tests: `test:edit-mode-chat` (89 offline checks, also run by `test:edit-mode`) and
+  `verify:edit-mode-chat` (27 checks against the live stack, ending in a real Phase 5 export and
+  FFprobe, cleaning up after itself).
 
 ## Explicitly deferred
 

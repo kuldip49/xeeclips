@@ -8,6 +8,8 @@ import { EditModePresetService } from './edit-mode-preset.service';
 import { EditModeController } from './edit-mode.controller';
 import { EditModeService } from './edit-mode.service';
 import { EditModeRenderService } from './render/edit-mode-render.service';
+import { EditChatService } from './chat/edit-chat.service';
+import { EditChatProposalStore } from './chat/edit-chat-proposal-store';
 
 // LLM routing is provided directly rather than by importing ProcessingModule, so
 // the frozen processing queue and video processor never enter EditMode's
@@ -17,6 +19,7 @@ import { EditModeRenderService } from './render/edit-mode-render.service';
   controllers: [EditModeController],
   providers: [EditModeService, EditModeAnalysisService, EditModePresetService,
     EditModeRenderService,
+    EditChatService, EditChatProposalStore,
     LlmProviderService, ProviderRegistry, LlmRouterService]
 })
 export class EditModeModule {}

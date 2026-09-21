@@ -1,5 +1,6 @@
-import type { EditAsset, EditAssetRole, EditExport, EditExportProgress, EditHistory,
-  EditPresetApplyResult, EditPresetId, EditPresetProposal, EditPresetSummary, EditProject,
+import type { ChatApplyResult, ChatMessage, ChatPlanResult, ChatThreadResult, EditAsset,
+  EditAssetRole, EditExport, EditExportProgress, EditHistory, EditPresetApplyResult,
+  EditPresetId, EditPresetProposal, EditPresetSummary, EditProject,
   SourceVideoOption } from './edit-mode-types';
 
 export class EditModeApiError extends Error {
@@ -186,3 +187,39 @@ export const getEditExport = (id: string, assetId: string) =>
 
 /** The finished MP4, served with range support for preview and download. */
 export const editExportFileUrl = (assetId: string) => editAssetPlaybackUrl(assetId);
+
+// --- EditMode Phase 6: AI chat editor ---------------------------------------
+
+/** The stored conversation, so the panel survives a reload. */
+export const getEditChatThread = (id: string) =>
+  request<ChatThreadResult>(`/edit-mode/projects/${encodeURIComponent(id)}/chat`);
+
+/**
+ * PLAN never changes the timeline.
+ *
+ * The selection, the selected range and the playhead travel with the message so
+ * that "split here" and "make this smaller" mean what the user is looking at.
+ */
+export const planEditChat = (id: string, input: {
+  message: string;
+  revision: number;
+  selectedElementId?: string | null;
+  selectedTimeRange?: { startSec: number; endSec: number } | null;
+  playheadSec?: number;
+}) => request<ChatPlanResult>(`/edit-mode/projects/${encodeURIComponent(id)}/chat/plan`, {
+  method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input)
+});
+
+/** APPLY sends only the proposal id; the server holds the commands. */
+export const applyEditChat = (id: string, proposalId: string, revision: number) =>
+  request<ChatApplyResult>(`/edit-mode/projects/${encodeURIComponent(id)}/chat/apply`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ proposalId, revision })
+  });
+
+export const cancelEditChat = (id: string, proposalId: string) =>
+  request<{ cancelled: true; messages: ChatMessage[] }>(
+    `/edit-mode/projects/${encodeURIComponent(id)}/chat/cancel`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ proposalId })
+    });

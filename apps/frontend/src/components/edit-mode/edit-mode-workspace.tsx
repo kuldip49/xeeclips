@@ -8,9 +8,10 @@ import {
   uploadEditAsset, uploadEditSource
 } from '@/lib/edit-mode-api';
 import { historyAvailability, timelineDuration, videoTrack } from '@/lib/edit-mode-timeline';
-import type { EditAsset, EditElement, EditHistory, EditPresetApplyResult, EditProject,
-  EditProjectStyle } from '@/lib/edit-mode-types';
+import type { ChatApplyResult, EditAsset, EditElement, EditHistory, EditPresetApplyResult,
+  EditProject, EditProjectStyle } from '@/lib/edit-mode-types';
 import { EditAssetPicker } from './edit-asset-picker';
+import { EditChatPanel } from './edit-chat-panel';
 import { EditExportPanel } from './edit-export-panel';
 import { EditPresetPanel } from './edit-preset-panel';
 import { EditHistoryPanel } from './edit-history-panel';
@@ -231,6 +232,22 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
     void refreshHistory();
   }, [acceptServerProject, refreshHistory, selectedElementId]);
 
+  // An applied chat turn is one ASSISTANT revision, so it is accepted exactly
+  // like a preset application: take the server's project and refresh history.
+  const chatApplied = useCallback((result: ChatApplyResult) => {
+    setError('');
+    acceptServerProject(result.project);
+    const created = result.affectedElementIds.find((id) =>
+      (result.project.elements ?? []).some((element) => element.id === id));
+    const videos = videoTrack(result.project.elements ?? []);
+    if (created) setSelectedElementId(created);
+    else if (!videos.some((element) => element.id === selectedElementId)) {
+      setSelectedElementId(videos[0]?.id ?? null);
+    }
+    setCurrentPlayheadSec((time) => Math.min(time, timelineDuration(result.project.elements ?? [])));
+    void refreshHistory();
+  }, [acceptServerProject, refreshHistory, selectedElementId]);
+
   const addAsset = (asset: EditAsset) => {
     const action = asset.role === 'AUDIO' ? 'add-audio' : asset.role === 'LOGO' ? 'add-logo' : 'add-image';
     void applyCommand({ action, assetId: asset.id });
@@ -248,7 +265,7 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
       </div>
     </header>
     {error && <div role='alert' className='rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-200'>{error}</div>}
-    <div className='grid min-w-0 gap-5 xl:grid-cols-[250px_minmax(0,1fr)_280px]'>
+    <div className='grid min-w-0 gap-5 xl:grid-cols-[250px_minmax(0,1fr)_320px]'>
       <EditAssetPicker assets={project.assets} busy={!!busy}
         onUploadSource={(file) => run('upload', () => uploadEditSource(project.id, project.revision, file))}
         onImport={(videoId) => run('import', () => importEditSource(project.id, project.revision, videoId))}
@@ -259,7 +276,10 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
         currentPlayheadSec={currentPlayheadSec} onPlayheadChange={setCurrentPlayheadSec}
         onSelect={setSelectedElementId} onPreviewElements={(elements) => setProject((current) => ({ ...current, elements }))}
         onCommitTransform={commitTransform} />
-      <div className='grid content-start gap-5'><EditPresetPanel projectId={project.id}
+      <div className='grid content-start gap-5'><EditChatPanel projectId={project.id}
+        revision={project.revision} hasSource={!!source} disabled={!!busy}
+        selectedElementId={selectedElementId} selectedTimeRange={null}
+        playheadSec={currentPlayheadSec} onApplied={chatApplied} onError={setError} /><EditPresetPanel projectId={project.id}
         revision={project.revision} style={style} disabled={!!busy} hasSource={!!source}
         onApplied={presetApplied} onError={setError} /><EditExportPanel projectId={project.id}
         revision={project.revision} hasSource={!!source} disabled={!!busy}

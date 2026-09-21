@@ -31,7 +31,7 @@ const PRESET_ONLY_ACTIONS = ['ADD_SUBTITLE'] as const;
 // Actions that produce an undoable user-level revision. A whole preset
 // application is one entry here, so it undoes and redoes as a single step.
 const MANUAL_ACTIONS = new Set(['TRIM_ELEMENT', 'SPLIT_ELEMENT', 'DELETE_ELEMENT',
-  'MOVE_ELEMENT', 'APPLY_PRESET', ...PHASE3_ACTIONS]);
+  'MOVE_ELEMENT', 'APPLY_PRESET', 'APPLY_ASSISTANT_EDIT', ...PHASE3_ACTIONS]);
 const ELEMENT_ORIGINS = new Set(['USER', 'PRESET', 'ASSISTANT']);
 const PRESET_ROLES = new Set(['HOOK', 'SUBTITLE', 'KEY_POINT', 'CTA', 'PRODUCT', 'LOGO', 'MUSIC']);
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
@@ -43,6 +43,12 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
 
 type TimelineElement = EditElementInput & { id: string };
+
+/** One entry of a validated AI chat bundle. Element payloads are already
+ * resolved to real ids (or to a plan-local ref / timeline second). */
+export type AssistantBundleCommand =
+  | { kind: 'ELEMENT'; action: string; ref?: string; payload: Record<string, unknown> }
+  | { kind: 'SETTINGS'; action: string; payload: Record<string, unknown> };
 
 const timelineElementState = (element: Record<string, unknown>): TimelineElement => ({
   id: String(element.id),
@@ -475,29 +481,14 @@ export class EditModeService {
     const elementId = this.requiredString(input.elementId, 'elementId');
     const playheadSec = this.finiteNumber(input.playheadSec, 'playheadSec');
     return this.manualMutation(id, input.revision, 'SPLIT_ELEMENT',
-      { elementId, playheadSec }, (elements) => {
-        const target = this.videoElement(elements, elementId);
-        const offset = playheadSec - target.startTime;
-        if (offset < MIN_VIDEO_DURATION_SEC || target.duration - offset < MIN_VIDEO_DURATION_SEC) {
-          throw new BadRequestException({ code: 'INVALID_SPLIT',
-            message: 'playheadSec must be safely inside the selected VIDEO element' });
-        }
-        const sourceSplit = target.trimStart! + offset;
-        const right: TimelineElement = { ...target, id: randomUUID(), position: target.position + 1,
-          trimStart: sourceSplit, trimEnd: target.trimEnd, duration: target.duration - offset };
-        return elements.flatMap((element) => element.id === target.id
-          ? [{ ...target, trimEnd: sourceSplit, duration: offset }, right]
-          : [{ ...element, position: element.type === 'VIDEO' && element.track === 0 &&
-              element.position > target.position ? element.position + 1 : element.position }]);
-      });
+      { elementId, playheadSec },
+      (elements) => this.splitVideoTimeline(elements, elementId, playheadSec));
   }
 
   async deleteElement(id: string, input: { revision?: unknown; elementId?: unknown }) {
     const elementId = this.requiredString(input.elementId, 'elementId');
-    return this.manualMutation(id, input.revision, 'DELETE_ELEMENT', { elementId }, (elements) => {
-      this.videoElement(elements, elementId);
-      return elements.filter((element) => element.id !== elementId);
-    });
+    return this.manualMutation(id, input.revision, 'DELETE_ELEMENT', { elementId },
+      (elements) => this.deleteVideoTimeline(elements, elementId));
   }
 
   async moveElement(id: string, input: { revision?: unknown; elementId?: unknown;
@@ -508,18 +499,48 @@ export class EditModeService {
     if (track !== 0) throw new BadRequestException({ code: 'UNSUPPORTED_TRACK',
       message: 'Phase 2 supports moving VIDEO elements only on track 0' });
     return this.manualMutation(id, input.revision, 'MOVE_ELEMENT', { elementId, toPosition, track },
-      (elements) => {
-        const target = this.videoElement(elements, elementId);
-        const videos = elements.filter((element) => element.type === 'VIDEO' && element.track === 0)
-          .sort((left, right) => left.position - right.position);
-        if (toPosition < 0 || toPosition >= videos.length) throw new BadRequestException({
-          code: 'INVALID_POSITION', message: 'toPosition is outside the VIDEO track' });
-        const reordered = videos.filter((element) => element.id !== target.id);
-        reordered.splice(toPosition, 0, target);
-        const positions = new Map(reordered.map((element, position) => [element.id, position]));
-        return elements.map((element) => positions.has(element.id)
-          ? { ...element, position: positions.get(element.id)! } : element);
-      });
+      (elements) => this.reorderVideoTimeline(elements, elementId, toPosition));
+  }
+
+  // The three VIDEO-track mutators live here rather than inside their command
+  // methods so that the manual editor and an assistant command bundle share one
+  // implementation. A chat-driven ripple delete is therefore the same code path,
+  // with the same guards, as pressing Delete on the timeline.
+
+  private splitVideoTimeline(elements: TimelineElement[], elementId: string,
+    playheadSec: number): TimelineElement[] {
+    const target = this.videoElement(elements, elementId);
+    const offset = playheadSec - target.startTime;
+    if (offset < MIN_VIDEO_DURATION_SEC || target.duration - offset < MIN_VIDEO_DURATION_SEC) {
+      throw new BadRequestException({ code: 'INVALID_SPLIT',
+        message: 'playheadSec must be safely inside the selected VIDEO element' });
+    }
+    const sourceSplit = target.trimStart! + offset;
+    const right: TimelineElement = { ...target, id: randomUUID(), position: target.position + 1,
+      trimStart: sourceSplit, trimEnd: target.trimEnd, duration: target.duration - offset };
+    return elements.flatMap((element) => element.id === target.id
+      ? [{ ...target, trimEnd: sourceSplit, duration: offset }, right]
+      : [{ ...element, position: element.type === 'VIDEO' && element.track === 0 &&
+          element.position > target.position ? element.position + 1 : element.position }]);
+  }
+
+  private deleteVideoTimeline(elements: TimelineElement[], elementId: string): TimelineElement[] {
+    this.videoElement(elements, elementId);
+    return elements.filter((element) => element.id !== elementId);
+  }
+
+  private reorderVideoTimeline(elements: TimelineElement[], elementId: string,
+    toPosition: number): TimelineElement[] {
+    const target = this.videoElement(elements, elementId);
+    const videos = elements.filter((element) => element.type === 'VIDEO' && element.track === 0)
+      .sort((left, right) => left.position - right.position);
+    if (toPosition < 0 || toPosition >= videos.length) throw new BadRequestException({
+      code: 'INVALID_POSITION', message: 'toPosition is outside the VIDEO track' });
+    const reordered = videos.filter((element) => element.id !== target.id);
+    reordered.splice(toPosition, 0, target);
+    const positions = new Map(reordered.map((element, position) => [element.id, position]));
+    return elements.map((element) => positions.has(element.id)
+      ? { ...element, position: positions.get(element.id)! } : element);
   }
 
   async phase3Command(id: string, actionValue: string, input: Record<string, unknown>) {
@@ -849,6 +870,141 @@ export class EditModeService {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
   }
 
+  /**
+   * Applies an AI chat proposal as ONE user-level action.
+   *
+   * This is deliberately the same shape as `applyPresetBundle`: every element
+   * command is folded through `applyElementCommand` (or, for the three VIDEO
+   * track operations, the same private mutators the manual editor uses), the
+   * timeline is normalised and validated after every single step, and the whole
+   * bundle commits in one transaction as exactly one EditHistory row - actor
+   * ASSISTANT, action APPLY_ASSISTANT_EDIT. So one chat request is one undo.
+   *
+   * There is no second mutation path here: nothing in the chat layer can write
+   * an EditElement, and a command the manual editor would reject is rejected
+   * here too, which aborts the transaction and leaves the project untouched.
+   */
+  async applyAssistantBundle(id: string, revisionValue: unknown, bundle: {
+    proposalId: string;
+    summary: string;
+    userMessage: string;
+    commands: AssistantBundleCommand[];
+    /** Persisted alongside the edit so the thread and the timeline stay in step. */
+    chat?: Prisma.InputJsonValue;
+  }) {
+    const expectedRevision = parseRevision(revisionValue);
+    if (!bundle.commands.length) {
+      throw new BadRequestException({ code: 'EMPTY_PLAN', message: 'There is nothing to apply' });
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const current = await tx.editProject.findUnique({ where: { id }, include: { elements: true,
+        assets: { select: { id: true, role: true, duration: true, width: true, height: true } } } });
+      if (!current) throw new NotFoundException('EditProject not found');
+      this.assertRevision(current.revision, expectedRevision);
+      const before = current.elements.map((element) =>
+        timelineElementState(element as unknown as Record<string, unknown>));
+      const assetMap = new Map(current.assets.map((asset) => [asset.id, asset]));
+      const revision = current.revision + 1;
+      const settingsBefore = current.settings && typeof current.settings === 'object' &&
+        !Array.isArray(current.settings) ? current.settings as Record<string, unknown> : {};
+
+      let elements = before.map((element) => ({ ...element }));
+      let style = readEditProjectStyle(settingsBefore);
+      const refs = new Map<string, string>();
+      const affected = new Set<string>();
+
+      for (const command of bundle.commands) {
+        if (command.kind === 'SETTINGS') { style = { ...style, ...command.payload }; continue; }
+        const payload: Record<string, unknown> = { ...command.payload };
+
+        // A plan-local ref points at something an earlier command in this same
+        // bundle created; it only has a real id once that command has run.
+        if (typeof payload.ref === 'string') {
+          const resolved = refs.get(payload.ref);
+          if (!resolved) throw new BadRequestException({ code: 'UNKNOWN_REF',
+            message: `The plan references an element it never created ("${payload.ref}")` });
+          payload.elementId = resolved;
+          delete payload.ref;
+        }
+        // A time-addressed target binds against the timeline as it stands at
+        // this step, because an earlier split in the same bundle changes which
+        // segment covers a given second.
+        if (payload.atSec !== undefined && !payload.elementId) {
+          const atSec = Number(payload.atSec);
+          const hit = elements.filter((element) => element.type === 'VIDEO' && element.track === 0)
+            .find((element) => atSec >= element.startTime - 1e-6 &&
+              atSec < element.startTime + element.duration - 1e-6);
+          if (!hit) throw new BadRequestException({ code: 'NO_ELEMENT_AT_TIME',
+            message: `There is no video segment at ${atSec.toFixed(2)}s` });
+          payload.elementId = hit.id;
+        }
+        delete payload.atSec;
+        if (typeof payload.elementId === 'string') affected.add(payload.elementId);
+
+        const creates = command.action.startsWith('ADD_');
+        if (creates) {
+          payload.origin = 'ASSISTANT';
+          payload.createdAtRevision = revision;
+        }
+        const priorIds = new Set(elements.map((element) => element.id));
+        const elementId = String(payload.elementId ?? '');
+        const next = normalizeVideoTrack(
+          command.action === 'SPLIT_ELEMENT'
+            ? this.splitVideoTimeline(elements, elementId,
+              this.finiteNumber(payload.playheadSec, 'playheadSec'))
+            : command.action === 'DELETE_ELEMENT'
+              ? this.deleteVideoTimeline(elements, elementId)
+              : command.action === 'REORDER_ELEMENT'
+                ? this.reorderVideoTimeline(elements, elementId,
+                  this.integer(payload.toPosition, 'toPosition'))
+                : this.applyElementCommand(command.action, payload, elements, assetMap));
+        this.validateTimeline(next, assetMap);
+        elements = next;
+        for (const element of elements) if (!priorIds.has(element.id)) affected.add(element.id);
+        if (creates && command.ref) {
+          const created = elements.find((element) => !priorIds.has(element.id));
+          if (created) refs.set(command.ref, created.id);
+        }
+      }
+
+      await this.replaceElements(tx, id, elements);
+      // The conversation itself is not part of the edit, so it is written to
+      // settings but kept out of the history snapshots: undoing an AI edit
+      // restores the timeline, not the chat.
+      const { chat: _liveChat, ...styleSettingsBefore } = settingsBefore;
+      const styleSettingsAfter = { ...styleSettingsBefore, ...style };
+      const settingsAfter = { ...styleSettingsAfter,
+        ...(bundle.chat === undefined ? (settingsBefore.chat === undefined
+          ? {} : { chat: settingsBefore.chat }) : { chat: bundle.chat }) } as Prisma.InputJsonValue;
+      await tx.editProject.update({ where: { id }, data: { revision, settings: settingsAfter } });
+      await tx.editHistory.create({ data: { editProjectId: id, revision, actor: 'ASSISTANT',
+        action: 'APPLY_ASSISTANT_EDIT',
+        command: { proposalId: bundle.proposalId, summary: bundle.summary,
+          userMessage: bundle.userMessage.slice(0, 500), commandCount: bundle.commands.length },
+        beforeState: { elements: serialize(before),
+          settings: styleSettingsBefore as Prisma.InputJsonValue },
+        afterState: { elements: serialize(elements),
+          settings: styleSettingsAfter as Prisma.InputJsonValue } } });
+      const project = await tx.editProject.findUniqueOrThrow({
+        where: { id }, include: includeProject });
+      return { project: serialize(project),
+        affectedElementIds: [...affected].filter((elementId) =>
+          elements.some((element) => element.id === elementId)) };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  /** Persists only the chat thread. Used for turns that change no timeline
+   * state - a question, a cancellation - so they never consume a revision. */
+  async saveChatThread(id: string, chat: Prisma.InputJsonValue) {
+    const current = await this.prisma.editProject.findUnique({
+      where: { id }, select: { settings: true } });
+    if (!current) throw new NotFoundException('EditProject not found');
+    const settings = current.settings && typeof current.settings === 'object' &&
+      !Array.isArray(current.settings) ? current.settings as Record<string, unknown> : {};
+    await this.prisma.editProject.update({ where: { id },
+      data: { settings: { ...settings, chat } as Prisma.InputJsonValue } });
+  }
+
   async undo(id: string, revisionValue: unknown) {
     return this.historyMutation(id, revisionValue, 'UNDO');
   }
@@ -926,8 +1082,17 @@ export class EditModeService {
       // written before Phase 4 carry no settings and leave them alone.
       const restoresSettings = state.settings && typeof state.settings === 'object' &&
         !Array.isArray(state.settings);
+      // The AI chat thread lives in settings but is not part of any edit, so a
+      // settings restore keeps the live conversation rather than rewinding it.
+      const liveChat = (current.settings && typeof current.settings === 'object' &&
+        !Array.isArray(current.settings)
+        ? (current.settings as Record<string, unknown>).chat : undefined);
+      const restoredSettings = restoresSettings
+        ? { ...(state.settings as Record<string, unknown>),
+          ...(liveChat === undefined ? {} : { chat: liveChat }) } as Prisma.InputJsonValue
+        : undefined;
       await tx.editProject.update({ where: { id }, data: { revision,
-        ...(restoresSettings ? { settings: state.settings as Prisma.InputJsonValue } : {}) } });
+        ...(restoredSettings ? { settings: restoredSettings } : {}) } });
       await tx.editHistory.create({ data: { editProjectId: id, revision, actor: 'USER', action: direction,
         command: { targetHistoryId: target.id, targetAction: target.action },
         beforeState: { elements: current.elements.map((element) => timelineElementState(

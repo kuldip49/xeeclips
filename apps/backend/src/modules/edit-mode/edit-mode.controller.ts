@@ -28,6 +28,8 @@ import {
 } from './dto/manual-edit-command.dto';
 import { ApplyEditPresetDto } from './dto/apply-edit-preset.dto';
 import { ExportEditProjectDto } from './dto/export-edit-project.dto';
+import { ApplyEditChatDto, CancelEditChatDto, PlanEditChatDto } from './dto/edit-chat.dto';
+import { EditChatService } from './chat/edit-chat.service';
 import { EditModePresetService } from './edit-mode-preset.service';
 import { EditModeService } from './edit-mode.service';
 import { EditModeRenderService } from './render/edit-mode-render.service';
@@ -36,7 +38,8 @@ import { EditModeRenderService } from './render/edit-mode-render.service';
 export class EditModeController {
   constructor(private readonly editMode: EditModeService,
     private readonly presets: EditModePresetService,
-    private readonly render: EditModeRenderService) {}
+    private readonly render: EditModeRenderService,
+    private readonly chat: EditChatService) {}
 
   /** The preset catalogue: typed policies, not templates. */
   @Get('presets')
@@ -191,6 +194,34 @@ export class EditModeController {
   @Get('projects/:id/exports/:assetId')
   getExport(@Param('id') id: string, @Param('assetId') assetId: string) {
     return this.render.getExport(id, assetId);
+  }
+
+  // --- Phase 6: AI chat editor ---------------------------------------------
+  // Natural language in, validated EditMode commands out. Planning writes no
+  // edit; only Apply does, and it goes through the canonical bundle path.
+
+  /** The stored conversation for this project. */
+  @Get('projects/:id/chat')
+  chatThread(@Param('id') id: string) {
+    return this.chat.thread(id);
+  }
+
+  /** PLAN: builds a proposal. The timeline is not touched. */
+  @Post('projects/:id/chat/plan')
+  chatPlan(@Param('id') id: string, @Body() body: PlanEditChatDto) {
+    return this.chat.plan(id, body);
+  }
+
+  /** APPLY: commits the server-held proposal as one ASSISTANT revision. */
+  @Post('projects/:id/chat/apply')
+  chatApply(@Param('id') id: string, @Body() body: ApplyEditChatDto) {
+    return this.chat.apply(id, body);
+  }
+
+  /** CANCEL: discards a pending proposal. */
+  @Post('projects/:id/chat/cancel')
+  chatCancel(@Param('id') id: string, @Body() body: CancelEditChatDto) {
+    return this.chat.cancel(id, body);
   }
 
   @Get('projects/:id/history')

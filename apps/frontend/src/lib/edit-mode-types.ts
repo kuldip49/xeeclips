@@ -241,3 +241,69 @@ export type EditExport = EditAsset & {
   /** False once the timeline has moved on from the revision this was rendered from. */
   current: boolean;
 };
+
+// --- EditMode Phase 6: AI chat editor ---------------------------------------
+
+export type ChatMessageRole = 'USER' | 'ASSISTANT' | 'SYSTEM_STATUS';
+
+export type ChatProposalState = 'PLANNING' | 'READY' | 'APPLYING' | 'APPLIED' | 'CANCELLED' |
+  'STALE' | 'FAILED' | 'NEEDS_CLARIFICATION';
+
+export type ChatMessage = {
+  id: string;
+  role: ChatMessageRole;
+  text: string;
+  createdAt: string;
+  proposalId?: string;
+  state?: ChatProposalState;
+  plannedChanges?: string[];
+};
+
+export type ChatGroundingType = 'TRANSCRIPT' | 'SELECTION' | 'ASSET' | 'ANALYSIS' | 'PLAYHEAD' |
+  'TIMESTAMP' | 'CONTEXT';
+
+export type ChatGrounding = {
+  type: ChatGroundingType;
+  confidence: number;
+  evidence: string;
+  startSec?: number;
+  endSec?: number;
+};
+
+/**
+ * A planned edit awaiting Apply.
+ *
+ * The raw commands are deliberately absent: they stay on the server, so the
+ * browser cannot alter what gets executed. Apply sends only `proposalId`.
+ */
+export type ChatProposal = {
+  proposalId: string;
+  baseRevision: number;
+  state: ChatProposalState;
+  userMessage: string;
+  summary: string;
+  plannedChanges: string[];
+  warnings: string[];
+  needsClarification: boolean;
+  clarificationQuestion: string;
+  affectedElements: string[];
+  plannedDurationSec: number;
+  grounding: ChatGrounding[];
+  planner: 'LLM' | 'DETERMINISTIC';
+  expiresAt: number;
+};
+
+export type ChatPlanResult = { proposal: ChatProposal; messages: ChatMessage[] };
+
+export type ChatApplyResult = {
+  proposal: ChatProposal;
+  project: EditProject;
+  affectedElementIds: string[];
+  messages: ChatMessage[];
+};
+
+export type ChatThreadResult = {
+  messages: ChatMessage[];
+  revision: number;
+  lastAppliedSummary: string;
+};
