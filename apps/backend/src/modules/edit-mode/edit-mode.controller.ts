@@ -27,13 +27,16 @@ import {
   TrimElementDto
 } from './dto/manual-edit-command.dto';
 import { ApplyEditPresetDto } from './dto/apply-edit-preset.dto';
+import { ExportEditProjectDto } from './dto/export-edit-project.dto';
 import { EditModePresetService } from './edit-mode-preset.service';
 import { EditModeService } from './edit-mode.service';
+import { EditModeRenderService } from './render/edit-mode-render.service';
 
 @Controller('edit-mode')
 export class EditModeController {
   constructor(private readonly editMode: EditModeService,
-    private readonly presets: EditModePresetService) {}
+    private readonly presets: EditModePresetService,
+    private readonly render: EditModeRenderService) {}
 
   /** The preset catalogue: typed policies, not templates. */
   @Get('presets')
@@ -161,6 +164,33 @@ export class EditModeController {
   @Post('projects/:id/redo')
   redo(@Param('id') id: string, @Body() body: RevisionCommandDto) {
     return this.editMode.redo(id, body.revision);
+  }
+
+  // --- Phase 5: render and export ------------------------------------------
+  // EditMode's own rendering path. Nothing here reaches the frozen clip export,
+  // render queue or processing pipeline.
+
+  /** Starts a render and returns immediately with its progress. */
+  @Post('projects/:id/export')
+  startExport(@Param('id') id: string, @Body() body: ExportEditProjectDto) {
+    return this.render.startExport(id, body.revision);
+  }
+
+  /** Live export progress, or the last persisted one after a restart. */
+  @Get('projects/:id/export/progress')
+  exportProgress(@Param('id') id: string) {
+    return this.render.progress(id);
+  }
+
+  /** Every export this project has produced, newest first. */
+  @Get('projects/:id/exports')
+  listExports(@Param('id') id: string) {
+    return this.render.listExports(id);
+  }
+
+  @Get('projects/:id/exports/:assetId')
+  getExport(@Param('id') id: string, @Param('assetId') assetId: string) {
+    return this.render.getExport(id, assetId);
   }
 
   @Get('projects/:id/history')

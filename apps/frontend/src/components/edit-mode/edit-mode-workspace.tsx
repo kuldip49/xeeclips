@@ -11,6 +11,7 @@ import { historyAvailability, timelineDuration, videoTrack } from '@/lib/edit-mo
 import type { EditAsset, EditElement, EditHistory, EditPresetApplyResult, EditProject,
   EditProjectStyle } from '@/lib/edit-mode-types';
 import { EditAssetPicker } from './edit-asset-picker';
+import { EditExportPanel } from './edit-export-panel';
 import { EditPresetPanel } from './edit-preset-panel';
 import { EditHistoryPanel } from './edit-history-panel';
 import { EditInspector } from './edit-inspector';
@@ -58,6 +59,13 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
   }, [setProject]);
   const refreshHistory = useCallback(async () => setHistory(await getEditHistory(initialProject.id)),
     [initialProject.id]);
+  // An export changes the project's status but never its revision or elements,
+  // so it is refreshed on its own rather than through the edit-command path.
+  const refreshProject = useCallback(() => {
+    void getEditProject(initialProject.id)
+      .then((next) => setProject((current) => ({ ...next, elements: current.elements })))
+      .catch(() => undefined);
+  }, [initialProject.id, setProject]);
 
   useEffect(() => () => { if (autosave.current) clearTimeout(autosave.current); }, []);
 
@@ -245,14 +253,17 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
         onUploadSource={(file) => run('upload', () => uploadEditSource(project.id, project.revision, file))}
         onImport={(videoId) => run('import', () => importEditSource(project.id, project.revision, videoId))}
         onUploadAsset={uploadLibraryAsset} onAdd={addAsset} onDelete={(asset) => void deleteLibraryAsset(asset)} />
-      <EditPreview ref={previewRef} source={source} assets={project.assets} elements={project.elements ?? []}
+      <EditPreview ref={previewRef} source={source} assets={project.assets}
+        aspectRatio={style?.aspectRatio} elements={project.elements ?? []}
         selectedElementId={selectedElementId}
         currentPlayheadSec={currentPlayheadSec} onPlayheadChange={setCurrentPlayheadSec}
         onSelect={setSelectedElementId} onPreviewElements={(elements) => setProject((current) => ({ ...current, elements }))}
         onCommitTransform={commitTransform} />
       <div className='grid content-start gap-5'><EditPresetPanel projectId={project.id}
         revision={project.revision} style={style} disabled={!!busy} hasSource={!!source}
-        onApplied={presetApplied} onError={setError} /><EditInspector project={project} source={source} selected={selected}
+        onApplied={presetApplied} onError={setError} /><EditExportPanel projectId={project.id}
+        revision={project.revision} hasSource={!!source} disabled={!!busy}
+        onStatusChange={refreshProject} /><EditInspector project={project} source={source} selected={selected}
         onPreview={previewElement} onCommit={(command) => void applyCommand(command)} onDebounced={debouncedCommand}
         onDuplicate={() => selectedElementId && void applyCommand({ action: 'duplicate-element', elementId: selectedElementId })}
         onDelete={remove} /><EditHistoryPanel history={history} /></div>

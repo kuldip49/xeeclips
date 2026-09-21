@@ -7,6 +7,7 @@ import { EditModeAnalysisService } from './edit-mode-analysis.service';
 import { EditModePresetService } from './edit-mode-preset.service';
 import { EditModeController } from './edit-mode.controller';
 import { EditModeService } from './edit-mode.service';
+import { EditModeRenderService } from './render/edit-mode-render.service';
 
 // LLM routing is provided directly rather than by importing ProcessingModule, so
 // the frozen processing queue and video processor never enter EditMode's
@@ -15,6 +16,7 @@ import { EditModeService } from './edit-mode.service';
   imports: [StorageModule],
   controllers: [EditModeController],
   providers: [EditModeService, EditModeAnalysisService, EditModePresetService,
+    EditModeRenderService,
     LlmProviderService, ProviderRegistry, LlmRouterService]
 })
 export class EditModeModule {}

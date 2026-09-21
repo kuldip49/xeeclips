@@ -2,7 +2,7 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Pause, Play } from 'lucide-react';
-import type { EditAsset, EditElement, VisualElementProperties } from '@/lib/edit-mode-types';
+import type { EditAspectRatio, EditAsset, EditElement, VisualElementProperties } from '@/lib/edit-mode-types';
 import { editAssetPlaybackUrl } from '@/lib/edit-mode-api';
 import { elementsAtTime, resolvePreviewPosition, timelineDuration, videoTrack } from '@/lib/edit-mode-timeline';
 
@@ -27,12 +27,22 @@ function AudioLayer({ element, playing, timelineTime }: { element: EditElement; 
   return <audio ref={ref} src={element.assetId ? editAssetPlaybackUrl(element.assetId) : undefined} preload='metadata' />;
 }
 
+/** The preview canvas is the export canvas: normalized element boxes only agree
+ * with the rendered frame when both are the same shape. */
+const canvasAspect = (aspectRatio: EditAspectRatio | undefined, source?: EditAsset) => {
+  if (aspectRatio === '9:16') return '9 / 16';
+  if (aspectRatio === '1:1') return '1 / 1';
+  if (aspectRatio === '16:9') return '16 / 9';
+  return source?.width && source?.height ? `${source.width} / ${source.height}` : '16 / 9';
+};
+
 export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; assets: EditAsset[];
+  aspectRatio?: EditAspectRatio;
   elements: EditElement[]; selectedElementId: string | null; currentPlayheadSec: number;
   onPlayheadChange: (seconds: number) => void; onSelect: (id: string) => void;
   onPreviewElements: (elements: EditElement[]) => void;
   onCommitTransform: (kind: 'move' | 'resize', element: EditElement, before: EditElement[]) => void;
-}>(({ source, assets, elements, selectedElementId, currentPlayheadSec, onPlayheadChange, onSelect,
+}>(({ source, assets, aspectRatio, elements, selectedElementId, currentPlayheadSec, onPlayheadChange, onSelect,
   onPreviewElements, onCommitTransform }, forwardedRef) => {
   const video = useRef<HTMLVideoElement>(null); const canvas = useRef<HTMLDivElement>(null);
   const activeId = useRef<string | null>(null); const syncing = useRef(false);
@@ -68,7 +78,10 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', up, { once: true });
   };
   return <section className='overflow-hidden rounded-2xl border border-white/10 bg-black/40'>
-    <div ref={canvas} className='relative mx-auto aspect-video w-full overflow-hidden bg-black'>
+    <div className='flex w-full justify-center bg-black'>
+    <div ref={canvas} style={{ aspectRatio: canvasAspect(aspectRatio, source), height: '58vh',
+      maxWidth: '100%' }}
+    className='relative overflow-hidden bg-black'>
       <video ref={video} src={editAssetPlaybackUrl(source.id)} className='absolute inset-0 h-full w-full object-contain' preload='metadata' onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => timeUpdate(event.currentTarget)} />
       {active.filter((item) => item.type === 'IMAGE' || item.type === 'TEXT' || item.type === 'SUBTITLE').map((element) => {
         const p = element.properties as unknown as VisualElementProperties; const selected = element.id === selectedElementId;
@@ -81,6 +94,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
         </div>;
       })}
       {active.filter((item) => item.type === 'AUDIO').map((element) => <AudioLayer key={element.id} element={element} playing={playing} timelineTime={currentPlayheadSec} />)}
+    </div>
     </div>
     <div className='flex items-center gap-3 border-t border-white/10 px-4 py-3'><button onClick={() => void toggle()} aria-label={playing ? 'Pause preview' : 'Play preview'} className='grid h-9 w-9 place-items-center rounded-full bg-white text-black disabled:opacity-40' disabled={!mapping}>{playing ? <Pause size={16} /> : <Play size={16} className='ml-0.5' />}</button><input aria-label='Seek edited timeline' type='range' min={0} max={duration || 0} step={0.01} value={Math.min(currentPlayheadSec, duration)} onChange={(event) => onPlayheadChange(Number(event.target.value))} className='h-1 flex-1 accent-violet-400' /><span className='text-xs tabular-nums text-slate-400'>{clock(currentPlayheadSec)} / {clock(duration)}</span></div>
   </section>;

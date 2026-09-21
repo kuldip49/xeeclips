@@ -1,5 +1,6 @@
-import type { EditAsset, EditAssetRole, EditHistory, EditPresetApplyResult, EditPresetId,
-  EditPresetProposal, EditPresetSummary, EditProject, SourceVideoOption } from './edit-mode-types';
+import type { EditAsset, EditAssetRole, EditExport, EditExportProgress, EditHistory,
+  EditPresetApplyResult, EditPresetId, EditPresetProposal, EditPresetSummary, EditProject,
+  SourceVideoOption } from './edit-mode-types';
 
 export class EditModeApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string,
@@ -77,8 +78,19 @@ export const getEditHistory = (id: string) =>
 
 export const listSourceVideos = () => request<SourceVideoOption[]>('/videos');
 
+/**
+ * The base URL a BROWSER must use. `getEditModeApiBaseUrl` falls back to
+ * SERVER_API_URL during SSR, which inside Docker is `http://backend:4000` - a
+ * hostname the browser cannot resolve. Any URL that ends up in the DOM (a
+ * <video> src, a download link) has to be the public one on both renders, or it
+ * hydrates to an unreachable address and the media silently never loads.
+ */
+export function getEditModePublicApiBaseUrl() {
+  return process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+}
+
 export const editAssetPlaybackUrl = (assetId: string) =>
-  `${getEditModeApiBaseUrl()}/edit-mode/assets/${encodeURIComponent(assetId)}/file`;
+  `${getEditModePublicApiBaseUrl()}/edit-mode/assets/${encodeURIComponent(assetId)}/file`;
 
 export type ManualEditCommand =
   | { action: 'trim'; elementId: string; trimStart: number; trimEnd: number }
@@ -150,3 +162,27 @@ export const applyEditPreset = (id: string, revision: number, presetId: EditPres
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ revision, presetId })
   });
+
+// --- EditMode Phase 5: render and export -----------------------------------
+
+/** Starts a render. Returns as soon as the export is accepted, not when it ends. */
+export const startEditExport = (id: string, revision: number) =>
+  request<{ export: EditExportProgress; project: EditProject }>(
+    `/edit-mode/projects/${encodeURIComponent(id)}/export`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ revision })
+    });
+
+export const getEditExportProgress = (id: string) =>
+  request<EditExportProgress | null>(
+    `/edit-mode/projects/${encodeURIComponent(id)}/export/progress`);
+
+export const listEditExports = (id: string) =>
+  request<EditExport[]>(`/edit-mode/projects/${encodeURIComponent(id)}/exports`);
+
+export const getEditExport = (id: string, assetId: string) =>
+  request<EditExport>(`/edit-mode/projects/${encodeURIComponent(id)}/exports/${
+    encodeURIComponent(assetId)}`);
+
+/** The finished MP4, served with range support for preview and download. */
+export const editExportFileUrl = (assetId: string) => editAssetPlaybackUrl(assetId);

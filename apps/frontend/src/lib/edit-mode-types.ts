@@ -185,3 +185,59 @@ export type EditPresetApplyResult = {
   plan: Omit<EditPresetProposal, 'mode'>;
   project: EditProject;
 };
+
+// --- EditMode Phase 5: render and export -----------------------------------
+
+export type EditExportPhase = 'PREPARING' | 'RENDERING' | 'QA' | 'UPLOADING' | 'COMPLETED'
+  | 'FAILED';
+export type EditExportErrorCode = 'SOURCE_MISSING' | 'ASSET_MISSING' | 'INVALID_TIMELINE'
+  | 'UNSUPPORTED_MEDIA' | 'RENDER_FAILED' | 'QA_FAILED' | 'UPLOAD_FAILED' | 'STALE_EXPORT'
+  | 'EXPORT_ALREADY_RUNNING';
+export type QaResult = 'PASS' | 'DEGRADED_ACCEPTABLE' | 'REPAIR_REQUIRED' | 'REJECT';
+
+export type EditExportProgress = {
+  exportId: string;
+  phase: EditExportPhase;
+  percent: number;
+  sourceRevision: number;
+  startedAt: string;
+  updatedAt: string;
+  attempt: number;
+  assetId: string | null;
+  errorCode: EditExportErrorCode | null;
+  message: string | null;
+};
+
+/** What one finished render recorded about itself. */
+export type EditExportMetadata = {
+  sourceRevision: number;
+  stale: boolean;
+  preset: EditPresetId;
+  aspectRatio: EditAspectRatio;
+  resolution: { width: number | null; height: number | null };
+  durationSec: number | null;
+  codec: { video: string | null; audio: string | null };
+  bitrate: number | null;
+  fileSizeBytes: number;
+  renderDurationMs: number;
+  attempts: number;
+  qa: { result: QaResult; sampledFrameCount: number;
+    checks: Array<{ id: string; result: QaResult; detail: string }> };
+  zoom: { rendered: number; rejected: number; reduced: number };
+  grading: { policy: GradingPolicy; preset: string; strengthScale: number };
+  segments: number;
+  overlays: number;
+  textElements: number;
+  subtitles: number;
+  subtitlesFromTranscript: boolean;
+  audioTracks: number;
+  warnings: string[];
+};
+
+/** An EditAsset(role: EXPORT), with the currency of its source revision. */
+export type EditExport = EditAsset & {
+  metadata: EditExportMetadata;
+  sourceRevision: number | null;
+  /** False once the timeline has moved on from the revision this was rendered from. */
+  current: boolean;
+};

@@ -14,6 +14,7 @@ Last updated: 2026-09-21
 - EditMode Phase 1–3 (foundation, manual timeline, assets/overlays): complete — see
   `docs/edit-mode-phase3.md`
 - EditMode Phase 4 (presets + no-prompt auto edit): complete — see `docs/edit-mode-phase4.md`
+- EditMode Phase 5 (render, export, EditMode QA): complete — see `docs/edit-mode-phase5.md`
 
 ## Product Flow — Analysis-First, Platform-Aware Clip Creation
 
@@ -667,6 +668,67 @@ automatic editing that requires no prompt. Full contract: `docs/edit-mode-phase4
   and the deterministic fallback.
 - Frozen auto-pipeline regressions all passed: `test:edit-quality` (56/56), `test:editing`,
   `test:editing-media`, `test:editing-benchmark` (9 scenarios), `test:clip-selection`.
+
+
+## EditMode Phase 5 — Render, Export and EditMode QA
+
+Phase 5 turns the canonical EditMode state into an actual MP4. Full contract:
+`docs/edit-mode-phase5.md`.
+
+- EditMode has its OWN rendering orchestration in
+  `apps/backend/src/modules/edit-mode/render/`. It never calls the frozen processing queue, video
+  processor, clip selector, clip render queue or clip exporter, never creates a `ProcessingJob`,
+  `ClipCandidate` or `GeneratedClip`, never enqueues BullMQ work, and never calls an LLM. The frozen
+  editing intelligence is reused only as pure callable logic (shot classifier, camera solver,
+  information region, grade filter builder, ASS primitives, bounded QA measurement).
+- An export is deterministic from `EditProject.revision` + `EditElement[]` + `EditAsset[]` +
+  `settings`. A typed `RenderPlan` is built and fully validated before FFmpeg runs, and the FFmpeg
+  argument vector is a pure function of that plan. No second render-only timeline model exists.
+- The VIDEO track is an ORDERED list of source ranges, so trims, splits, deletes and REORDERS all
+  render correctly. Because a reordered timeline is not expressible as `clipStart + cuts`, EditMode
+  has its own `buildTimelineMap`; the shared `createTimelineMapper` is not usable here. Audio is
+  trimmed from the same ranges, and every segment join counts as a shot boundary.
+- Canvases: `9:16` 1080×1920, `16:9` 1920×1080, `1:1` 1080×1080, `SOURCE` the source shape with the
+  longest side capped at 1920. Square pixels, H.264/AAC/MP4, faststart.
+- `reframePolicy` modulates the evidence rather than replacing it: `SOURCE` fits the whole frame,
+  `AUTO` keeps the classifier's call, `FACE_FOCUSED` tracks only real detections (no invented
+  speaker), `INFORMATION_PRESERVING` fits information shots to their detected readable region. An
+  information shot with no distinct region falls back to a whole-frame fit, never a crop.
+- Phase 4's `plannedZoomMoments` are INTENT. Phase 5 converts them into bounded geometry (SUBTLE
+  1.06 / MODERATE 1.10 / STRONG 1.15) and validates each against shot boundaries, subject safety and
+  information readability. An unsafe move is reduced first and then suppressed individually; the
+  zoom policy is never globally disabled, and every refusal is recorded with a reason.
+- Grading is EditMode-local: `NONE` is a true no-op, and `SUBTLE`/`CLEAN`/`WARM`/`CONTRAST` borrow
+  the pure grade-filter builder at EditMode's own strengths. The frozen `AI_EDITED` grading defaults
+  are unchanged.
+- Text, captions and preset hooks are one ASS file; canonical `zIndex` is the ASS layer. Wording is
+  never regenerated at export. Where Phase 4 stored only the subtitle POLICY, captions are built at
+  render time from the cached transcript with the same deterministic phrase logic — transcript-exact
+  text and timings, each caption held at the end of its own segment.
+- Audio mixes source dialogue with user-supplied music at the timeline's own levels
+  (`normalize=0`), limited so the sum cannot clip. DUCKING IS DEFERRED: the Phase 3 properties are
+  preserved and carried on the plan, but no ducking filter is applied.
+- EditMode QA is local and bounded (≤20 event-driven frames): probe, resolution, duration, streams,
+  timestamps, final-frame decode, blank output, overlay/caption bounds, subject safety,
+  information readability, audio peak. Results are `PASS` / `DEGRADED_ACCEPTABLE` /
+  `REPAIR_REQUIRED` / `REJECT`; a visible defect is never acceptable degradation. Repairs are local
+  (suppress one zoom, widen one shot, fit one shot to its region) and capped at 2 total renders.
+- Export is direct async work — NO BullMQ queue and no EditMode-local queue was added. Progress
+  (`PREPARING → RENDERING → QA → UPLOADING → COMPLETED|FAILED`) is mirrored onto `settings.export`
+  WITHOUT bumping the revision or writing an `EditHistory` row: rendering is not an edit.
+- Each export is a new `EditAsset(role: EXPORT)` at
+  `edit-mode/<editProjectId>/exports/<assetId>/final.mp4`, carrying `sourceRevision` and full render
+  /QA telemetry. Exports accumulate (v1, v2, v3) and are never overwritten. An export whose revision
+  moved while it rendered is retained but flagged `stale`, and the project returns to `READY`
+  instead of being declared `COMPLETED`.
+- Routes, all under `/edit-mode`: `POST projects/:id/export`, `GET projects/:id/export/progress`,
+  `GET projects/:id/exports`, `GET projects/:id/exports/:assetId`; download reuses the existing
+  range-capable `GET assets/:assetId/file`.
+- No schema change was required — `EditAssetRole.EXPORT` already existed. (`EditAssetRole.LOGO` was
+  missing from the local dev database, a Phase 3 drift; `npm run db:push` syncs it.)
+- Tests: `test-edit-mode-render.cjs` (offline plan/graph/QA units) and `test-edit-mode-export.cjs`
+  (real FFmpeg renders through the service) run inside `npm run test:edit-mode`;
+  `scripts/verify-edit-mode-export.cjs` is the disposable real-media check against the Docker stack.
 
 ## Milestone 6 — Visual Intelligence
 
