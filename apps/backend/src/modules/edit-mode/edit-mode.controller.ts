@@ -21,6 +21,7 @@ import { UpdateEditElementsDto } from './dto/update-edit-elements.dto';
 import {
   DeleteElementDto,
   MoveElementDto,
+  Phase3EditCommandDto,
   RevisionCommandDto,
   SplitElementDto,
   TrimElementDto
@@ -77,6 +78,24 @@ export class EditModeController {
     return this.editMode.attachUpload(id, file, revision);
   }
 
+  @Post('projects/:id/assets/upload')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 200 * 1024 * 1024 } }))
+  uploadAsset(
+    @Param('id') id: string,
+    @Body('revision') revision: unknown,
+    @Body('role') role: unknown,
+    @UploadedFile() file?: Express.Multer.File
+  ) {
+    if (!file) throw new BadRequestException('Asset file is required');
+    return this.editMode.uploadAsset(id, file, role, revision);
+  }
+
+  @Delete('projects/:id/assets/:assetId')
+  deleteAsset(@Param('id') id: string, @Param('assetId') assetId: string,
+    @Body() body: RevisionCommandDto) {
+    return this.editMode.deleteAsset(id, assetId, body.revision);
+  }
+
   @Post('projects/:id/analyze')
   analyze(@Param('id') id: string, @Body('revision') revision: unknown) {
     return this.editMode.analyze(id, revision);
@@ -105,6 +124,12 @@ export class EditModeController {
   @Post('projects/:id/commands/move')
   moveElement(@Param('id') id: string, @Body() body: MoveElementDto) {
     return this.editMode.moveElement(id, body);
+  }
+
+  @Post('projects/:id/commands/:action')
+  phase3Command(@Param('id') id: string, @Param('action') action: string,
+    @Body() body: Phase3EditCommandDto) {
+    return this.editMode.phase3Command(id, action, body as unknown as Record<string, unknown>);
   }
 
   @Post('projects/:id/undo')

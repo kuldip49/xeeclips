@@ -1,4 +1,4 @@
-import type { EditHistory, EditProject, SourceVideoOption } from './edit-mode-types';
+import type { EditAsset, EditAssetRole, EditHistory, EditProject, SourceVideoOption } from './edit-mode-types';
 
 export class EditModeApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string,
@@ -83,7 +83,22 @@ export type ManualEditCommand =
   | { action: 'trim'; elementId: string; trimStart: number; trimEnd: number }
   | { action: 'split'; elementId: string; playheadSec: number }
   | { action: 'delete'; elementId: string }
-  | { action: 'move'; elementId: string; toPosition: number; track: 0 };
+  | { action: 'move'; elementId: string; toPosition: number; track: 0 }
+  | { action: 'add-image' | 'add-logo' | 'add-audio'; assetId: string }
+  | { action: 'add-text' }
+  | { action: 'move-element'; elementId: string; x: number; y: number }
+  | { action: 'resize-element'; elementId: string; width: number; height: number }
+  | { action: 'set-element-timing'; elementId: string; startTime: number; duration: number;
+      trimStart?: number; trimEnd?: number }
+  | { action: 'set-element-opacity'; elementId: string; opacity: number }
+  | { action: 'set-element-z-index'; elementId: string; zIndex: number }
+  | { action: 'update-text'; elementId: string; content: string; fontSize?: number;
+      fontWeight?: number; fontFamily?: string; textAlign?: 'left' | 'center' | 'right'; color?: string;
+      backgroundColor?: string }
+  | { action: 'set-audio-volume'; elementId: string; volume: number }
+  | { action: 'set-audio-muted'; elementId: string; muted: boolean }
+  | { action: 'set-audio-fade'; elementId: string; fadeInSec: number; fadeOutSec: number }
+  | { action: 'duplicate-element' | 'remove-element'; elementId: string };
 
 export const runManualEditCommand = (id: string, revision: number, command: ManualEditCommand) => {
   const { action, ...payload } = command;
@@ -102,3 +117,17 @@ export const redoEdit = (id: string, revision: number) => request<EditProject>(
   `/edit-mode/projects/${encodeURIComponent(id)}/redo`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ revision })
   });
+
+export const uploadEditAsset = (id: string, revision: number, role: Extract<EditAssetRole,
+  'IMAGE' | 'LOGO' | 'AUDIO'>, file: File) => {
+  const form = new FormData();
+  form.set('revision', String(revision)); form.set('role', role); form.set('file', file);
+  return request<{ asset: EditAsset; revision: number }>(
+    `/edit-mode/projects/${encodeURIComponent(id)}/assets/upload`, { method: 'POST', body: form });
+};
+
+export const deleteEditAsset = (id: string, revision: number, assetId: string) =>
+  request<{ id: string; deleted: true; revision: number }>(
+    `/edit-mode/projects/${encodeURIComponent(id)}/assets/${encodeURIComponent(assetId)}`, {
+      method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ revision })
+    });

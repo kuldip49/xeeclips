@@ -22,6 +22,12 @@ export function timelineDuration(elements: EditElement[]) {
   return videoTrack(elements).reduce((total, element) => total + element.duration, 0);
 }
 
+export function elementsAtTime(elements: EditElement[], time: number) {
+  return elements.filter((element) => element.type !== 'VIDEO' && time >= element.startTime &&
+    time < element.startTime + element.duration).sort((left, right) =>
+    Number(left.properties.zIndex ?? 0) - Number(right.properties.zIndex ?? 0));
+}
+
 export function resolvePreviewPosition(elements: EditElement[], timelineTime: number) {
   const videos = videoTrack(elements);
   if (!videos.length) return null;
@@ -35,7 +41,10 @@ export function resolvePreviewPosition(elements: EditElement[], timelineTime: nu
 
 export function historyAvailability(history: Array<{ id: string; action: string; revision: number;
   command?: Record<string, unknown> | null }>) {
-  const manual = new Set(['TRIM_ELEMENT', 'SPLIT_ELEMENT', 'DELETE_ELEMENT', 'MOVE_ELEMENT']);
+  const manual = new Set(['TRIM_ELEMENT', 'SPLIT_ELEMENT', 'DELETE_ELEMENT', 'MOVE_ELEMENT',
+    'ADD_IMAGE', 'ADD_LOGO', 'ADD_TEXT', 'ADD_AUDIO', 'RESIZE_ELEMENT', 'SET_ELEMENT_TIMING',
+    'SET_ELEMENT_OPACITY', 'SET_ELEMENT_Z_INDEX', 'UPDATE_TEXT', 'SET_AUDIO_VOLUME',
+    'SET_AUDIO_MUTED', 'SET_AUDIO_FADE', 'DUPLICATE_ELEMENT', 'REMOVE_ELEMENT']);
   const active: string[] = [];
   let redo: string[] = [];
   [...history].sort((left, right) => left.revision - right.revision).forEach((entry) => {

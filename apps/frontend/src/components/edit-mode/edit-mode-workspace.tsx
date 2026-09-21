@@ -1,23 +1,25 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, LoaderCircle, ScanSearch } from 'lucide-react';
+import { Check, LoaderCircle, Plus, ScanSearch } from 'lucide-react';
 import {
-  analyzeEditSource, EditModeApiError, getEditHistory, getEditProject, importEditSource,
-  type ManualEditCommand, redoEdit, runManualEditCommand, undoEdit, uploadEditSource
+  analyzeEditSource, deleteEditAsset, EditModeApiError, getEditHistory, getEditProject,
+  importEditSource, type ManualEditCommand, redoEdit, runManualEditCommand, undoEdit,
+  uploadEditAsset, uploadEditSource
 } from '@/lib/edit-mode-api';
 import { historyAvailability, timelineDuration, videoTrack } from '@/lib/edit-mode-timeline';
-import type { EditElement, EditHistory, EditProject } from '@/lib/edit-mode-types';
+import type { EditAsset, EditElement, EditHistory, EditProject } from '@/lib/edit-mode-types';
 import { EditAssetPicker } from './edit-asset-picker';
 import { EditHistoryPanel } from './edit-history-panel';
 import { EditInspector } from './edit-inspector';
 import { EditPreview, type EditPreviewHandle } from './edit-preview';
 import { EditTimeline } from './edit-timeline';
 
-const fingerprint = (elements: EditElement[]) => JSON.stringify(videoTrack(elements).map((element) => ({
-  id: element.id, assetId: element.assetId, position: element.position, startTime: element.startTime,
-  duration: element.duration, trimStart: element.trimStart, trimEnd: element.trimEnd
-})));
+const fingerprint = (elements: EditElement[]) => JSON.stringify(elements.map((element) => ({
+  id: element.id, assetId: element.assetId, type: element.type, track: element.track,
+  position: element.position, startTime: element.startTime, duration: element.duration,
+  trimStart: element.trimStart, trimEnd: element.trimEnd, properties: element.properties
+})).sort((a, b) => a.id.localeCompare(b.id)));
 
 export function EditModeWorkspace({ initialProject, initialHistory }: {
   initialProject: EditProject;
@@ -25,6 +27,7 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
 }) {
   const [project, setProjectState] = useState(initialProject);
   const projectRef = useRef(initialProject);
+  const savedElements = useRef(initialProject.elements ?? []);
   const [history, setHistory] = useState(initialHistory);
   const [busy, setBusy] = useState<'upload' | 'import' | 'analyze' | 'saving' | null>(null);
   const [error, setError] = useState('');
@@ -44,6 +47,9 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
       return value;
     });
   }, []);
+  const acceptServerProject = useCallback((next: EditProject) => {
+    savedElements.current = next.elements ?? []; setProject(next);
+  }, [setProject]);
   const refreshHistory = useCallback(async () => setHistory(await getEditHistory(initialProject.id)),
     [initialProject.id]);
 
@@ -51,12 +57,12 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
 
   const run = async (kind: 'upload' | 'import' | 'analyze', task: () => Promise<EditProject>) => {
     setBusy(kind); setError('');
-    try { const next = await task(); setProject(next); await refreshHistory(); }
+    try { const next = await task(); acceptServerProject(next); await refreshHistory(); }
     catch (caught) { setError(caught instanceof Error ? caught.message : 'EditMode action failed'); }
     finally { setBusy(null); }
   };
 
-  const applyCommand = useCallback(async (command: ManualEditCommand, baseElements: EditElement[]) => {
+  const applyCommand = useCallback(async (command: ManualEditCommand, baseElements = savedElements.current) => {
     setBusy('saving'); setError('');
     try {
       let current = projectRef.current;
@@ -67,14 +73,19 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
         if (!(caught instanceof EditModeApiError) || caught.status !== 409) throw caught;
         const latest = await getEditProject(current.id);
         if (fingerprint(latest.elements ?? []) !== fingerprint(baseElements)) {
-          setProject(latest);
+          acceptServerProject(latest);
           setError('This timeline changed in another session. The latest saved revision was restored; your pending edit was not overwritten.');
           return;
         }
-        setProject(latest);
+        acceptServerProject(latest);
         next = await runManualEditCommand(latest.id, latest.revision, command);
       }
-      setProject(next);
+      const priorIds = new Set(baseElements.map((element) => element.id));
+      acceptServerProject(next);
+      if (command.action.startsWith('add-') || command.action === 'duplicate-element') {
+        const created = (next.elements ?? []).find((element) => !priorIds.has(element.id));
+        if (created) setSelectedElementId(created.id);
+      }
       if (selectedElementId && !(next.elements ?? []).some((element) => element.id === selectedElementId)) {
         setSelectedElementId(videoTrack(next.elements ?? [])[0]?.id ?? null);
       }
@@ -83,10 +94,10 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
     } catch (caught) {
       const latest = caught instanceof EditModeApiError && caught.status === 409
         ? await getEditProject(projectRef.current.id).catch(() => null) : null;
-      if (latest) setProject(latest);
+      if (latest) acceptServerProject(latest);
       setError(caught instanceof Error ? caught.message : 'Manual edit failed');
     } finally { setBusy(null); }
-  }, [refreshHistory, selectedElementId, setProject]);
+  }, [acceptServerProject, refreshHistory, selectedElementId]);
 
   const split = useCallback(() => {
     const elements = projectRef.current.elements ?? [];
@@ -96,7 +107,10 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
   const remove = useCallback(() => {
     const elements = projectRef.current.elements ?? [];
     if (!selectedElementId) return;
-    void applyCommand({ action: 'delete', elementId: selectedElementId }, elements);
+    const target = elements.find((element) => element.id === selectedElementId);
+    if (!target) return;
+    void applyCommand(target.type === 'VIDEO' ? { action: 'delete', elementId: selectedElementId }
+      : { action: 'remove-element', elementId: selectedElementId });
   }, [applyCommand, selectedElementId]);
   const move = useCallback((delta: -1 | 1) => {
     const elements = projectRef.current.elements ?? [];
@@ -113,7 +127,7 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
       const current = projectRef.current;
       const next = direction === 'undo' ? await undoEdit(current.id, current.revision)
         : await redoEdit(current.id, current.revision);
-      setProject(next);
+      acceptServerProject(next);
       const videos = videoTrack(next.elements ?? []);
       if (!videos.some((element) => element.id === selectedElementId)) setSelectedElementId(videos[0]?.id ?? null);
       setCurrentPlayheadSec((time) => Math.min(time, timelineDuration(next.elements ?? [])));
@@ -121,11 +135,11 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
     } catch (caught) {
       if (caught instanceof EditModeApiError && caught.status === 409) {
         const latest = await getEditProject(projectRef.current.id);
-        setProject(latest);
+        acceptServerProject(latest);
         setError('Undo/redo stopped because a newer revision exists. The latest saved timeline was restored.');
       } else setError(caught instanceof Error ? caught.message : 'History action failed');
     } finally { setBusy(null); }
-  }, [refreshHistory, selectedElementId, setProject]);
+  }, [acceptServerProject, refreshHistory, selectedElementId]);
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
@@ -158,6 +172,45 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
     }, 500);
   };
 
+  const previewElement = useCallback((element: EditElement) => setProject((current) => ({ ...current,
+    elements: (current.elements ?? []).map((item) => item.id === element.id ? element : item)
+  })), [setProject]);
+  const commitTransform = useCallback((kind: 'move' | 'resize', element: EditElement,
+    before: EditElement[]) => {
+    const properties = element.properties;
+    void applyCommand(kind === 'move'
+      ? { action: 'move-element', elementId: element.id, x: Number(properties.x), y: Number(properties.y) }
+      : { action: 'resize-element', elementId: element.id, width: Number(properties.width),
+          height: Number(properties.height) }, before);
+  }, [applyCommand]);
+  const commitTiming = useCallback((element: EditElement, before: EditElement[]) => {
+    void applyCommand({ action: 'set-element-timing', elementId: element.id,
+      startTime: element.startTime, duration: element.duration, trimStart: element.trimStart,
+      ...(element.trimEnd == null ? {} : { trimEnd: element.trimEnd }) }, before);
+  }, [applyCommand]);
+  const debouncedCommand = useCallback((command: ManualEditCommand) => {
+    if (autosave.current) clearTimeout(autosave.current);
+    autosave.current = setTimeout(() => { autosave.current = null; void applyCommand(command); }, 500);
+  }, [applyCommand]);
+  const uploadLibraryAsset = async (role: 'IMAGE' | 'LOGO' | 'AUDIO', file: File) => {
+    setBusy('upload'); setError('');
+    try { const current = projectRef.current; await uploadEditAsset(current.id, current.revision, role, file);
+      acceptServerProject(await getEditProject(current.id)); await refreshHistory(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Asset upload failed'); }
+    finally { setBusy(null); }
+  };
+  const deleteLibraryAsset = async (asset: EditAsset) => {
+    setBusy('saving'); setError('');
+    try { const current = projectRef.current; await deleteEditAsset(current.id, current.revision, asset.id);
+      acceptServerProject(await getEditProject(current.id)); await refreshHistory(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : 'Asset delete failed'); }
+    finally { setBusy(null); }
+  };
+  const addAsset = (asset: EditAsset) => {
+    const action = asset.role === 'AUDIO' ? 'add-audio' : asset.role === 'LOGO' ? 'add-logo' : 'add-image';
+    void applyCommand({ action, assetId: asset.id });
+  };
+
   return <div className='grid gap-5'>
     <header className='flex flex-wrap items-center justify-between gap-4'>
       <div><p className='text-xs font-semibold uppercase tracking-[.18em] text-violet-300'>EditMode</p><h1 className='mt-1 text-2xl font-bold tracking-tight'>{project.name}</h1></div>
@@ -165,23 +218,31 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
         <span className='flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs text-slate-400'>{busy ? <LoaderCircle size={14} className='animate-spin' /> : <Check size={14} className='text-emerald-300' />}{busy === 'saving' ? 'Saving…' : busy ? 'Working…' : `Saved · r${project.revision}`}</span>
         <button disabled={!source || !!busy || !!source.analysis} onClick={() => void run('analyze', () => analyzeEditSource(project.id, project.revision))}
           className='flex items-center gap-2 rounded-xl bg-cyan-400 px-3 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40'><ScanSearch size={15} />Analyze source</button>
+        <button disabled={!source || !!busy} onClick={() => void applyCommand({ action: 'add-text' })}
+          className='flex items-center gap-1 rounded-xl border border-white/10 px-3 py-2 text-xs font-semibold disabled:opacity-40'><Plus size={14} />Text</button>
       </div>
     </header>
     {error && <div role='alert' className='rounded-xl border border-red-400/20 bg-red-400/10 px-4 py-3 text-sm text-red-200'>{error}</div>}
     <div className='grid min-w-0 gap-5 xl:grid-cols-[250px_minmax(0,1fr)_280px]'>
-      <EditAssetPicker source={source} busy={!!busy}
-        onUpload={(file) => run('upload', () => uploadEditSource(project.id, project.revision, file))}
-        onImport={(videoId) => run('import', () => importEditSource(project.id, project.revision, videoId))} />
-      <EditPreview ref={previewRef} source={source} elements={project.elements ?? []}
+      <EditAssetPicker assets={project.assets} busy={!!busy}
+        onUploadSource={(file) => run('upload', () => uploadEditSource(project.id, project.revision, file))}
+        onImport={(videoId) => run('import', () => importEditSource(project.id, project.revision, videoId))}
+        onUploadAsset={uploadLibraryAsset} onAdd={addAsset} onDelete={(asset) => void deleteLibraryAsset(asset)} />
+      <EditPreview ref={previewRef} source={source} assets={project.assets} elements={project.elements ?? []}
+        selectedElementId={selectedElementId}
         currentPlayheadSec={currentPlayheadSec} onPlayheadChange={setCurrentPlayheadSec}
-        onSelect={setSelectedElementId} />
-      <div className='grid content-start gap-5'><EditInspector project={project} source={source} selected={selected} /><EditHistoryPanel history={history} /></div>
+        onSelect={setSelectedElementId} onPreviewElements={(elements) => setProject((current) => ({ ...current, elements }))}
+        onCommitTransform={commitTransform} />
+      <div className='grid content-start gap-5'><EditInspector project={project} source={source} selected={selected}
+        onPreview={previewElement} onCommit={(command) => void applyCommand(command)} onDebounced={debouncedCommand}
+        onDuplicate={() => selectedElementId && void applyCommand({ action: 'duplicate-element', elementId: selectedElementId })}
+        onDelete={remove} /><EditHistoryPanel history={history} /></div>
     </div>
     <EditTimeline elements={project.elements ?? []} selectedElementId={selectedElementId}
       currentPlayheadSec={currentPlayheadSec} sourceDuration={source?.duration ?? 0} disabled={!!busy}
       canUndo={availability.canUndo} canRedo={availability.canRedo} onSelect={setSelectedElementId}
       onSeek={setCurrentPlayheadSec} onPreviewElements={(elements) => setProject((current) => ({ ...current, elements }))}
-      onCommitTrim={commitTrim} onSplit={split} onDelete={remove} onMove={move}
+      onCommitTrim={commitTrim} onCommitTiming={commitTiming} onSplit={split} onDelete={remove} onMove={move}
       onUndo={() => void travelHistory('undo')} onRedo={() => void travelHistory('redo')} />
   </div>;
 }

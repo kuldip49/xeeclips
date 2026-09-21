@@ -1,5 +1,5 @@
 export type EditProjectStatus = 'DRAFT' | 'READY' | 'EXPORTING' | 'COMPLETED' | 'FAILED';
-export type EditAssetRole = 'SOURCE' | 'OVERLAY' | 'AUDIO' | 'IMAGE' | 'EXPORT';
+export type EditAssetRole = 'SOURCE' | 'OVERLAY' | 'AUDIO' | 'IMAGE' | 'LOGO' | 'EXPORT';
 export type EditElementType = 'VIDEO' | 'AUDIO' | 'TEXT' | 'SUBTITLE' | 'IMAGE' | 'EFFECT';
 
 export type EditAnalysisSummary = {
@@ -48,6 +48,20 @@ export type EditElement = {
   properties: Record<string, unknown>;
 };
 
+/** Visual coordinates are normalized to the preview canvas (0..1), from its top-left corner. */
+export type VisualElementProperties = {
+  x: number; y: number; width: number; height: number; scale?: number; rotation: number; opacity: number;
+  zIndex: number; anchor: 'top-left'; locked: boolean; role?: 'IMAGE' | 'LOGO';
+  content?: string; fontSize?: number; fontWeight?: number; fontFamily?: string;
+  textAlign?: 'left' | 'center' | 'right'; color?: string; backgroundColor?: string;
+};
+
+/** Audio volume is normalized: 0 is silent and 1 is the asset's original level. */
+export type AudioElementProperties = {
+  volume: number; muted: boolean; fadeInSec: number; fadeOutSec: number;
+  duckUnderSpeech?: boolean; duckLevel?: number; attackMs?: number; releaseMs?: number;
+};
+
 export type EditProject = {
   id: string;
   name: string;
@@ -79,4 +93,3 @@ export type SourceVideoOption = {
   originalName: string;
   project?: { id: string; name: string };
 };
-

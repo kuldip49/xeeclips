@@ -4,7 +4,7 @@ import {
   Injectable,
   NotFoundException
 } from '@nestjs/common';
-import { EditElementType, Prisma } from '@prisma/client';
+import { EditAssetRole, EditElementType, Prisma } from '@prisma/client';
 import { randomUUID } from 'crypto';
 import { extname, join } from 'path';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
@@ -17,7 +17,20 @@ import type { EditElementInput, PreparedEditSource } from './edit-mode.types';
 import { editProjectState } from './edit-mode.types';
 
 const MIN_VIDEO_DURATION_SEC = 0.05;
-const MANUAL_ACTIONS = new Set(['TRIM_ELEMENT', 'SPLIT_ELEMENT', 'DELETE_ELEMENT', 'MOVE_ELEMENT']);
+const PHASE3_ACTIONS = [
+  'ADD_IMAGE', 'ADD_LOGO', 'ADD_TEXT', 'ADD_AUDIO', 'MOVE_ELEMENT', 'RESIZE_ELEMENT',
+  'SET_ELEMENT_TIMING', 'SET_ELEMENT_OPACITY', 'SET_ELEMENT_Z_INDEX', 'UPDATE_TEXT',
+  'SET_AUDIO_VOLUME', 'SET_AUDIO_MUTED', 'SET_AUDIO_FADE', 'DUPLICATE_ELEMENT', 'REMOVE_ELEMENT'
+] as const;
+const MANUAL_ACTIONS = new Set(['TRIM_ELEMENT', 'SPLIT_ELEMENT', 'DELETE_ELEMENT',
+  'MOVE_ELEMENT', ...PHASE3_ACTIONS]);
+const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const AUDIO_MIMES = new Set(['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav',
+  'audio/mp4', 'audio/x-m4a', 'audio/aac']);
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
+const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.m4a', '.aac']);
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
 
 type TimelineElement = EditElementInput & { id: string };
 
@@ -185,6 +198,95 @@ export class EditModeService {
     }
   }
 
+  async uploadAsset(id: string, file: Express.Multer.File, roleValue: unknown, revisionValue: unknown) {
+    const expectedRevision = parseRevision(revisionValue);
+    const role = typeof roleValue === 'string' ? roleValue.toUpperCase() : '';
+    if (!['IMAGE', 'LOGO', 'AUDIO'].includes(role)) {
+      throw new BadRequestException('role must be IMAGE, LOGO, or AUDIO');
+    }
+    const extension = extname(file.originalname).toLowerCase();
+    const image = role === 'IMAGE' || role === 'LOGO';
+    const allowedMime = image ? IMAGE_MIMES : AUDIO_MIMES;
+    const allowedExtension = image ? IMAGE_EXTENSIONS : AUDIO_EXTENSIONS;
+    const maxBytes = image ? MAX_IMAGE_BYTES : MAX_AUDIO_BYTES;
+    if (!allowedMime.has(file.mimetype.toLowerCase()) || !allowedExtension.has(extension)) {
+      throw new BadRequestException(`Unsupported ${image ? 'image' : 'audio'} MIME type or extension`);
+    }
+    if (!file.size || file.size > maxBytes) {
+      throw new BadRequestException(`${image ? 'Image' : 'Audio'} file exceeds the size limit`);
+    }
+    const current = await this.prisma.editProject.findUnique({ where: { id }, select: { id: true, revision: true } });
+    if (!current) throw new NotFoundException('EditProject not found');
+    this.assertRevision(current.revision, expectedRevision);
+    const assetId = randomUUID();
+    const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/gu, '_').slice(-120) || `asset${extension}`;
+    const objectKey = `edit-mode/${id}/assets/${assetId}/${safeName}`;
+    const directory = await mkdtemp(join(tmpdir(), 'edit-mode-asset-'));
+    const path = join(directory, `asset${extension}`);
+    let stored: { bucket: string; objectKey: string } | null = null;
+    try {
+      await writeFile(path, file.buffer);
+      const media = await this.probeAssetMedia(path);
+      const imageFormat = media.formatName && /(?:image2|png_pipe|jpeg_pipe|webp_pipe)/iu.test(media.formatName);
+      if (image && (!media.hasVideo || media.width == null || media.height == null || !imageFormat)) {
+        throw new BadRequestException('Image file is not readable');
+      }
+      if (!image && (!media.hasAudio || !media.durationSec || media.durationSec <= 0)) {
+        throw new BadRequestException('Audio file is not readable or has no audio stream');
+      }
+      stored = await this.storage.uploadBuffer({ buffer: file.buffer, objectKey, mimeType: file.mimetype });
+      const result = await this.prisma.$transaction(async (tx) => {
+        const latest = await tx.editProject.findUnique({ where: { id } });
+        if (!latest) throw new NotFoundException('EditProject not found');
+        this.assertRevision(latest.revision, expectedRevision);
+        const asset = await tx.editAsset.create({ data: {
+          id: assetId, editProjectId: id, role: role as EditAssetRole,
+          originalName: file.originalname, bucket: stored!.bucket, objectKey: stored!.objectKey,
+          mimeType: file.mimetype, sizeBytes: BigInt(file.size), duration: media.durationSec,
+          width: media.width, height: media.height, fps: media.fps ?? null,
+          metadata: { hasVideo: media.hasVideo, hasAudio: media.hasAudio,
+            videoCodec: media.videoCodec, audioCodec: media.audioCodec, formatName: media.formatName }
+        } });
+        const revision = latest.revision + 1;
+        await tx.editProject.update({ where: { id }, data: { revision } });
+        await tx.editHistory.create({ data: { editProjectId: id, revision, actor: 'USER',
+          action: 'ASSET_UPLOADED', command: { assetId, role },
+          beforeState: editProjectState(latest), afterState: { ...editProjectState(latest), revision, assetId } } });
+        return { asset: serialize(asset), revision };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      return result;
+    } catch (error) {
+      if (stored) await this.storage.removeObject(stored.bucket, stored.objectKey).catch(() => undefined);
+      throw error;
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  async deleteAsset(id: string, assetId: string, revisionValue: unknown) {
+    const expectedRevision = parseRevision(revisionValue);
+    const result = await this.prisma.$transaction(async (tx) => {
+      const project = await tx.editProject.findUnique({ where: { id } });
+      if (!project) throw new NotFoundException('EditProject not found');
+      this.assertRevision(project.revision, expectedRevision);
+      const asset = await tx.editAsset.findUnique({ where: { id: assetId },
+        include: { _count: { select: { elements: true } } } });
+      if (!asset || asset.editProjectId !== id) throw new NotFoundException('EditAsset not found');
+      if (asset.role === 'SOURCE') throw new BadRequestException('The source asset cannot be deleted here');
+      if (asset._count.elements > 0) throw new ConflictException({ code: 'ASSET_IN_USE',
+        message: 'Remove timeline elements that reference this asset before deleting it' });
+      await tx.editAsset.delete({ where: { id: assetId } });
+      const revision = project.revision + 1;
+      await tx.editProject.update({ where: { id }, data: { revision } });
+      await tx.editHistory.create({ data: { editProjectId: id, revision, actor: 'USER',
+        action: 'ASSET_DELETED', command: { assetId }, beforeState: editProjectState(project),
+        afterState: { ...editProjectState(project), revision, deletedAssetId: assetId } } });
+      return { asset, revision };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    await this.storage.removeObject(result.asset.bucket, result.asset.objectKey).catch(() => undefined);
+    return { id: assetId, deleted: true, revision: result.revision };
+  }
+
   async attachFromVideo(id: string, sourceVideoIdValue: unknown, revisionValue: unknown) {
     const sourceVideoId = typeof sourceVideoIdValue === 'string' ? sourceVideoIdValue : '';
     if (!sourceVideoId) throw new BadRequestException('sourceVideoId is required');
@@ -235,6 +337,10 @@ export class EditModeService {
         bitrate: media.bitrate == null ? null : Number(media.bitrate)
       }
     };
+  }
+
+  private probeAssetMedia(path: string) {
+    return probeMedia(path);
   }
 
   private async assertAttachable(id: string, revision: number) {
@@ -409,6 +515,161 @@ export class EditModeService {
       });
   }
 
+  async phase3Command(id: string, actionValue: string, input: Record<string, unknown>) {
+    const action = actionValue.replace(/-/gu, '_').toUpperCase();
+    if (!PHASE3_ACTIONS.includes(action as typeof PHASE3_ACTIONS[number])) {
+      throw new BadRequestException({ code: 'UNSUPPORTED_COMMAND', message: 'Unsupported EditMode command' });
+    }
+    const { revision: _revision, ...commandValue } = input;
+    const command = commandValue as Prisma.InputJsonObject;
+    return this.manualMutation(id, input.revision, action, command, (elements, assets) => {
+      const projectDuration = elements.filter((item) => item.type === 'VIDEO' && item.track === 0)
+        .reduce((total, item) => total + item.duration, 0);
+      const assetId = typeof input.assetId === 'string' ? input.assetId : '';
+      const elementId = typeof input.elementId === 'string' ? input.elementId : '';
+      const asset = assetId ? assets.get(assetId) : undefined;
+      const target = elementId ? elements.find((item) => item.id === elementId) : undefined;
+      const nextPosition = (track: number) => elements.filter((item) => item.track === track).length;
+      const add = (element: TimelineElement) => [...elements, element];
+      const normalizedDuration = (value: number) => Math.max(MIN_VIDEO_DURATION_SEC,
+        Math.min(value, projectDuration || value));
+      const requireTarget = () => {
+        if (!target) throw new NotFoundException('EditElement not found');
+        return target;
+      };
+      const requireVisual = () => {
+        const item = requireTarget();
+        if (item.type !== 'IMAGE' && item.type !== 'TEXT') throw new BadRequestException({
+          code: 'INVALID_ELEMENT_TYPE', message: 'Command requires an IMAGE, LOGO, or TEXT element' });
+        return item;
+      };
+      const withProperties = (item: TimelineElement, properties: Record<string, unknown>) =>
+        elements.map((candidate) => candidate.id === item.id ? { ...candidate,
+          properties: { ...(item.properties as Record<string, unknown>), ...properties } as Prisma.InputJsonValue }
+          : candidate);
+
+      if (action === 'ADD_IMAGE' || action === 'ADD_LOGO') {
+        const expectedRole = action === 'ADD_LOGO' ? 'LOGO' : 'IMAGE';
+        if (!asset || asset.role !== expectedRole) throw new BadRequestException({ code: 'INVALID_ASSET',
+          message: `${expectedRole} asset must belong to this EditProject` });
+        const width = expectedRole === 'LOGO' ? 0.2 : 0.5;
+        const ratio = asset.width && asset.height ? asset.height / asset.width : 1;
+        const height = Math.min(0.8, width * ratio * 16 / 9);
+        const x = expectedRole === 'LOGO' ? 0.76 : (1 - width) / 2;
+        const y = expectedRole === 'LOGO' ? 0.04 : (1 - height) / 2;
+        return add({ id: randomUUID(), assetId, type: 'IMAGE', track: 2,
+          position: nextPosition(2), startTime: 0, duration: normalizedDuration(projectDuration),
+          trimStart: 0, trimEnd: null, properties: { x, y, width, height, scale: 1, rotation: 0,
+            opacity: 1, zIndex: expectedRole === 'LOGO' ? 20 : 10, anchor: 'top-left',
+            locked: false, role: expectedRole, preserveAspectRatio: true } });
+      }
+      if (action === 'ADD_TEXT') {
+        return add({ id: randomUUID(), assetId: null, type: 'TEXT', track: 1,
+          position: nextPosition(1), startTime: 0, duration: normalizedDuration(projectDuration),
+          trimStart: 0, trimEnd: null, properties: { content: 'Text', x: 0.2, y: 0.42,
+            width: 0.6, height: 0.16, scale: 1, fontSize: 48, fontWeight: 700,
+            fontFamily: 'Arial, sans-serif', textAlign: 'center', color: '#ffffff',
+            backgroundColor: 'transparent', rotation: 0, opacity: 1, zIndex: 30,
+            anchor: 'top-left', locked: false } });
+      }
+      if (action === 'ADD_AUDIO') {
+        if (!asset || asset.role !== 'AUDIO' || !asset.duration) throw new BadRequestException({
+          code: 'INVALID_ASSET', message: 'A readable AUDIO asset must belong to this EditProject' });
+        const duration = normalizedDuration(Math.min(asset.duration, projectDuration));
+        return add({ id: randomUUID(), assetId, type: 'AUDIO', track: 3,
+          position: nextPosition(3), startTime: 0, duration, trimStart: 0, trimEnd: duration,
+          properties: { volume: 0.25, muted: false, fadeInSec: 0, fadeOutSec: 0,
+            duckUnderSpeech: false, duckLevel: 0.25, attackMs: 150, releaseMs: 350 } });
+      }
+      if (action === 'MOVE_ELEMENT') {
+        const item = requireVisual();
+        const properties = item.properties as Record<string, unknown>;
+        const width = Number(properties.width ?? 0.2); const height = Number(properties.height ?? 0.2);
+        const x = this.unitNumber(input.x, 'x'); const y = this.unitNumber(input.y, 'y');
+        return withProperties(item, { x: Math.min(x, 1 - width), y: Math.min(y, 1 - height) });
+      }
+      if (action === 'RESIZE_ELEMENT') {
+        const item = requireVisual();
+        const width = this.unitNumber(input.width, 'width');
+        const height = this.unitNumber(input.height, 'height');
+        if (width < 0.02 || height < 0.02) throw new BadRequestException('width and height must be at least 0.02');
+        const properties = item.properties as Record<string, unknown>;
+        const x = Number(properties.x ?? 0); const y = Number(properties.y ?? 0);
+        return withProperties(item, { width: Math.min(width, 1 - x), height: Math.min(height, 1 - y) });
+      }
+      if (action === 'SET_ELEMENT_TIMING') {
+        const item = requireTarget();
+        if (item.type === 'VIDEO') throw new BadRequestException('Use trim/split commands for VIDEO timing');
+        const startTime = this.nonNegativeNumber(input.startTime, 'startTime');
+        const duration = this.positiveNumber(input.duration, 'duration');
+        if (startTime + duration > projectDuration + 1e-6) throw new BadRequestException({
+          code: 'TIMING_OUT_OF_RANGE', message: 'Element timing must stay within the video timeline' });
+        const trimStart = input.trimStart === undefined ? item.trimStart ?? 0
+          : this.nonNegativeNumber(input.trimStart, 'trimStart');
+        const trimEnd = input.trimEnd === undefined ? (item.type === 'AUDIO' ? trimStart + duration : null)
+          : this.positiveNumber(input.trimEnd, 'trimEnd');
+        return elements.map((candidate) => candidate.id === item.id
+          ? { ...candidate, startTime, duration, trimStart, trimEnd } : candidate);
+      }
+      if (action === 'SET_ELEMENT_OPACITY') return withProperties(requireVisual(),
+        { opacity: this.unitNumber(input.opacity, 'opacity') });
+      if (action === 'SET_ELEMENT_Z_INDEX') return withProperties(requireVisual(),
+        { zIndex: this.integer(input.zIndex, 'zIndex') });
+      if (action === 'UPDATE_TEXT') {
+        const item = requireTarget();
+        if (item.type !== 'TEXT') throw new BadRequestException('UPDATE_TEXT requires a TEXT element');
+        if (typeof input.content !== 'string') throw new BadRequestException('content must be a string');
+        const content = input.content.slice(0, 2000);
+        const patch: Record<string, unknown> = { content };
+        if (input.fontSize !== undefined) patch.fontSize = Math.min(300, Math.max(8,
+          this.positiveNumber(input.fontSize, 'fontSize')));
+        if (input.fontWeight !== undefined) patch.fontWeight = Math.min(900, Math.max(100,
+          this.integer(input.fontWeight, 'fontWeight')));
+        if (input.fontFamily !== undefined) {
+          const family = String(input.fontFamily);
+          if (!['Arial, sans-serif', 'Georgia, serif', 'monospace'].includes(family)) {
+            throw new BadRequestException('fontFamily is invalid');
+          }
+          patch.fontFamily = family;
+        }
+        if (input.color !== undefined) patch.color = this.cssColor(input.color, 'color');
+        if (input.backgroundColor !== undefined) patch.backgroundColor =
+          input.backgroundColor === 'transparent' ? 'transparent' : this.cssColor(input.backgroundColor, 'backgroundColor');
+        if (input.textAlign !== undefined) {
+          if (!['left', 'center', 'right'].includes(String(input.textAlign))) throw new BadRequestException('textAlign is invalid');
+          patch.textAlign = input.textAlign;
+        }
+        return withProperties(item, patch);
+      }
+      if (action === 'SET_AUDIO_VOLUME' || action === 'SET_AUDIO_MUTED' || action === 'SET_AUDIO_FADE') {
+        const item = requireTarget();
+        if (item.type !== 'AUDIO') throw new BadRequestException('Audio command requires an AUDIO element');
+        if (action === 'SET_AUDIO_VOLUME') return withProperties(item,
+          { volume: this.unitNumber(input.volume, 'volume') });
+        if (action === 'SET_AUDIO_MUTED') {
+          if (typeof input.muted !== 'boolean') throw new BadRequestException('muted must be boolean');
+          return withProperties(item, { muted: input.muted });
+        }
+        const fadeInSec = this.nonNegativeNumber(input.fadeInSec, 'fadeInSec');
+        const fadeOutSec = this.nonNegativeNumber(input.fadeOutSec, 'fadeOutSec');
+        if (fadeInSec + fadeOutSec > item.duration) throw new BadRequestException('Audio fades exceed element duration');
+        return withProperties(item, { fadeInSec, fadeOutSec });
+      }
+      if (action === 'DUPLICATE_ELEMENT') {
+        const item = requireTarget();
+        if (item.type === 'VIDEO') throw new BadRequestException('VIDEO elements cannot be duplicated');
+        return add({ ...item, id: randomUUID(), position: nextPosition(item.track),
+          properties: { ...(item.properties as Record<string, unknown>) } as Prisma.InputJsonValue });
+      }
+      if (action === 'REMOVE_ELEMENT') {
+        const item = requireTarget();
+        if (item.type === 'VIDEO') throw new BadRequestException('Use VIDEO delete for ripple deletion');
+        return elements.filter((candidate) => candidate.id !== item.id);
+      }
+      return elements;
+    });
+  }
+
   async undo(id: string, revisionValue: unknown) {
     return this.historyMutation(id, revisionValue, 'UNDO');
   }
@@ -418,16 +679,19 @@ export class EditModeService {
   }
 
   private async manualMutation(id: string, revisionValue: unknown, action: string,
-    command: Prisma.InputJsonObject, mutate: (elements: TimelineElement[]) => TimelineElement[]) {
+    command: Prisma.InputJsonObject, mutate: (elements: TimelineElement[], assets: Map<string, {
+      id: string; role: EditAssetRole; duration: number | null; width: number | null; height: number | null;
+    }>) => TimelineElement[]) {
     const expectedRevision = parseRevision(revisionValue);
     return serialize(await this.prisma.$transaction(async (tx) => {
       const current = await tx.editProject.findUnique({ where: { id }, include: { elements: true,
-        assets: { select: { id: true, duration: true } } } });
+        assets: { select: { id: true, role: true, duration: true, width: true, height: true } } } });
       if (!current) throw new NotFoundException('EditProject not found');
       this.assertRevision(current.revision, expectedRevision);
       const before = current.elements.map((element) => timelineElementState(element as unknown as Record<string, unknown>));
-      const after = normalizeVideoTrack(mutate(before.map((element) => ({ ...element }))));
-      this.validateTimeline(after, new Map(current.assets.map((asset) => [asset.id, asset.duration])));
+      const assetMap = new Map(current.assets.map((asset) => [asset.id, asset]));
+      const after = normalizeVideoTrack(mutate(before.map((element) => ({ ...element })), assetMap));
+      this.validateTimeline(after, assetMap);
       await this.replaceElements(tx, id, after);
       const revision = current.revision + 1;
       const updated = await tx.editProject.update({ where: { id }, data: { revision } });
@@ -497,15 +761,19 @@ export class EditModeService {
     })) });
   }
 
-  private validateTimeline(elements: TimelineElement[], assetDurations: Map<string, number | null>) {
+  private validateTimeline(elements: TimelineElement[], assets: Map<string, {
+    id: string; role: EditAssetRole; duration: number | null; width: number | null; height: number | null;
+  }>) {
+    const projectDuration = elements.filter((item) => item.type === 'VIDEO' && item.track === 0)
+      .reduce((total, item) => total + item.duration, 0);
     for (const element of elements.filter((item) => item.type === 'VIDEO')) {
       if (element.track !== 0) throw new BadRequestException({ code: 'UNSUPPORTED_TRACK',
         message: 'Phase 2 supports VIDEO elements only on track 0' });
-      if (!element.assetId || !assetDurations.has(element.assetId)) throw new BadRequestException({
+      if (!element.assetId || !assets.has(element.assetId)) throw new BadRequestException({
         code: 'INVALID_ASSET', message: 'VIDEO element must reference an EditProject asset' });
       const trimStart = element.trimStart ?? 0;
       const trimEnd = element.trimEnd;
-      const sourceDuration = assetDurations.get(element.assetId);
+      const sourceDuration = assets.get(element.assetId)?.duration;
       if (!Number.isFinite(trimStart) || trimStart < 0 || trimEnd == null || !Number.isFinite(trimEnd) ||
         trimEnd - trimStart < MIN_VIDEO_DURATION_SEC || (sourceDuration != null && trimEnd > sourceDuration + 1e-6)) {
         throw new BadRequestException({ code: 'INVALID_TRIM',
@@ -513,6 +781,25 @@ export class EditModeService {
       }
       if (Math.abs(element.duration - (trimEnd - trimStart)) > 1e-5) throw new BadRequestException({
         code: 'INVALID_DURATION', message: 'VIDEO duration must match its source trim range' });
+    }
+    for (const element of elements.filter((item) => item.type !== 'VIDEO')) {
+      if (!Number.isFinite(element.startTime) || element.startTime < 0 ||
+        !Number.isFinite(element.duration) || element.duration <= 0 ||
+        element.startTime + element.duration > projectDuration + 1e-6) {
+        throw new BadRequestException({ code: 'TIMING_OUT_OF_RANGE',
+          message: 'Overlay and audio timing must stay within the video timeline' });
+      }
+      if ((element.type === 'IMAGE' || element.type === 'AUDIO') &&
+        (!element.assetId || !assets.has(element.assetId))) throw new BadRequestException({
+        code: 'INVALID_ASSET', message: `${element.type} element must reference an EditProject asset` });
+      if (element.type === 'AUDIO') {
+        const sourceDuration = element.assetId ? assets.get(element.assetId)?.duration : null;
+        const trimStart = element.trimStart ?? 0;
+        const trimEnd = element.trimEnd ?? trimStart + element.duration;
+        if (trimStart < 0 || trimEnd <= trimStart || Math.abs(trimEnd - trimStart - element.duration) > 1e-5 ||
+          (sourceDuration != null && trimEnd > sourceDuration + 1e-6)) throw new BadRequestException({
+          code: 'INVALID_TRIM', message: 'AUDIO source range is invalid' });
+      }
     }
   }
 
@@ -539,6 +826,31 @@ export class EditModeService {
     const number = Number(value);
     if (!Number.isInteger(number)) throw new BadRequestException(`${field} must be an integer`);
     return number;
+  }
+
+  private positiveNumber(value: unknown, field: string) {
+    const number = this.finiteNumber(value, field);
+    if (number <= 0) throw new BadRequestException(`${field} must be positive`);
+    return number;
+  }
+
+  private nonNegativeNumber(value: unknown, field: string) {
+    const number = this.finiteNumber(value, field);
+    if (number < 0) throw new BadRequestException(`${field} must be non-negative`);
+    return number;
+  }
+
+  private unitNumber(value: unknown, field: string) {
+    const number = this.finiteNumber(value, field);
+    if (number < 0 || number > 1) throw new BadRequestException(`${field} must be between 0 and 1`);
+    return number;
+  }
+
+  private cssColor(value: unknown, field: string) {
+    if (typeof value !== 'string' || !/^#[0-9a-f]{6}([0-9a-f]{2})?$/iu.test(value)) {
+      throw new BadRequestException(`${field} must be a hex color`);
+    }
+    return value;
   }
 
   private assertRevision(current: number, expected: number) {

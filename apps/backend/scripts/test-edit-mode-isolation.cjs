@@ -54,7 +54,12 @@ function createHarness() {
       create: async ({ data }) => { const now = new Date(); const row = { ...data,
         transcript: null, analysis: null, createdAt: now, updatedAt: now };
         rows.editAssets.set(row.id, row); return { ...row }; },
-      findUnique: async ({ where }) => rows.editAssets.get(where.id) ?? null,
+      findUnique: async ({ where, include }) => { const row = rows.editAssets.get(where.id);
+        if (!row) return null;
+        return include ? { ...row, _count: { elements: [...rows.editElements.values()]
+          .filter((item) => item.assetId === row.id).length } } : { ...row }; },
+      delete: async ({ where }) => { const row = rows.editAssets.get(where.id);
+        rows.editAssets.delete(where.id); return row; },
       update: async ({ where, data }) => { const row = { ...rows.editAssets.get(where.id), ...data,
         updatedAt: new Date() }; rows.editAssets.set(where.id, row); return row; }
     },
@@ -81,7 +86,8 @@ function createHarness() {
     removeObject: async (bucket, objectKey) => storage.removed.push({ bucket, objectKey }),
     statObject: async () => ({ size: 2048 }),
     getObject: async () => null,
-    getPartialObject: async () => null
+    getPartialObject: async () => null,
+    uploadBuffer: async ({ objectKey }) => ({ bucket: 'test-bucket', objectKey })
   };
   const analysis = { calls: 0, analyze: async () => { analysis.calls++;
     return { transcript: { text: 'exact source transcript', segments: [] }, analysis: {

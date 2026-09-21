@@ -22,3 +22,31 @@ export class MoveElementDto extends RevisionCommandDto {
   toPosition?: unknown;
   track?: unknown;
 }
+
+export class Phase3EditCommandDto extends RevisionCommandDto {
+  elementId?: unknown;
+  assetId?: unknown;
+  startTime?: unknown;
+  duration?: unknown;
+  trimStart?: unknown;
+  trimEnd?: unknown;
+  x?: unknown;
+  y?: unknown;
+  width?: unknown;
+  height?: unknown;
+  opacity?: unknown;
+  zIndex?: unknown;
+  content?: unknown;
+  fontSize?: unknown;
+  fontWeight?: unknown;
+  fontFamily?: unknown;
+  textAlign?: unknown;
+  color?: unknown;
+  backgroundColor?: unknown;
+  rotation?: unknown;
+  locked?: unknown;
+  volume?: unknown;
+  muted?: unknown;
+  fadeInSec?: unknown;
+  fadeOutSec?: unknown;
+}

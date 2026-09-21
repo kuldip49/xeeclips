@@ -442,6 +442,7 @@ enum EditAssetRole {
   OVERLAY
   AUDIO
   IMAGE
+  LOGO
   EXPORT
 }
 
