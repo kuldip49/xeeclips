@@ -428,3 +428,115 @@ model VisualAnalysis {
   createdAt                DateTime        @default(now())
   updatedAt                DateTime        @updatedAt
 }
+
+enum EditProjectStatus {
+  DRAFT
+  READY
+  EXPORTING
+  COMPLETED
+  FAILED
+}
+
+enum EditAssetRole {
+  SOURCE
+  OVERLAY
+  AUDIO
+  IMAGE
+  EXPORT
+}
+
+enum EditElementType {
+  VIDEO
+  AUDIO
+  TEXT
+  SUBTITLE
+  IMAGE
+  EFFECT
+}
+
+enum EditHistoryActor {
+  USER
+  PRESET
+  ASSISTANT
+  SYSTEM
+}
+
+model EditProject {
+  id              String            @id @default(uuid())
+  name            String
+  sourceProjectId String?
+  status          EditProjectStatus @default(DRAFT)
+  settings        Json              @default("{}")
+  revision        Int               @default(0)
+  assets          EditAsset[]
+  elements        EditElement[]
+  history         EditHistory[]
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([sourceProjectId])
+  @@index([updatedAt])
+}
+
+model EditAsset {
+  id            String        @id @default(uuid())
+  editProjectId String
+  editProject   EditProject   @relation(fields: [editProjectId], references: [id], onDelete: Cascade)
+  sourceVideoId String?
+  role          EditAssetRole
+  originalName  String
+  bucket        String
+  objectKey     String        @unique
+  mimeType      String
+  sizeBytes     BigInt
+  duration      Float?
+  width         Int?
+  height        Int?
+  fps           Float?
+  metadata      Json          @default("{}")
+  transcript    Json?
+  analysis      Json?
+  elements      EditElement[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([editProjectId, role])
+  @@index([sourceVideoId])
+}
+
+model EditElement {
+  id            String          @id @default(uuid())
+  editProjectId String
+  editProject   EditProject     @relation(fields: [editProjectId], references: [id], onDelete: Cascade)
+  assetId       String?
+  asset         EditAsset?      @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  type          EditElementType
+  track         Int
+  position      Int
+  startTime     Float
+  duration      Float
+  trimStart     Float           @default(0)
+  trimEnd       Float?
+  properties    Json            @default("{}")
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([editProjectId, track, position])
+  @@index([assetId])
+}
+
+model EditHistory {
+  id            String           @id @default(uuid())
+  editProjectId String
+  editProject   EditProject      @relation(fields: [editProjectId], references: [id], onDelete: Cascade)
+  revision      Int
+  actor         EditHistoryActor
+  action        String
+  command       Json?
+  beforeState   Json?
+  afterState    Json
+  createdAt     DateTime         @default(now())
+
+  @@unique([editProjectId, revision])
+  @@index([editProjectId, createdAt])
+}

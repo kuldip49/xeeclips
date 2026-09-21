@@ -4,12 +4,13 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
-import { BarChart3, Bell, Clapperboard, FolderKanban, LayoutDashboard, Menu, Scissors, Settings, Sparkles, X } from 'lucide-react';
+import { BarChart3, Bell, Clapperboard, FolderKanban, LayoutDashboard, Menu, PenTool, Scissors, Settings, Sparkles, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navigation = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Projects', href: '/dashboard#projects', icon: FolderKanban },
+  { label: 'EditMode', href: '/edit-mode', icon: PenTool },
   { label: 'Generated Clips', href: '/dashboard#clips', icon: Scissors },
   { label: 'Analytics', href: '/dashboard#analytics', icon: BarChart3 },
   { label: 'Settings', href: '/dashboard#settings', icon: Settings }
@@ -25,7 +26,8 @@ function Sidebar({ close }: { close?: () => void }) {
     <p className='mt-12 px-3 text-[11px] font-semibold uppercase tracking-[.18em] text-slate-500'>Workspace</p>
     <nav className='mt-4 grid gap-1' aria-label='Main navigation'>
       {navigation.map(({ label, href, icon: Icon }, index) => {
-        const active = index === 0 ? pathname === '/dashboard' : pathname === href;
+        const active = index === 0 ? pathname === '/dashboard' :
+          href === '/edit-mode' ? pathname.startsWith('/edit-mode') : pathname === href;
         return <Link key={label} href={href} onClick={close} className={cn('flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-colors hover:bg-[#151d2e] hover:text-white', active ? 'bg-violet-500/10 text-violet-300' : 'text-slate-400')}><Icon size={18} aria-hidden />{label}</Link>;
       })}
     </nav>
