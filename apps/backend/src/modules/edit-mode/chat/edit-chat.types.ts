@@ -117,6 +117,13 @@ export type ChatProposal = {
   grounding: ChatGrounding[];
   /** The authoritative command bundle. The client never sends these back. */
   commands: ResolvedChatCommand[];
+  /**
+   * Set when the turn asked for history travel rather than an edit ("undo
+   * that"). Apply then calls the existing undo/redo path instead of executing
+   * commands - no inverse command is ever synthesised, so chat history travel
+   * and button history travel are literally the same operation.
+   */
+  historyAction?: 'UNDO' | 'REDO';
   /** Element ids the targets resolved to when the plan was built. */
   resolvedTargets: Record<number, string>;
   planner: 'LLM' | 'DETERMINISTIC';

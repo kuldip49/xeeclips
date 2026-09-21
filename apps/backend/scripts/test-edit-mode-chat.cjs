@@ -23,6 +23,8 @@ const { readChatThread, boundChatThread, proposalView,
 const { EditChatProposalStore } = require(`${C}/edit-chat-proposal-store.js`);
 
 let passed = 0;
+/** Assigned below; the proposal store is async since Phase 7. */
+let proposalStoreChecks = async () => undefined;
 const ok = (label) => { console.log(`  ok  ${label}`); passed += 1; };
 const throws = (fn, code, label) => {
   try { fn(); assert.fail(`${label}: expected a rejection`); }
@@ -694,28 +696,34 @@ function handleOfAsset(context, id) {
   assert.ok(long.lastAffectedElementIds.length <= 8);
   ok('the stored thread is bounded so settings cannot grow without limit');
 
-  const store = new EditChatProposalStore();
-  const base = { editProjectId: 'p1', baseRevision: 1, state: 'READY', userMessage: 'x',
-    summary: 's', plannedChanges: [], warnings: [], needsClarification: false,
-    clarificationQuestion: '', affectedElements: [], plannedDurationSec: 10, grounding: [],
-    commands: [{ kind: 'ELEMENT', action: 'ADD_TEXT', payload: {}, reason: '' }],
-    resolvedTargets: {}, planner: 'DETERMINISTIC' };
-  const saved = store.save({ ...base, proposalId: 'prop-1' });
-  assert.equal(store.get('prop-1', 'p1').proposalId, 'prop-1');
-  assert.equal(store.get('prop-1', 'other-project'), null);
-  ok('a proposal is only readable by the project that owns it');
+  // Phase 7 made the store async and Redis-backed. These checks run against
+  // the in-process fallback (REDIS_URL is unset for this offline suite), which
+  // is the same code path a Redis outage takes.
+  proposalStoreChecks = async () => {
+    const store = new EditChatProposalStore();
+    const base = { editProjectId: 'p1', baseRevision: 1, state: 'READY', userMessage: 'x',
+      summary: 's', plannedChanges: [], warnings: [], needsClarification: false,
+      clarificationQuestion: '', affectedElements: [], plannedDurationSec: 10, grounding: [],
+      commands: [{ kind: 'ELEMENT', action: 'ADD_TEXT', payload: {}, reason: '' }],
+      resolvedTargets: {}, planner: 'DETERMINISTIC' };
+    const saved = await store.save({ ...base, proposalId: 'prop-1' });
+    assert.equal((await store.get('prop-1', 'p1')).proposalId, 'prop-1');
+    assert.equal(await store.get('prop-1', 'other-project'), null);
+    ok('a proposal is only readable by the project that owns it');
 
-  for (let index = 0; index < 10; index += 1) {
-    store.save({ ...base, proposalId: `bulk-${index}` });
-  }
-  assert.ok(store.size() <= 8);
-  ok('per-project proposal storage is bounded');
+    for (let index = 0; index < 10; index += 1) {
+      await store.save({ ...base, proposalId: `bulk-${index}` });
+    }
+    assert.ok(await store.countFor('p1') <= 8);
+    ok('per-project proposal storage is bounded');
 
-  const view = proposalView(saved);
-  assert.equal(view.commands, undefined);
-  assert.equal(view.resolvedTargets, undefined);
-  assert.equal(view.editProjectId, undefined);
-  ok('the client-facing proposal never carries the command bundle');
+    const view = proposalView(saved);
+    assert.equal(view.commands, undefined);
+    assert.equal(view.resolvedTargets, undefined);
+    assert.equal(view.editProjectId, undefined);
+    ok('the client-facing proposal never carries the command bundle');
+    await store.onModuleDestroy();
+  };
 }
 
 // --- 10. FALLBACK behaviour --------------------------------------------------
@@ -788,4 +796,6 @@ function handleOfAsset(context, id) {
   ok('an applied chat turn is recorded with the ASSISTANT actor');
 }
 
-console.log(`EditMode chat tests passed (${passed} checks).`);
+void proposalStoreChecks().then(() => {
+  console.log(`EditMode chat tests passed (${passed} checks).`);
+}).catch((error) => { console.error(error); process.exit(1); });

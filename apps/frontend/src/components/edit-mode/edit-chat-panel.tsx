@@ -1,11 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, CornerDownLeft, LoaderCircle, Sparkles, TriangleAlert, X } from 'lucide-react';
+import { Check, CornerDownLeft, LoaderCircle, RefreshCw, Sparkles, TriangleAlert,
+  X } from 'lucide-react';
 import {
   applyEditChat, cancelEditChat, EditModeApiError, getEditChatThread, planEditChat
 } from '@/lib/edit-mode-api';
-import type { ChatApplyResult, ChatMessage, ChatProposal } from '@/lib/edit-mode-types';
+import type { ChatApplyResult, ChatMessage, ChatProposal, EditTimeRange } from '@/lib/edit-mode-types';
 
 /** Concrete openers, so the panel teaches its own vocabulary. */
 const SUGGESTIONS = [
@@ -30,7 +31,7 @@ export function EditChatPanel({ projectId, revision, hasSource, disabled, select
   hasSource: boolean;
   disabled: boolean;
   selectedElementId: string | null;
-  selectedTimeRange: { startSec: number; endSec: number } | null;
+  selectedTimeRange: EditTimeRange | null;
   playheadSec: number;
   onApplied: (result: ChatApplyResult) => void;
   onError: (message: string) => void;
@@ -39,6 +40,9 @@ export function EditChatPanel({ projectId, revision, hasSource, disabled, select
   const [proposal, setProposal] = useState<ChatProposal | null>(null);
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState<'planning' | 'applying' | null>(null);
+  // The wording behind the current proposal, so "Regenerate" can re-plan the
+  // same request against the timeline as it stands now.
+  const [lastInstruction, setLastInstruction] = useState('');
   const [loaded, setLoaded] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
 
@@ -55,10 +59,11 @@ export function EditChatPanel({ projectId, revision, hasSource, disabled, select
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' });
   }, [messages, proposal]);
 
-  const send = useCallback(async () => {
-    const message = draft.trim();
+  const send = useCallback(async (override?: string) => {
+    const message = (override ?? draft).trim();
     if (!message || busy) return;
-    setBusy('planning'); setDraft('');
+    setBusy('planning'); setLastInstruction(message);
+    if (!override) setDraft('');
     try {
       const result = await planEditChat(projectId, { message, revision, selectedElementId,
         selectedTimeRange, playheadSec });
@@ -118,7 +123,12 @@ export function EditChatPanel({ projectId, revision, hasSource, disabled, select
     </div>
 
     {proposal && <ProposalCard proposal={proposal} busy={busy === 'applying'}
-      onApply={() => void apply()} onCancel={() => void cancel()} />}
+      onApply={() => void apply()} onCancel={() => void cancel()}
+      onRegenerate={lastInstruction ? () => void send(lastInstruction) : undefined} />}
+
+    {selectedTimeRange && <p className='rounded-lg border border-amber-300/20 bg-amber-300/5 px-2.5 py-1.5 text-[11px] text-amber-200'>
+      Acting on the selected {selectedTimeRange.startSec.toFixed(1)}s–
+      {selectedTimeRange.endSec.toFixed(1)}s. Try &ldquo;delete this section&rdquo;.</p>}
 
     {loaded && !messages.length && <div className='flex flex-wrap gap-1.5'>
       {SUGGESTIONS.map((suggestion) => <button key={suggestion} type='button' disabled={!idle}
@@ -167,10 +177,11 @@ function ChatBubble({ message }: { message: ChatMessage }) {
 }
 
 /** The decision point. Plain sentences only - no command JSON. */
-function ProposalCard({ proposal, busy, onApply, onCancel }: {
+function ProposalCard({ proposal, busy, onApply, onCancel, onRegenerate }: {
   proposal: ChatProposal; busy: boolean; onApply: () => void; onCancel: () => void;
+  onRegenerate?: () => void;
 }) {
-  const stale = proposal.state === 'STALE';
+  const stale = proposal.state === 'STALE' || proposal.state === 'FAILED';
   return <div className='grid gap-2 rounded-xl border border-violet-300/25 bg-violet-400/5 p-3'>
     <p className='text-[11px] font-semibold uppercase tracking-[.14em] text-violet-300'>
       Planned changes</p>
@@ -184,12 +195,18 @@ function ProposalCard({ proposal, busy, onApply, onCancel }: {
         <TriangleAlert size={12} className='mt-0.5 shrink-0' />{warning}</li>)}
     </ul>}
     {stale && <p className='text-[11px] text-amber-200'>
-      The timeline changed after this was planned. Ask again to re-plan it.</p>}
+      {proposal.state === 'STALE'
+        ? 'The timeline changed after this was planned, so it is no longer safe to apply.'
+        : 'That could not be applied against the timeline as it stands now.'}
+      {onRegenerate ? ' Regenerate it to re-plan the same request.' : ' Ask again to re-plan it.'}</p>}
     <div className='flex gap-2'>
       <button type='button' disabled={busy || stale} onClick={onApply}
         className='flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-400 px-3 py-1.5 text-xs font-bold text-slate-950 disabled:opacity-40'>
         {busy ? <LoaderCircle size={13} className='animate-spin' /> : <Check size={13} />}
         {busy ? 'Applying…' : 'Apply'}</button>
+      {stale && onRegenerate && <button type='button' disabled={busy} onClick={onRegenerate}
+        className='flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-amber-300/30 px-3 py-1.5 text-xs font-semibold text-amber-100 disabled:opacity-40'>
+        <RefreshCw size={13} />Regenerate proposal</button>}
       <button type='button' disabled={busy} onClick={onCancel}
         className='flex items-center justify-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold text-slate-300 disabled:opacity-40'>
         <X size={13} />Cancel</button>

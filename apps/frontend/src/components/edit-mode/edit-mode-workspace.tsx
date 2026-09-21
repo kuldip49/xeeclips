@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, LoaderCircle, Plus, ScanSearch } from 'lucide-react';
+import { Check, LoaderCircle, Plus, ScanSearch, TriangleAlert } from 'lucide-react';
 import {
   analyzeEditSource, deleteEditAsset, EditModeApiError, getEditHistory, getEditProject,
   importEditSource, type ManualEditCommand, redoEdit, runManualEditCommand, undoEdit,
@@ -9,7 +9,7 @@ import {
 } from '@/lib/edit-mode-api';
 import { historyAvailability, timelineDuration, videoTrack } from '@/lib/edit-mode-timeline';
 import type { ChatApplyResult, EditAsset, EditElement, EditHistory, EditPresetApplyResult,
-  EditProject, EditProjectStyle } from '@/lib/edit-mode-types';
+  EditProject, EditProjectStyle, EditTimeRange } from '@/lib/edit-mode-types';
 import { EditAssetPicker } from './edit-asset-picker';
 import { EditChatPanel } from './edit-chat-panel';
 import { EditExportPanel } from './edit-export-panel';
@@ -18,6 +18,41 @@ import { EditHistoryPanel } from './edit-history-panel';
 import { EditInspector } from './edit-inspector';
 import { EditPreview, type EditPreviewHandle } from './edit-preview';
 import { EditTimeline } from './edit-timeline';
+
+/**
+ * One status at a time, in a fixed order of precedence.
+ *
+ * Export runs in the background and the editor stays usable while it does, so
+ * both an export phase and a local save can be true at once. Rather than show
+ * two competing spinners, the more specific local action wins and the export
+ * phase is shown only when nothing local is in flight.
+ */
+function StatusBadge({ busy, exportPhase, revision }: {
+  busy: 'upload' | 'import' | 'analyze' | 'saving' | null;
+  exportPhase: string | null;
+  revision: number;
+}) {
+  const label = busy === 'saving' ? 'Saving…'
+    : busy === 'analyze' ? 'Analyzing…'
+      : busy === 'upload' ? 'Uploading…'
+        : busy === 'import' ? 'Importing…'
+          : busy ? 'Working…'
+            : exportPhase === 'PREPARING' ? 'Preparing export…'
+              : exportPhase === 'RENDERING' ? 'Exporting…'
+                : exportPhase === 'QA' ? 'Checking quality…'
+                  : exportPhase === 'UPLOADING' ? 'Finalizing export…'
+                    : exportPhase === 'FAILED' ? 'Export failed'
+                      : exportPhase === 'COMPLETED' ? `Exported · r${revision}`
+                        : `Saved · r${revision}`;
+  const working = !!busy || (!!exportPhase && exportPhase !== 'COMPLETED' &&
+    exportPhase !== 'FAILED');
+  const failed = !busy && exportPhase === 'FAILED';
+  return <span role='status' className={`flex items-center gap-2 rounded-full border px-3 py-2 text-xs ${
+    failed ? 'border-red-400/25 text-red-200' : 'border-white/10 text-slate-400'}`}>
+    {working ? <LoaderCircle size={14} className='animate-spin' />
+      : failed ? <TriangleAlert size={14} className='text-red-300' />
+        : <Check size={14} className='text-emerald-300' />}{label}</span>;
+}
 
 const fingerprint = (elements: EditElement[]) => JSON.stringify(elements.map((element) => ({
   id: element.id, assetId: element.assetId, type: element.type, track: element.track,
@@ -38,6 +73,10 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
   const firstVideo = videoTrack(initialProject.elements ?? [])[0];
   const [selectedElementId, setSelectedElementId] = useState<string | null>(firstVideo?.id ?? null);
   const [currentPlayheadSec, setCurrentPlayheadSec] = useState(0);
+  // The range dragged on the timeline ruler. It is passed straight to the AI
+  // editor, so "delete this section" means the section the user pointed at.
+  const [selectedRange, setSelectedRange] = useState<EditTimeRange | null>(null);
+  const [exportPhase, setExportPhase] = useState<string | null>(null);
   const previewRef = useRef<EditPreviewHandle>(null);
   const autosave = useRef<ReturnType<typeof setTimeout> | null>(null);
   const source = project.assets.find((asset) => asset.role === 'SOURCE');
@@ -56,7 +95,12 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
     });
   }, []);
   const acceptServerProject = useCallback((next: EditProject) => {
-    savedElements.current = next.elements ?? []; setProject(next);
+    savedElements.current = next.elements ?? [];
+    // Any committed change can move the seconds a range referred to, so the
+    // selection is dropped rather than left pointing somewhere it no longer
+    // means. Re-dragging it is one gesture; acting on a stale one is a bad cut.
+    setSelectedRange(null);
+    setProject(next);
   }, [setProject]);
   const refreshHistory = useCallback(async () => setHistory(await getEditHistory(initialProject.id)),
     [initialProject.id]);
@@ -257,7 +301,7 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
     <header className='flex flex-wrap items-center justify-between gap-4'>
       <div><p className='text-xs font-semibold uppercase tracking-[.18em] text-violet-300'>EditMode</p><h1 className='mt-1 text-2xl font-bold tracking-tight'>{project.name}</h1></div>
       <div className='flex items-center gap-2'>
-        <span className='flex items-center gap-2 rounded-full border border-white/10 px-3 py-2 text-xs text-slate-400'>{busy ? <LoaderCircle size={14} className='animate-spin' /> : <Check size={14} className='text-emerald-300' />}{busy === 'saving' ? 'Saving…' : busy ? 'Working…' : `Saved · r${project.revision}`}</span>
+        <StatusBadge busy={busy} exportPhase={exportPhase} revision={project.revision} />
         <button disabled={!source || !!busy || !!source.analysis} onClick={() => void run('analyze', () => analyzeEditSource(project.id, project.revision))}
           className='flex items-center gap-2 rounded-xl bg-cyan-400 px-3 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40'><ScanSearch size={15} />Analyze source</button>
         <button disabled={!source || !!busy} onClick={() => void applyCommand({ action: 'add-text' })}
@@ -278,19 +322,20 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
         onCommitTransform={commitTransform} />
       <div className='grid content-start gap-5'><EditChatPanel projectId={project.id}
         revision={project.revision} hasSource={!!source} disabled={!!busy}
-        selectedElementId={selectedElementId} selectedTimeRange={null}
+        selectedElementId={selectedElementId} selectedTimeRange={selectedRange}
         playheadSec={currentPlayheadSec} onApplied={chatApplied} onError={setError} /><EditPresetPanel projectId={project.id}
         revision={project.revision} style={style} disabled={!!busy} hasSource={!!source}
         onApplied={presetApplied} onError={setError} /><EditExportPanel projectId={project.id}
         revision={project.revision} hasSource={!!source} disabled={!!busy}
-        onStatusChange={refreshProject} /><EditInspector project={project} source={source} selected={selected}
+        onStatusChange={refreshProject} onPhaseChange={setExportPhase} /><EditInspector project={project} source={source} selected={selected}
         onPreview={previewElement} onCommit={(command) => void applyCommand(command)} onDebounced={debouncedCommand}
         onDuplicate={() => selectedElementId && void applyCommand({ action: 'duplicate-element', elementId: selectedElementId })}
         onDelete={remove} /><EditHistoryPanel history={history} /></div>
     </div>
     <EditTimeline elements={project.elements ?? []} selectedElementId={selectedElementId}
       currentPlayheadSec={currentPlayheadSec} sourceDuration={source?.duration ?? 0} disabled={!!busy}
-      canUndo={availability.canUndo} canRedo={availability.canRedo} onSelect={setSelectedElementId}
+      canUndo={availability.canUndo} canRedo={availability.canRedo}
+      selectedRange={selectedRange} onSelectRange={setSelectedRange} onSelect={setSelectedElementId}
       onSeek={setCurrentPlayheadSec} onPreviewElements={(elements) => setProject((current) => ({ ...current, elements }))}
       onCommitTrim={commitTrim} onCommitTiming={commitTiming} onSplit={split} onDelete={remove} onMove={move}
       onUndo={() => void travelHistory('undo')} onRedo={() => void travelHistory('redo')} />

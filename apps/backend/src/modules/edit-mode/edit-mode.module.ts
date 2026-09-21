@@ -7,6 +7,7 @@ import { EditModeAnalysisService } from './edit-mode-analysis.service';
 import { EditModePresetService } from './edit-mode-preset.service';
 import { EditModeController } from './edit-mode.controller';
 import { EditModeService } from './edit-mode.service';
+import { EditModeRecoveryService } from './render/edit-mode-recovery.service';
 import { EditModeRenderService } from './render/edit-mode-render.service';
 import { EditChatService } from './chat/edit-chat.service';
 import { EditChatProposalStore } from './chat/edit-chat-proposal-store';
@@ -18,7 +19,7 @@ import { EditChatProposalStore } from './chat/edit-chat-proposal-store';
   imports: [StorageModule],
   controllers: [EditModeController],
   providers: [EditModeService, EditModeAnalysisService, EditModePresetService,
-    EditModeRenderService,
+    EditModeRenderService, EditModeRecoveryService,
     EditChatService, EditChatProposalStore,
     LlmProviderService, ProviderRegistry, LlmRouterService]
 })

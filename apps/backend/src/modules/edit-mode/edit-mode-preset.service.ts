@@ -60,18 +60,29 @@ export class EditModePresetService {
 
   /** PREVIEW: a structured proposal. Nothing is written. */
   async preview(id: string, input: { presetId?: unknown; revision?: unknown }) {
+    const started = Date.now();
     const { plan } = await this.buildPlan(id, input.presetId, input.revision);
+    // Counters only: which preset, how big the plan is, how long it took. The
+    // hook wording, the caption text and the transcript stay out of the log.
+    this.logger.log(JSON.stringify({ event: 'edit_mode_preset_preview', editProjectId: id,
+      presetId: plan.presetId, commandCount: plan.commands.length,
+      warningCount: plan.warnings?.length ?? 0, ms: Date.now() - started }));
     return { mode: 'PREVIEW' as const, ...plan };
   }
 
   /** APPLY: the validated plan is executed atomically by the canonical layer. */
   async apply(id: string, input: { presetId?: unknown; revision?: unknown }) {
+    const started = Date.now();
     const { plan, revision } = await this.buildPlan(id, input.presetId, input.revision);
     const presetRunId = randomUUID();
     const project = await this.editMode.applyPresetBundle(id, revision, {
       presetId: plan.presetId, presetRunId, summary: plan.summary, commands: plan.commands,
       plannedZoomMoments: plan.plannedZoomMoments
     });
+    this.logger.log(JSON.stringify({ event: 'edit_mode_preset_apply', editProjectId: id,
+      presetId: plan.presetId, presetRunId, commandCount: plan.commands.length,
+      warningCount: plan.warnings?.length ?? 0, revision: project.revision,
+      ms: Date.now() - started }));
     const { commands: _commands, ...proposal } = plan;
     return { mode: 'APPLY' as const, presetRunId, plan: proposal, project };
   }

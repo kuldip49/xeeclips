@@ -15,6 +15,8 @@
 
 import { Logger } from '@nestjs/common';
 import type { LlmRouterService } from '../../processing/llm-router.service';
+import { createPerformanceTelemetry,
+  performanceContext } from '../../processing/performance-telemetry';
 import type { ChatContext } from './edit-chat-context';
 import {
   CHAT_INTENT_SCHEMA, validateChatIntent, type ChatIntent
@@ -23,14 +25,52 @@ import {
 /** The role Phase 6 routes through. It already exists; nothing frozen changes. */
 export const CHAT_PLANNER_ROLE = 'editingPlan' as const;
 
+/**
+ * The AI mode an EditMode chat turn runs under.
+ *
+ * The router reads its mode from the per-request AsyncLocalStorage context the
+ * frozen video pipeline establishes for a processing job. EditMode is not a
+ * processing job and never runs inside that context, so before Phase 7 every
+ * chat turn saw the store's default - FALLBACK_ONLY - and no provider was ever
+ * reached, however the environment was configured. The Phase 7 soak is what
+ * surfaced that: 0% of turns reached a model with ONLINE fully configured.
+ *
+ * So EditMode declares its own mode, from its own setting, and runs the
+ * planning call inside its own context. This changes nothing about the frozen
+ * pipeline: a processing job still establishes its own context and is entirely
+ * unaffected by what EditMode does in its own.
+ *
+ * EDIT_MODE_CHAT_AI_MODE wins when set; otherwise the deployment's declared
+ * AI_PROCESSING_MODE is used. With neither set the behaviour is exactly as
+ * before - FALLBACK_ONLY, deterministic planning only.
+ */
+export const chatPlannerAiMode = () =>
+  (process.env.EDIT_MODE_CHAT_AI_MODE || process.env.AI_PROCESSING_MODE || '').trim() ||
+  'FALLBACK_ONLY';
+
 const SYSTEM_PROMPT = [
   'You convert one editing instruction into structured commands for a video editor.',
   '',
   'Rules you must follow exactly:',
   '- Only use the actions listed in the schema. Never invent an action.',
   '- Never output FFmpeg, shell commands, SQL, code, file paths or database ids.',
-  '- Address elements ONLY by the handles in the supplied context, or by target kinds',
-  '  SELECTED / LAST / ROLE / AT_TIME / REF. Never invent a UUID.',
+  '- EVERY command that is not an ADD_ command MUST carry a target. A command with a null',
+  '  target is rejected outright, so if you cannot name a target, ask for clarification.',
+  '- Choosing a target kind:',
+  '    ELEMENT  - use this for an existing element, with handle set to its handle from the',
+  '               context (for example {"kind":"ELEMENT","handle":"el3"}). This is the normal',
+  '               case and the one you should reach for first.',
+  '    AT_TIME  - the video segment covering a second, for SPLIT_ELEMENT and for deleting part',
+  '               of the video track: {"kind":"AT_TIME","atSec":12.5}.',
+  '    SELECTED - only what the user has selected right now.',
+  '    LAST     - only the element the previous turn changed.',
+  '    ROLE     - "the logo", "the music", when exactly one element plays that role.',
+  '    REF      - ONLY for something a COMMAND EARLIER IN THIS SAME PLAN created via its own',
+  '               "ref" field. A context handle like "el1" is NEVER a REF: use ELEMENT for it.',
+  '- To change project style, use a SETTINGS action and put the value in parameters, for',
+  '  example SET_ASPECT_RATIO with {"aspectRatio":"9:16"}. A SETTINGS command that sets no',
+  '  supported field is rejected.',
+  '- parameters carries every key; set the ones you mean and leave the rest null.',
   '- Address files ONLY by an assetHandle from the supplied asset list. If the file the user',
   '  named is not in that list, set needsClarification and say it is not uploaded.',
   '- Never invent a timestamp. Use only: the numbers the user stated, the playhead, the',
@@ -108,19 +148,30 @@ export async function planWithLlm(input: {
 }): Promise<{ intent: ChatIntent; provider: string; model: string } | null> {
   const { llm, logger, message, context } = input;
   if ((process.env.EDIT_MODE_CHAT_LLM_ENABLED ?? 'true').toLowerCase() === 'false') return null;
-  if (!llm.isAnyConfigured(CHAT_PLANNER_ROLE)) return null;
 
-  const result = await llm.generate<unknown>({
-    role: CHAT_PLANNER_ROLE,
-    request: {
-      schemaName: 'edit_mode_chat_plan',
-      schema: CHAT_INTENT_SCHEMA,
+  // One context for the whole turn, so the configuration check and the call it
+  // guards agree about which mode they are in.
+  const telemetry = createPerformanceTelemetry(chatPlannerAiMode());
+  const result = await performanceContext.run(telemetry, async () => {
+    if (!llm.isAnyConfigured(CHAT_PLANNER_ROLE)) return null;
+    return llm.generate<unknown>({
       role: CHAT_PLANNER_ROLE,
-      systemPrompt: SYSTEM_PROMPT,
-      userPrompt: userPrompt(message, context),
-      options: { temperature: 0.1, maxOutputTokens: 1600 }
-    }
+      request: {
+        schemaName: 'edit_mode_chat_plan',
+        schema: CHAT_INTENT_SCHEMA,
+        role: CHAT_PLANNER_ROLE,
+        systemPrompt: SYSTEM_PROMPT,
+        userPrompt: userPrompt(message, context),
+        // A strict response repeats every parameter key on every command, so
+        // one multi-command plan is far larger than the schema suggests. The
+        // Phase 7 soak hit truncation - which arrives as "not valid JSON" - at
+        // the Phase 6 budget of 1600.
+        options: { temperature: 0.1,
+          maxOutputTokens: Number(process.env.EDIT_MODE_CHAT_MAX_OUTPUT_TOKENS) || 4000 }
+      }
+    });
   });
+  if (!result) return null;
   // Malformed output throws out of validateChatIntent and is handled by the
   // caller, which falls back rather than mutating anything.
   const intent = validateChatIntent(result.data);

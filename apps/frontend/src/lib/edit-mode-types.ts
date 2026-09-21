@@ -192,7 +192,9 @@ export type EditExportPhase = 'PREPARING' | 'RENDERING' | 'QA' | 'UPLOADING' | '
   | 'FAILED';
 export type EditExportErrorCode = 'SOURCE_MISSING' | 'ASSET_MISSING' | 'INVALID_TIMELINE'
   | 'UNSUPPORTED_MEDIA' | 'RENDER_FAILED' | 'QA_FAILED' | 'UPLOAD_FAILED' | 'STALE_EXPORT'
-  | 'EXPORT_ALREADY_RUNNING';
+  | 'EXPORT_ALREADY_RUNNING'
+  /** The backend restarted mid-render; startup recovery settled this export. */
+  | 'INTERRUPTED';
 export type QaResult = 'PASS' | 'DEGRADED_ACCEPTABLE' | 'REPAIR_REQUIRED' | 'REJECT';
 
 export type EditExportProgress = {
@@ -206,6 +208,8 @@ export type EditExportProgress = {
   assetId: string | null;
   errorCode: EditExportErrorCode | null;
   message: string | null;
+  /** Present only when startup recovery, not the render itself, ended this. */
+  recoveredAt?: string;
 };
 
 /** What one finished render recorded about itself. */
@@ -291,7 +295,12 @@ export type ChatProposal = {
   grounding: ChatGrounding[];
   planner: 'LLM' | 'DETERMINISTIC';
   expiresAt: number;
+  /** Set when the turn asks to travel history rather than to edit. */
+  historyAction?: 'UNDO' | 'REDO';
 };
+
+/** A range dragged on the timeline ruler, in timeline seconds. */
+export type EditTimeRange = { startSec: number; endSec: number };
 
 export type ChatPlanResult = { proposal: ChatProposal; messages: ChatMessage[] };
 

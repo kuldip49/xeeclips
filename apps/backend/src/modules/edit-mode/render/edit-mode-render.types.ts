@@ -15,7 +15,10 @@ import type { EditAspectRatio, EditPresetId, GradingPolicy, ReframePolicy,
 /** Typed failure codes surfaced to the UI. */
 export const EDIT_EXPORT_ERROR_CODES = ['SOURCE_MISSING', 'ASSET_MISSING', 'INVALID_TIMELINE',
   'UNSUPPORTED_MEDIA', 'RENDER_FAILED', 'QA_FAILED', 'UPLOAD_FAILED', 'STALE_EXPORT',
-  'EXPORT_ALREADY_RUNNING'] as const;
+  'EXPORT_ALREADY_RUNNING',
+  // Phase 7: the backend process died while this export was running, and
+  // startup recovery settled it rather than leaving the project EXPORTING.
+  'INTERRUPTED'] as const;
 export type EditExportErrorCode = typeof EDIT_EXPORT_ERROR_CODES[number];
 
 /** Coarse progress, persisted so a reloaded workspace can resume watching. */
@@ -35,6 +38,8 @@ export type EditExportProgress = {
   assetId: string | null;
   errorCode: EditExportErrorCode | null;
   message: string | null;
+  /** Set only by startup recovery, so the UI can say why this export ended. */
+  recoveredAt?: string;
 };
 
 export type RenderCanvas = {

@@ -1,17 +1,24 @@
 'use client';
 
 import { useRef } from 'react';
-import { ChevronLeft, ChevronRight, Redo2, Scissors, Trash2, Undo2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Redo2, Scissors, Trash2, Undo2, X } from 'lucide-react';
 import { MIN_VIDEO_DURATION_SEC, normalizeVideoTrack, timelineDuration, videoTrack } from '@/lib/edit-mode-timeline';
-import type { EditElement } from '@/lib/edit-mode-types';
+import type { EditElement, EditTimeRange } from '@/lib/edit-mode-types';
 
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, '0')}`;
+const stamp = (seconds: number) => `${seconds.toFixed(1)}s`;
+/** Pointer travel below this is a click (seek), not a drag (range select). */
+const DRAG_THRESHOLD_PX = 4;
+/** Shorter than this is treated as a mis-drag and clears the selection. */
+const MIN_RANGE_SEC = 0.2;
 
 export function EditTimeline({ elements, selectedElementId, currentPlayheadSec, sourceDuration,
-  disabled, canUndo, canRedo, onSelect, onSeek, onPreviewElements, onCommitTrim, onSplit,
-  onCommitTiming, onDelete, onMove, onUndo, onRedo }: {
+  disabled, canUndo, canRedo, selectedRange, onSelectRange, onSelect, onSeek, onPreviewElements,
+  onCommitTrim, onSplit, onCommitTiming, onDelete, onMove, onUndo, onRedo }: {
   elements: EditElement[]; selectedElementId: string | null; currentPlayheadSec: number;
   sourceDuration: number; disabled: boolean; canUndo: boolean; canRedo: boolean;
+  selectedRange: EditTimeRange | null;
+  onSelectRange: (range: EditTimeRange | null) => void;
   onSelect: (id: string) => void; onSeek: (seconds: number) => void;
   onPreviewElements: (elements: EditElement[]) => void;
   onCommitTrim: (element: EditElement, before: EditElement[]) => void;
@@ -24,9 +31,46 @@ export function EditTimeline({ elements, selectedElementId, currentPlayheadSec, 
   const videos = videoTrack(elements);
   const selectedIndex = videos.findIndex((element) => element.id === selectedElementId);
   const selected = elements.find((element) => element.id === selectedElementId);
-  const seekFromPointer = (clientX: number) => {
+  const secondsAt = (clientX: number) => {
     const bounds = trackRef.current?.getBoundingClientRect();
-    if (bounds) onSeek(Math.max(0, Math.min(duration, (clientX - bounds.left) / bounds.width * duration)));
+    if (!bounds) return null;
+    return Math.max(0, Math.min(duration, (clientX - bounds.left) / bounds.width * duration));
+  };
+  const seekFromPointer = (clientX: number) => {
+    const at = secondsAt(clientX);
+    if (at != null) onSeek(at);
+  };
+
+  /**
+   * Click to seek, drag to select a range.
+   *
+   * The two gestures start identically, so which one this is stays undecided
+   * until the pointer has actually travelled: under the threshold it is a plain
+   * seek (and clears any range), over it the range takes over. Element bodies
+   * and their trim handles stop propagation before this ever runs, so dragging
+   * a clip or a trim edge can never turn into a range selection by accident.
+   */
+  const beginRange = (event: React.PointerEvent) => {
+    const anchor = secondsAt(event.clientX);
+    if (anchor == null) return;
+    seekFromPointer(event.clientX);
+    const startX = event.clientX;
+    let dragging = false;
+    const move = (pointer: PointerEvent) => {
+      if (!dragging && Math.abs(pointer.clientX - startX) < DRAG_THRESHOLD_PX) return;
+      dragging = true;
+      const at = secondsAt(pointer.clientX);
+      if (at == null) return;
+      onSelectRange({ startSec: Math.min(anchor, at), endSec: Math.max(anchor, at) });
+    };
+    const up = (pointer: PointerEvent) => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      const at = secondsAt(pointer.clientX) ?? anchor;
+      if (!dragging || Math.abs(at - anchor) < MIN_RANGE_SEC) onSelectRange(null);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up, { once: true });
   };
   const beginTrim = (event: React.PointerEvent, element: EditElement, edge: 'left' | 'right') => {
     event.preventDefault(); event.stopPropagation();
@@ -79,7 +123,7 @@ export function EditTimeline({ elements, selectedElementId, currentPlayheadSec, 
   ];
   return <section className='rounded-2xl border border-white/10 bg-[#0d111c] p-4'>
     <div className='flex flex-wrap items-center justify-between gap-3'>
-      <div><h2 className='text-sm font-semibold'>Timeline</h2><p className='mt-1 text-[11px] text-slate-500'>Drag segment edges to trim. Click the ruler to seek.</p></div>
+      <div><h2 className='text-sm font-semibold'>Timeline</h2><p className='mt-1 text-[11px] text-slate-500'>Drag segment edges to trim. Click the ruler to seek, drag it to select a range.</p></div>
       <div className='flex items-center gap-1'>
         <button aria-label='Undo' title='Undo (Ctrl+Z)' disabled={disabled || !canUndo} onClick={onUndo} className='rounded-lg p-2 text-slate-300 hover:bg-white/10 disabled:opacity-30'><Undo2 size={15} /></button>
         <button aria-label='Redo' title='Redo (Ctrl+Shift+Z)' disabled={disabled || !canRedo} onClick={onRedo} className='rounded-lg p-2 text-slate-300 hover:bg-white/10 disabled:opacity-30'><Redo2 size={15} /></button>
@@ -91,8 +135,20 @@ export function EditTimeline({ elements, selectedElementId, currentPlayheadSec, 
         <span className='ml-2 text-xs tabular-nums text-slate-500'>{clock(duration)}</span>
       </div>
     </div>
+    {selectedRange && <div className='mt-3 flex flex-wrap items-center gap-2 rounded-lg border border-amber-300/25 bg-amber-300/5 px-3 py-1.5 text-[11px] text-amber-200'>
+      <span className='font-semibold uppercase tracking-[.12em]'>Range</span>
+      <span className='tabular-nums'>{stamp(selectedRange.startSec)} – {stamp(selectedRange.endSec)}</span>
+      <span className='text-amber-200/60'>({stamp(selectedRange.endSec - selectedRange.startSec)})</span>
+      <span className='text-amber-200/60'>· the AI editor acts on this range</span>
+      <button type='button' onClick={() => onSelectRange(null)} aria-label='Clear the selected range'
+        className='ml-auto flex items-center gap-1 rounded-md border border-amber-300/25 px-2 py-0.5 font-medium hover:bg-amber-300/10'>
+        <X size={11} />Clear</button>
+    </div>}
     <div ref={trackRef} className='relative mt-4 overflow-hidden rounded-xl border border-white/[.08] bg-[#080b13] px-3 py-2'
-      onPointerDown={(event) => seekFromPointer(event.clientX)}>
+      onPointerDown={beginRange}>
+      {selectedRange && <div aria-hidden className='pointer-events-none absolute bottom-0 top-0 border-x border-amber-300/70 bg-amber-300/10'
+        style={{ left: `${Math.min(100, selectedRange.startSec / duration * 100)}%`,
+          width: `${Math.max(0.4, (selectedRange.endSec - selectedRange.startSec) / duration * 100)}%` }} />}
       {tracks.map((track) => <div key={track.label} className='relative h-14 border-b border-white/[.04] last:border-0'>
         <div className='pt-1 text-[9px] uppercase tracking-wider text-slate-600'>{track.label}</div>
         <div className='absolute inset-x-0 bottom-1 h-8'>{track.items.map((element) => <button key={element.id} title={`${element.type} · ${clock(element.duration)}`}

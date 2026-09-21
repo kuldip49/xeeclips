@@ -95,42 +95,66 @@ export class EditChatService {
     const proposalId = randomUUID();
     const userMessage = this.message('USER', message);
 
-    if (intent.needsClarification || !intent.commands.length) {
-      const assistant = this.message('ASSISTANT', intent.clarificationQuestion ||
-        intent.summary || 'I need a bit more detail before I can change anything.',
-      { proposalId, state: 'NEEDS_CLARIFICATION' });
+    // History travel: "undo that" is the Undo button reached by typing. The
+    // proposal carries no commands at all; Apply calls the existing history
+    // path. If there is nothing to undo, the turn becomes a question rather
+    // than a proposal that would fail later.
+    if (intent.historyAction) {
+      const availability = await this.editMode.historyAvailability(id);
+      const direction = intent.historyAction;
+      const possible = direction === 'UNDO' ? availability.canUndo : availability.canRedo;
+      const targetAction = direction === 'UNDO' ? availability.undoAction
+        : availability.redoAction;
+      if (!possible) {
+        this.telemetry('edit_mode_chat_clarification', { editProjectId: id, planner,
+          reason: `NOTHING_TO_${direction}` });
+        return this.clarificationTurn({ id, thread, userMessage, proposalId, context, planner,
+          baseRevision: project.revision, message, summary: intent.summary,
+          grounding: intent.grounding, warnings: intent.warnings,
+          question: direction === 'UNDO'
+            ? 'There is nothing to undo yet - this is the project as it was first saved.'
+            : 'There is nothing to redo. Undo something first, then ask me to redo it.' });
+      }
+      const line = `${direction === 'UNDO' ? 'Undo' : 'Redo'} ${
+        describeHistoryAction(targetAction)}`;
+      const stored = await this.proposals.save({
+        proposalId, editProjectId: id, baseRevision: project.revision, state: 'READY',
+        userMessage: message, summary: `${line}?`, plannedChanges: [line],
+        warnings: intent.warnings, needsClarification: false, clarificationQuestion: '',
+        affectedElements: [], plannedDurationSec: context.project.timelineDurationSec,
+        grounding: intent.grounding, commands: [], resolvedTargets: {}, planner,
+        historyAction: direction
+      });
+      const assistant = this.message('ASSISTANT', stored.summary,
+        { proposalId, state: 'READY', plannedChanges: [line] });
       const next = this.appendMessages(thread, [userMessage, assistant]);
       await this.persistThread(id, next);
-      const stored = this.proposals.save({
-        proposalId, editProjectId: id, baseRevision: project.revision,
-        state: 'NEEDS_CLARIFICATION', userMessage: message, summary: intent.summary,
-        plannedChanges: [], warnings: intent.warnings, needsClarification: true,
-        clarificationQuestion: assistant.text, affectedElements: [],
-        plannedDurationSec: context.project.timelineDurationSec,
-        grounding: intent.grounding, commands: [], resolvedTargets: {}, planner
-      });
+      this.telemetry('edit_mode_chat_planned', { editProjectId: id, planner,
+        kind: 'HISTORY', historyAction: direction, commandCount: 0 });
       return { proposal: proposalView(stored), messages: next.messages };
+    }
+
+    if (intent.needsClarification || !intent.commands.length) {
+      this.telemetry('edit_mode_chat_clarification', { editProjectId: id, planner,
+        reason: intent.intent });
+      return this.clarificationTurn({ id, thread, userMessage, proposalId, context, planner,
+        baseRevision: project.revision, message, summary: intent.summary,
+        grounding: intent.grounding, warnings: intent.warnings,
+        question: intent.clarificationQuestion || intent.summary ||
+          'I need a bit more detail before I can change anything.' });
     }
 
     const resolution = resolveChatPlan(intent.commands, intent.grounding, context);
     if (!resolution.ok) {
-      const assistant = this.message('ASSISTANT', resolution.question,
-        { proposalId, state: 'NEEDS_CLARIFICATION' });
-      const next = this.appendMessages(thread, [userMessage, assistant]);
-      await this.persistThread(id, next);
-      const stored = this.proposals.save({
-        proposalId, editProjectId: id, baseRevision: project.revision,
-        state: 'NEEDS_CLARIFICATION', userMessage: message, summary: intent.summary,
-        plannedChanges: [], warnings: [...intent.warnings, ...resolution.warnings],
-        needsClarification: true, clarificationQuestion: resolution.question,
-        affectedElements: [], plannedDurationSec: context.project.timelineDurationSec,
-        grounding: intent.grounding, commands: [],
-        resolvedTargets: {}, planner
-      });
-      return { proposal: proposalView(stored), messages: next.messages };
+      this.telemetry('edit_mode_chat_clarification', { editProjectId: id, planner,
+        reason: 'UNRESOLVED_TARGET' });
+      return this.clarificationTurn({ id, thread, userMessage, proposalId, context, planner,
+        baseRevision: project.revision, message, summary: intent.summary,
+        grounding: intent.grounding, warnings: [...intent.warnings, ...resolution.warnings],
+        question: resolution.question });
     }
 
-    const stored = this.proposals.save({
+    const stored = await this.proposals.save({
       proposalId, editProjectId: id, baseRevision: project.revision, state: 'READY',
       userMessage: message, summary: intent.summary || 'Apply these changes?',
       plannedChanges: resolution.plannedChanges,
@@ -147,6 +171,13 @@ export class EditChatService {
       { proposalId, state: 'READY', plannedChanges: resolution.plannedChanges });
     const next = this.appendMessages(thread, [userMessage, assistant]);
     await this.persistThread(id, next);
+    this.telemetry('edit_mode_chat_planned', { editProjectId: id, planner, kind: 'EDIT',
+      commandCount: resolution.commands.length,
+      destructive: resolution.commands.some((command) => command.kind === 'ELEMENT' &&
+        ['TRIM_ELEMENT', 'DELETE_ELEMENT', 'SPLIT_ELEMENT', 'REMOVE_ELEMENT']
+          .includes(command.action)),
+      segmentsTouched: resolution.affectedElements.length,
+      durable: this.proposals.durable });
     return { proposal: proposalView(stored), messages: next.messages };
   }
 
@@ -159,12 +190,12 @@ export class EditChatService {
    */
   async apply(id: string, input: { proposalId?: unknown; revision?: unknown }) {
     const proposalId = typeof input.proposalId === 'string' ? input.proposalId : '';
-    const proposal = proposalId ? this.proposals.get(proposalId, id) : null;
+    const proposal = proposalId ? await this.proposals.get(proposalId, id) : null;
     if (!proposal) throw new BadRequestException({ code: 'PROPOSAL_NOT_FOUND',
       message: 'That proposal has expired. Ask me again and I will re-plan it.' });
     if (proposal.state === 'APPLIED') throw new BadRequestException({ code: 'ALREADY_APPLIED',
       message: 'That proposal has already been applied' });
-    if (proposal.needsClarification || !proposal.commands.length) {
+    if (proposal.needsClarification || (!proposal.commands.length && !proposal.historyAction)) {
       throw new BadRequestException({ code: 'NOTHING_TO_APPLY',
         message: 'That turn asked a question rather than proposing a change' });
     }
@@ -173,11 +204,18 @@ export class EditChatService {
       include: { elements: { select: { id: true, type: true, track: true, duration: true } } } });
     if (!project) throw new NotFoundException('EditProject not found');
 
+    // History travel is applied through the existing undo/redo path. It is not
+    // rebased against a revision: "undo that" always means the step that is on
+    // top of the stack now, which is exactly what the Undo button would do.
+    if (proposal.historyAction) return this.applyHistoryTravel(id, proposal);
+
     // Revision conflict: re-check rather than blindly applying.
     if (project.revision !== proposal.baseRevision) {
       const rebase = this.canRebase(proposal, project.elements);
       if (!rebase.ok) {
-        this.proposals.update(proposalId, { state: 'STALE' });
+        await this.proposals.update(proposalId, id, { state: 'STALE' });
+        this.telemetry('edit_mode_chat_stale_proposal', { editProjectId: id, proposalId,
+          plannedAtRevision: proposal.baseRevision, currentRevision: project.revision });
         const thread = readChatThread(await this.settings(id));
         const next = this.appendMessages(thread, [this.message('SYSTEM_STATUS',
           `${rebase.reason} Ask me again and I will re-plan against the current timeline.`,
@@ -186,9 +224,14 @@ export class EditChatService {
         throw new BadRequestException({ code: 'STALE_PROPOSAL', message: rebase.reason,
           currentRevision: project.revision });
       }
+      // The plan was built against an older revision but nothing it depends on
+      // moved, so it is applied as planned. Counted, because a rising rate here
+      // is what a too-permissive rebase rule would look like.
+      this.telemetry('edit_mode_chat_safe_rebase', { editProjectId: id, proposalId,
+        plannedAtRevision: proposal.baseRevision, currentRevision: project.revision });
     }
 
-    this.proposals.update(proposalId, { state: 'APPLYING' });
+    await this.proposals.update(proposalId, id, { state: 'APPLYING' });
     const thread = readChatThread(await this.settings(id));
     let result: Awaited<ReturnType<EditModeService['applyAssistantBundle']>>;
     try {
@@ -202,7 +245,7 @@ export class EditChatService {
         }))
       });
     } catch (error) {
-      this.proposals.update(proposalId, { state: 'FAILED' });
+      await this.proposals.update(proposalId, id, { state: 'FAILED' });
       const message = error instanceof Error ? error.message : 'The edit could not be applied';
       const failed = this.appendMessages(readChatThread(await this.settings(id)),
         [this.message('SYSTEM_STATUS', `That edit was not applied: ${message}`,
@@ -219,11 +262,10 @@ export class EditChatService {
       lastAppliedAtRevision: result.project.revision });
     await this.editMode.saveChatThread(id, this.threadJson(withTargets));
 
-    this.proposals.update(proposalId, { state: 'APPLIED' });
-    this.proposals.remove(proposalId);
-    this.logger.log(JSON.stringify({ event: 'edit_mode_chat_applied', editProjectId: id,
-      proposalId, planner: proposal.planner, commandCount: proposal.commands.length,
-      revision: result.project.revision }));
+    await this.proposals.remove(proposalId, id);
+    this.telemetry('edit_mode_chat_applied', { editProjectId: id, proposalId,
+      planner: proposal.planner, commandCount: proposal.commands.length,
+      affected: result.affectedElementIds.length, revision: result.project.revision });
     return {
       proposal: proposalView({ ...proposal, state: 'APPLIED' }),
       project: { ...result.project, settings: { ...(result.project.settings as object),
@@ -236,8 +278,8 @@ export class EditChatService {
   /** CANCEL: drops a pending proposal. Nothing about the project changes. */
   async cancel(id: string, input: { proposalId?: unknown }) {
     const proposalId = typeof input.proposalId === 'string' ? input.proposalId : '';
-    const proposal = proposalId ? this.proposals.get(proposalId, id) : null;
-    if (proposal) this.proposals.remove(proposalId);
+    const proposal = proposalId ? await this.proposals.get(proposalId, id) : null;
+    if (proposal) await this.proposals.remove(proposalId, id);
     const thread = readChatThread(await this.settings(id));
     const next = this.appendMessages(thread, [this.message('SYSTEM_STATUS',
       'Cancelled - nothing was changed.', { proposalId, state: 'CANCELLED' })]);
@@ -246,6 +288,97 @@ export class EditChatService {
   }
 
   // --- internals ------------------------------------------------------------
+
+  /**
+   * A turn that ends in a question rather than a proposal.
+   *
+   * A clarification is still recorded as a proposal - state
+   * NEEDS_CLARIFICATION, no commands - so the panel has something stable to
+   * show, and so an Apply against it is refused by id rather than by guesswork.
+   */
+  private async clarificationTurn(input: {
+    id: string; thread: ChatThread; userMessage: ChatMessage; proposalId: string;
+    context: ChatContext; planner: ChatProposal['planner']; baseRevision: number;
+    message: string; summary: string; grounding: ChatProposal['grounding'];
+    warnings: string[]; question: string;
+  }) {
+    const assistant = this.message('ASSISTANT', input.question,
+      { proposalId: input.proposalId, state: 'NEEDS_CLARIFICATION' });
+    const next = this.appendMessages(input.thread, [input.userMessage, assistant]);
+    await this.persistThread(input.id, next);
+    const stored = await this.proposals.save({
+      proposalId: input.proposalId, editProjectId: input.id, baseRevision: input.baseRevision,
+      state: 'NEEDS_CLARIFICATION', userMessage: input.message, summary: input.summary,
+      plannedChanges: [], warnings: input.warnings, needsClarification: true,
+      clarificationQuestion: assistant.text, affectedElements: [],
+      plannedDurationSec: input.context.project.timelineDurationSec,
+      grounding: input.grounding, commands: [], resolvedTargets: {}, planner: input.planner
+    });
+    return { proposal: proposalView(stored), messages: next.messages };
+  }
+
+  /**
+   * Applies "undo that" / "redo that" through the existing history path.
+   *
+   * No inverse command is built and no bundle is executed: this calls the very
+   * method the Undo button calls, so a chat undo and a button undo produce the
+   * same EditHistory row and leave the project in the same state. If the step
+   * moved between plan and apply, the canonical layer's own NOTHING_TO_UNDO is
+   * surfaced as a chat message rather than as a raw error.
+   */
+  private async applyHistoryTravel(id: string, proposal: ChatProposal) {
+    const direction = proposal.historyAction === 'REDO' ? 'REDO' : 'UNDO';
+    const current = await this.prisma.editProject.findUnique({ where: { id },
+      select: { revision: true } });
+    if (!current) throw new NotFoundException('EditProject not found');
+    let project: Awaited<ReturnType<EditModeService['undo']>>;
+    try {
+      project = direction === 'UNDO' ? await this.editMode.undo(id, current.revision)
+        : await this.editMode.redo(id, current.revision);
+    } catch (error) {
+      await this.proposals.update(proposal.proposalId, id, { state: 'FAILED' });
+      const reason = error instanceof Error ? error.message
+        : `That ${direction.toLowerCase()} could not be applied`;
+      const failed = this.appendMessages(readChatThread(await this.settings(id)),
+        [this.message('SYSTEM_STATUS', `That ${direction.toLowerCase()} did not happen: ${reason}`,
+          { proposalId: proposal.proposalId, state: 'FAILED' })]);
+      await this.persistThread(id, failed);
+      throw error;
+    }
+    const thread = readChatThread(project.settings);
+    const next = boundChatThread({ ...this.appendMessages(thread,
+      [this.message('SYSTEM_STATUS', proposal.plannedChanges[0] ?? `${direction} applied.`,
+        { proposalId: proposal.proposalId, state: 'APPLIED' })]),
+    // The reference point for the next follow-up is no longer valid: the
+    // elements the previous turn touched may have just been restored or
+    // removed, so a bare "make it smaller" must ask rather than guess.
+    lastAffectedElementIds: [], lastAppliedSummary: proposal.summary,
+    lastAppliedAtRevision: project.revision });
+    await this.editMode.saveChatThread(id, this.threadJson(next));
+    await this.proposals.remove(proposal.proposalId, id);
+    this.telemetry('edit_mode_chat_applied', { editProjectId: id,
+      proposalId: proposal.proposalId, planner: proposal.planner, kind: 'HISTORY',
+      historyAction: direction, revision: project.revision });
+    return {
+      proposal: proposalView({ ...proposal, state: 'APPLIED' as const }),
+      project: { ...project, settings: { ...(project.settings as object),
+        chat: this.threadJson(next) } },
+      affectedElementIds: [] as string[],
+      messages: next.messages
+    };
+  }
+
+  /**
+   * One structured counter line per notable chat event.
+   *
+   * Deliberately free of content: ids, counts and category names only. The
+   * user's instruction, the proposal's sentences and anything drawn from the
+   * transcript stay out of the log, so enabling this telemetry never turns
+   * application logs into a copy of someone's private video.
+   */
+  private telemetry(event: string, fields: Record<string, unknown>) {
+    this.logger.log(JSON.stringify({ event, ...fields }));
+  }
 
   /** Loads the project and builds the bounded context for one turn. */
   private async loadContext(id: string, message: string, input: {
@@ -372,6 +505,21 @@ export class EditChatService {
     await this.editMode.saveChatThread(id, this.threadJson(thread));
   }
 }
+
+/** The plain-language name of the step undo/redo would travel to. */
+const HISTORY_ACTION_LABELS: Record<string, string> = {
+  APPLY_PRESET: 'the preset you applied',
+  APPLY_ASSISTANT_EDIT: 'the last edit I made',
+  TRIM_ELEMENT: 'the trim', SPLIT_ELEMENT: 'the split',
+  DELETE_ELEMENT: 'the segment removal', MOVE_ELEMENT: 'the reorder',
+  ADD_TEXT: 'the text you added', ADD_IMAGE: 'the image you added',
+  ADD_LOGO: 'the logo you added', ADD_AUDIO: 'the audio you added',
+  REMOVE_ELEMENT: 'the removal', UPDATE_TEXT: 'the text change',
+  SET_AUDIO_VOLUME: 'the volume change', SET_AUDIO_MUTED: 'the mute change'
+};
+
+const describeHistoryAction = (action: string | null) =>
+  (action && HISTORY_ACTION_LABELS[action]) || 'the last change';
 
 /** A resolved chat command, in the shape the canonical bundle executor takes. */
 const toBundleCommand = (command: ResolvedChatCommand): AssistantBundleCommand =>

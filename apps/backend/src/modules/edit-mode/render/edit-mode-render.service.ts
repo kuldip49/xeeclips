@@ -163,17 +163,37 @@ export class EditModeRenderService {
     try {
       const result = await this.render(id, progress, directory);
       await this.update(id, progress, { phase: 'COMPLETED', assetId: result.assetId });
+      const wallMs = Date.now() - started;
       this.logger.log(`EditMode export ${progress.exportId} completed in ` +
-        `${Date.now() - started}ms (${result.qa.result}${result.stale ? ', stale' : ''})`);
+        `${wallMs}ms (${result.qa.result}${result.stale ? ', stale' : ''})`);
+      // Structured counters for Phase 7: durations, the render factor and the
+      // QA outcome. Counts and category names only - no timeline content, no
+      // transcript text, no user wording.
+      this.logger.log(JSON.stringify({ event: 'edit_mode_export_completed',
+        editProjectId: id, exportId: progress.exportId,
+        wallMs, renderMs: result.renderMs,
+        outputDurationSec: result.qa.measured.durationSec,
+        renderFactor: (result.qa.measured.durationSec ?? 0) > 0
+          ? Number((result.renderMs / 1000 / result.qa.measured.durationSec!).toFixed(3)) : null,
+        attempts: result.attempts, rerenders: Math.max(0, result.attempts - 1),
+        qaResult: result.qa.result, stale: result.stale,
+        aspectRatio: result.qa.measured.width && result.qa.measured.height
+          ? `${result.qa.measured.width}x${result.qa.measured.height}` : null }));
       return result;
     } catch (error) {
       const code: EditExportErrorCode = error instanceof EditExportError ? error.code
         : 'RENDER_FAILED';
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(`EditMode export ${progress.exportId} failed (${code}): ${message}`);
+      this.logger.log(JSON.stringify({ event: 'edit_mode_export_failed', editProjectId: id,
+        exportId: progress.exportId, failureCategory: code,
+        wallMs: Date.now() - started, attempt: progress.attempt }));
       await this.update(id, progress, { phase: 'FAILED', errorCode: code, message }, 'FAILED');
       return null;
     } finally {
+      // The job directory is unique per export (mkdtemp) and is removed on
+      // success and on every failure path alike, so a crashed render leaves no
+      // multi-gigabyte intermediate behind for the next one to trip over.
       await rm(directory, { recursive: true, force: true }).catch(() => undefined);
     }
   }
@@ -363,13 +383,25 @@ export class EditModeRenderService {
 
     // The export records its own provenance. It creates no history revision:
     // rendering is not an edit, so undo/redo is untouched by it.
-    const asset = await this.prisma.editAsset.create({ data: {
-      id: assetId, editProjectId: id, role: 'EXPORT',
-      originalName: `${plan.presetId.toLowerCase()}-r${progress.sourceRevision}.mp4`,
-      bucket: stored.bucket, objectKey: stored.objectKey, mimeType: 'video/mp4',
-      sizeBytes: BigInt(size), duration: qa.measured.durationSec,
-      width: qa.measured.width, height: qa.measured.height, fps: plan.canvas.fps,
-      metadata: metadata as unknown as Prisma.InputJsonValue } });
+    //
+    // If the row cannot be written the object is removed again, so a failure
+    // here leaves neither a dangling MinIO object nor a half-recorded export.
+    // The project is then simply an export short, which a retry fixes.
+    let asset: Awaited<ReturnType<typeof this.prisma.editAsset.create>>;
+    try {
+      asset = await this.prisma.editAsset.create({ data: {
+        id: assetId, editProjectId: id, role: 'EXPORT',
+        originalName: `${plan.presetId.toLowerCase()}-r${progress.sourceRevision}.mp4`,
+        bucket: stored.bucket, objectKey: stored.objectKey, mimeType: 'video/mp4',
+        sizeBytes: BigInt(size), duration: qa.measured.durationSec,
+        width: qa.measured.width, height: qa.measured.height, fps: plan.canvas.fps,
+        metadata: metadata as unknown as Prisma.InputJsonValue } });
+    } catch (error) {
+      await this.storage.removeObject(stored.bucket, stored.objectKey).catch(() => undefined);
+      throw new EditExportError('UPLOAD_FAILED',
+        `The finished export could not be recorded: ${
+          error instanceof Error ? error.message : String(error)}`);
+    }
     await this.prisma.editProject.update({ where: { id },
       // A stale export is retained but is not declared the project's result.
       data: { status: stale ? 'READY' : 'COMPLETED' } });

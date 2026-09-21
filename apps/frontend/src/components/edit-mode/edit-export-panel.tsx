@@ -22,12 +22,15 @@ const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${
  * Exports accumulate rather than replace, so the list is versioned newest
  * first and each entry says whether it still matches the current timeline.
  */
-export function EditExportPanel({ projectId, revision, hasSource, disabled, onStatusChange }: {
+export function EditExportPanel({ projectId, revision, hasSource, disabled, onStatusChange,
+  onPhaseChange }: {
   projectId: string;
   revision: number;
   hasSource: boolean;
   disabled: boolean;
   onStatusChange?: () => void;
+  /** Lifts the current phase so the workspace can show one coherent status. */
+  onPhaseChange?: (phase: string | null) => void;
 }) {
   const [exports, setExports] = useState<EditExport[]>([]);
   const [progress, setProgress] = useState<EditExportProgress | null>(null);
@@ -49,6 +52,7 @@ export function EditExportPanel({ projectId, revision, hasSource, disabled, onSt
   }, [projectId]);
 
   const running = progress != null && progress.phase !== 'COMPLETED' && progress.phase !== 'FAILED';
+  useEffect(() => { onPhaseChange?.(progress?.phase ?? null); }, [progress?.phase, onPhaseChange]);
   useEffect(() => {
     if (!running) return undefined;
     const timer = setInterval(() => {
@@ -62,7 +66,15 @@ export function EditExportPanel({ projectId, revision, hasSource, disabled, onSt
   useEffect(() => {
     if (!progress || running || finished.current === progress.exportId) return;
     finished.current = progress.exportId;
-    if (progress.phase === 'FAILED') setError(progress.message ?? 'The export failed.');
+    if (progress.phase === 'FAILED') {
+      // A render that failed and a render the backend restart interrupted read
+      // very differently to a user, so they are worded differently. Both end in
+      // the same place: press Export again, nothing in the timeline was lost.
+      setError(progress.errorCode === 'INTERRUPTED'
+        ? progress.message ?? 'The backend restarted while this export was running, so it did ' +
+          'not finish. Your timeline is unchanged - press Export again.'
+        : progress.message ?? 'The export failed.');
+    }
     void refresh();
     onStatusChange?.();
   }, [progress, running, refresh, onStatusChange]);
@@ -105,8 +117,16 @@ export function EditExportPanel({ projectId, revision, hasSource, disabled, onSt
       </p>
     </div>}
 
-    {error && <p role='alert' className='mt-3 flex gap-2 rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-[11px] text-red-200'>
-      <AlertTriangle size={13} className='mt-px shrink-0' />{error}</p>}
+    {error && <div role='alert' className='mt-3 grid gap-2 rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-[11px] text-red-200'>
+      <p className='flex gap-2'><AlertTriangle size={13} className='mt-px shrink-0' />{error}</p>
+      {!running && hasSource && <button type='button' disabled={disabled || starting}
+        onClick={() => void start()}
+        className='justify-self-start rounded-md border border-red-300/30 px-2 py-1 font-semibold text-red-100 disabled:opacity-40'>
+        Try the export again</button>}
+      {exports.length > 0 && <p className='text-red-200/70'>
+        Your previous export{exports.length > 1 ? 's are' : ' is'} still listed below and can
+        still be downloaded.</p>}
+    </div>}
 
     {!hasSource && <p className='mt-3 text-[11px] text-slate-500'>
       Attach a source video before exporting.</p>}

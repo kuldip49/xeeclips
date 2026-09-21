@@ -24,6 +24,10 @@ const CERTAIN = 0.95;
 const SELECTION_CONFIDENCE = 0.9;
 /** Matches the canonical layer's own minimum VIDEO length. */
 const MIN_SEGMENT_SEC = 0.05;
+/** A shorter timeline drag is a mis-drag, not a range. Matches the editor's
+ * own MIN_RANGE_SEC, so what the UI refuses to draw the planner refuses to
+ * act on. */
+const MIN_SELECTED_RANGE_SEC = 0.2;
 
 type Draft = { commands: ChatCommand[]; summary: string; grounding: ChatGrounding[];
   warnings?: string[] };
@@ -45,6 +49,20 @@ const ground = (type: ChatGrounding['type'], confidence: number, evidence: strin
 
 const clamp = (value: number, low: number, high: number) =>
   Number(Math.min(high, Math.max(low, value)).toFixed(4));
+
+/** A selected second, held inside the timeline that actually exists. */
+const clampToTimeline = (value: number, duration: number) =>
+  Number(Math.min(duration, Math.max(0, value)).toFixed(3));
+
+/** History travel, which is not an edit and produces no commands. */
+const travel = (direction: 'UNDO' | 'REDO'): ChatIntent => ({
+  intent: 'EDIT_PROJECT',
+  summary: direction === 'UNDO' ? 'Undo the last change?' : 'Redo the change you undid?',
+  commands: [], grounding: [ground('CONTEXT', CERTAIN,
+    `The request asks to ${direction.toLowerCase()} the most recent editing step.`)],
+  warnings: [], needsClarification: false, clarificationQuestion: '',
+  historyAction: direction
+});
 
 const NUMBER_WORDS: Record<string, number> = {
   a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
@@ -153,71 +171,109 @@ function refitOverlays(context: ChatContext, newDurationSec: number): ChatComman
 }
 
 /**
- * The command sequence that removes a timeline range.
+ * The command sequence that removes a timeline range, across as many VIDEO
+ * segments as the range actually covers.
  *
  * Which commands are needed depends entirely on where the range sits. Removing
  * an edge of a segment is a trim; removing a whole segment is a delete; and
- * removing something out of the middle genuinely needs two splits and a delete.
- * The splits address the timeline by TIME rather than by element id, because
- * each split changes which element covers a given second - those targets are
- * resolved step by step as the bundle executes.
+ * removing something out of the middle of one segment genuinely needs two
+ * splits and a delete. A range that spans several segments is simply the
+ * per-segment case applied to each one - a tail trim on the first, a delete of
+ * each segment swallowed whole, a head trim on the last.
+ *
+ * ORDER IS LOAD-BEARING. The canonical layer re-normalises the video track
+ * after every single command, which shifts the start time of every segment
+ * AFTER the one that changed and leaves every segment before it alone. So the
+ * segments are emitted RIGHT TO LEFT: by the time a segment is acted on, the
+ * ones still to come have not moved, and each is addressed by its own element
+ * handle rather than by a timeline second, so no command depends on a position
+ * an earlier command may have changed.
+ *
+ * No timestamp here is invented: every value is derived from the caller's
+ * grounded range and the segment boundaries that already exist.
  */
 function cutRangeCommands(context: ChatContext, startSec: number, endSec: number):
   { commands: ChatCommand[] } | { question: string } {
-  const segment = context.elements.find((element) => element.role === 'VIDEO' &&
-    startSec >= element.startSec - 1e-6 && startSec < element.endSec - 1e-6);
-  if (!segment) return { question: `There is no video at ${startSec.toFixed(1)}s.` };
-  if (endSec > segment.endSec + 1e-6) {
-    return { question: `That range crosses a cut at ${segment.endSec.toFixed(1)}s. ` +
-      'Remove it one segment at a time, or tell me the exact segment.' };
+  const videos = context.elements.filter((element) => element.role === 'VIDEO')
+    .sort((left, right) => left.startSec - right.startSec);
+  const covered = videos.filter((element) => element.endSec > startSec + 1e-6 &&
+    element.startSec < endSec - 1e-6);
+  if (!covered.length) return { question: `There is no video at ${startSec.toFixed(1)}s.` };
+  if (endSec > (videos.at(-1)?.endSec ?? 0) + 1e-6) {
+    return { question: `That range runs past the end of the video at ${
+      (videos.at(-1)?.endSec ?? 0).toFixed(1)}s. Which range did you mean?` };
   }
-  const atStart = startSec <= segment.startSec + 1e-6;
-  const atEnd = endSec >= segment.endSec - 1e-6;
-  const trimStart = segment.trimStartSec;
-  const trimEnd = segment.trimEndSec ?? trimStart + (segment.endSec - segment.startSec);
-  const reason = `Removes ${startSec.toFixed(1)}s–${endSec.toFixed(1)}s.`;
-  // Every branch below shortens the timeline by exactly this much, so overlays
-  // are refitted against the length the cut will leave behind.
+  if (covered.length === videos.length && covered.every((element) =>
+    startSec <= element.startSec + 1e-6 && endSec >= element.endSec - 1e-6)) {
+    return { question: 'That would remove the whole video. Did you mean a shorter range?' };
+  }
+
+  // Every branch below shortens the timeline by exactly the removed length, so
+  // overlays are refitted against the length the cut will leave behind.
   //
-  // The refit runs FIRST, and that ordering is load-bearing: the canonical
+  // The refit runs FIRST, and that ordering is load-bearing too: the canonical
   // layer validates after every single command, so shrinking the overlays while
   // the timeline is still long is valid at each step, whereas cutting first
   // would momentarily leave an overlay hanging past the end and be refused.
-  const refit = refitOverlays(context, context.project.timelineDurationSec - (endSec - startSec));
+  const removed = covered.reduce((total, element) =>
+    total + (Math.min(endSec, element.endSec) - Math.max(startSec, element.startSec)), 0);
+  const refit = refitOverlays(context, context.project.timelineDurationSec - removed);
+  const reason = `Removes ${startSec.toFixed(1)}s–${endSec.toFixed(1)}s.`;
 
-  if (atStart && atEnd) {
-    return { commands: [...refit, { kind: 'ELEMENT', action: 'DELETE_ELEMENT',
-      target: handleTarget(segment), parameters: {}, reason }] };
+  // The single-segment interior case is the only one that needs splits: the
+  // range opens and closes inside one segment, leaving material on both sides.
+  const solo = covered[0];
+  if (covered.length === 1 && startSec > solo.startSec + 1e-6 && endSec < solo.endSec - 1e-6) {
+    return { commands: [
+      ...refit,
+      { kind: 'ELEMENT', action: 'SPLIT_ELEMENT', target: { kind: 'AT_TIME', atSec: startSec },
+        parameters: { playheadSec: startSec }, reason: `Splits at ${startSec.toFixed(1)}s.` },
+      { kind: 'ELEMENT', action: 'SPLIT_ELEMENT', target: { kind: 'AT_TIME', atSec: endSec },
+        parameters: { playheadSec: endSec }, reason: `Splits at ${endSec.toFixed(1)}s.` },
+      { kind: 'ELEMENT', action: 'DELETE_ELEMENT',
+        target: { kind: 'AT_TIME', atSec: Number(((startSec + endSec) / 2).toFixed(6)) },
+        parameters: {}, reason }
+    ] };
   }
-  if (atStart) {
-    const nextTrimStart = Number((trimStart + (endSec - segment.startSec)).toFixed(6));
-    if (trimEnd - nextTrimStart < MIN_SEGMENT_SEC) {
-      return { question: 'That would leave nothing of this segment. Should I delete it instead?' };
+
+  const perSegment: ChatCommand[] = [];
+  for (const segment of [...covered].reverse()) {
+    const cutFrom = Math.max(startSec, segment.startSec);
+    const cutTo = Math.min(endSec, segment.endSec);
+    const keepsHead = cutFrom > segment.startSec + 1e-6;
+    const keepsTail = cutTo < segment.endSec - 1e-6;
+    const trimStart = segment.trimStartSec;
+    const trimEnd = segment.trimEndSec ?? trimStart + (segment.endSec - segment.startSec);
+
+    // Swallowed whole, or reduced below the canonical minimum length: delete it
+    // rather than leave a frame-length sliver the validator would refuse.
+    const remaining = (keepsHead ? cutFrom - segment.startSec : 0) +
+      (keepsTail ? segment.endSec - cutTo : 0);
+    if ((!keepsHead && !keepsTail) || remaining < MIN_SEGMENT_SEC) {
+      perSegment.push({ kind: 'ELEMENT', action: 'DELETE_ELEMENT',
+        target: handleTarget(segment), parameters: {}, reason });
+      continue;
     }
-    return { commands: [...refit, { kind: 'ELEMENT', action: 'TRIM_ELEMENT',
-      target: handleTarget(segment),
-      parameters: { trimStart: nextTrimStart, trimEnd }, reason }] };
-  }
-  if (atEnd) {
-    const nextTrimEnd = Number((trimStart + (startSec - segment.startSec)).toFixed(6));
-    if (nextTrimEnd - trimStart < MIN_SEGMENT_SEC) {
-      return { question: 'That would leave nothing of this segment. Should I delete it instead?' };
+    if (keepsHead && keepsTail) {
+      // Only reachable when this is the sole covered segment, handled above.
+      return { question: 'That range needs to be cut one segment at a time. ' +
+        'Tell me the exact seconds and I will do it.' };
     }
-    return { commands: [...refit, { kind: 'ELEMENT', action: 'TRIM_ELEMENT',
-      target: handleTarget(segment),
-      parameters: { trimStart, trimEnd: nextTrimEnd }, reason }] };
+    const nextTrimStart = keepsTail
+      ? Number((trimStart + (cutTo - segment.startSec)).toFixed(6)) : trimStart;
+    const nextTrimEnd = keepsHead
+      ? Number((trimStart + (cutFrom - segment.startSec)).toFixed(6)) : trimEnd;
+    perSegment.push({ kind: 'ELEMENT', action: 'TRIM_ELEMENT', target: handleTarget(segment),
+      parameters: { trimStart: nextTrimStart, trimEnd: nextTrimEnd }, reason });
   }
-  // Interior range: split either side of it, then delete the piece between.
-  return { commands: [
-    ...refit,
-    { kind: 'ELEMENT', action: 'SPLIT_ELEMENT', target: { kind: 'AT_TIME', atSec: startSec },
-      parameters: { playheadSec: startSec }, reason: `Splits at ${startSec.toFixed(1)}s.` },
-    { kind: 'ELEMENT', action: 'SPLIT_ELEMENT', target: { kind: 'AT_TIME', atSec: endSec },
-      parameters: { playheadSec: endSec }, reason: `Splits at ${endSec.toFixed(1)}s.` },
-    { kind: 'ELEMENT', action: 'DELETE_ELEMENT',
-      target: { kind: 'AT_TIME', atSec: Number(((startSec + endSec) / 2).toFixed(6)) },
-      parameters: {}, reason }
-  ] };
+  // A cut that deletes every segment there is leaves an empty timeline, which
+  // the canonical validator refuses - so it is a question, not a proposal.
+  if (perSegment.length === videos.length &&
+    perSegment.every((command) => command.kind === 'ELEMENT' &&
+      command.action === 'DELETE_ELEMENT')) {
+    return { question: 'That would leave nothing of the video. Did you mean a shorter range?' };
+  }
+  return { commands: [...refit, ...perSegment] };
 }
 
 /**
@@ -231,6 +287,19 @@ export function planDeterministicChat(message: string, context: ChatContext): Ch
   if (!text) return null;
   const style = context.project.style;
   const duration = context.project.timelineDurationSec;
+
+  // --- History travel ------------------------------------------------------
+  //
+  // "undo that" is the Undo button, reached by typing. It is matched first and
+  // narrowly - only when undo/redo is what the sentence is actually about - so
+  // that "undo the logo and make it smaller" is not silently read as a plain
+  // undo. It produces no commands at all: no inverse edit is synthesised, and
+  // Apply calls the same history path the button calls, so the two can never
+  // diverge.
+  const travelMatch =
+    /^(?:can you\s+|could you\s+|please\s+|now\s+|just\s+)*(undo|redo)\b(?:\s+(?:that|this|it|again|my\s+last\s+(?:change|edit|action)|the\s+last\s+(?:change|edit|action)))?\s*[.!]?$/u
+      .exec(text);
+  if (travelMatch) return travel(travelMatch[1] === 'redo' ? 'REDO' : 'UNDO');
 
   // --- Project style -------------------------------------------------------
 
@@ -386,6 +455,31 @@ export function planDeterministicChat(message: string, context: ChatContext): Ch
   }
 
   // --- Video timeline ------------------------------------------------------
+
+  // "delete this section" with a range selected on the timeline.
+  //
+  // The range is the user's own gesture, so it is the strongest grounding there
+  // is - stronger than any transcript match - and it is used verbatim. Nothing
+  // is inferred from the wording except that a removal was asked for.
+  const selectedRange = context.selection.selectedTimeRange;
+  if (selectedRange && /\b(remove|cut|delete|drop|get rid of|take out)\b/u.test(text) &&
+    /\b(this|that|it|here|selection|selected|section|part|bit|range)\b/u.test(text)) {
+    const startSec = clampToTimeline(selectedRange.startSec, duration);
+    const endSec = clampToTimeline(selectedRange.endSec, duration);
+    if (endSec - startSec < MIN_SELECTED_RANGE_SEC) {
+      return clarify('That selection is too short to remove. Drag a longer range on the ' +
+        'timeline and ask me again.');
+    }
+    const cut = cutRangeCommands(context, startSec, endSec);
+    if ('question' in cut) return clarify(cut.question);
+    return intent({
+      summary: `Remove the selected ${startSec.toFixed(1)}s–${endSec.toFixed(1)}s.`,
+      commands: cut.commands,
+      grounding: [ground('SELECTION', CERTAIN,
+        `The range selected on the timeline: ${startSec.toFixed(1)}s–${endSec.toFixed(1)}s.`,
+        { startSec, endSec })]
+    });
+  }
 
   // "remove the first 3 seconds" / "cut the last 2 seconds"
   const edge = /\b(?:remove|cut|trim|drop|delete|chop|take)\b[^.]*?\b(first|last|opening|final|beginning|end)\b[^.]*?(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s)\b/u

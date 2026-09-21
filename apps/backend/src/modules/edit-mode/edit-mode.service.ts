@@ -42,6 +42,31 @@ const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.m4a', '.aac']);
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
 
+// --- Phase 7 capacity limits -------------------------------------------------
+//
+// EditMode is a direct short-form editor, not a long-form NLE, and every one of
+// these bounds exists because the thing behind it is genuinely not free: a very
+// long source makes each export a multi-hour encode, and every overlay and
+// caption line is another layer in a single FFmpeg filter graph and another ASS
+// event libass composites on every frame.
+//
+// They are deliberately generous relative to real short-form use and they fail
+// with a clear, specific message rather than with a timeout, an OOM or an
+// FFmpeg error the user cannot act on.
+const boundedEnv = (name: string, fallback: number, minimum: number, maximum: number) => {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) ? Math.max(minimum, Math.min(maximum, value)) : fallback;
+};
+/** Longest source EditMode will accept. Default 30 minutes. */
+export const maxSourceDurationSec = () =>
+  boundedEnv('EDIT_MODE_MAX_SOURCE_DURATION_SEC', 30 * 60, 10, 4 * 60 * 60);
+/** Non-caption overlays (TEXT, IMAGE, AUDIO, EFFECT) on one timeline. */
+export const maxOverlayElements = () =>
+  boundedEnv('EDIT_MODE_MAX_OVERLAY_ELEMENTS', 60, 5, 500);
+/** Caption lines on one timeline. Presets generate these, so the cap is higher. */
+export const maxSubtitleElements = () =>
+  boundedEnv('EDIT_MODE_MAX_SUBTITLE_ELEMENTS', 400, 10, 5000);
+
 type TimelineElement = EditElementInput & { id: string };
 
 /** One entry of a validated AI chat bundle. Element payloads are already
@@ -340,6 +365,13 @@ export class EditModeService {
     const media = await probeMedia(input.path);
     if (!media.hasVideo) throw new BadRequestException('Source must contain a video stream');
     if (!media.durationSec || media.durationSec <= 0) throw new BadRequestException('Source duration is unavailable');
+    const limit = maxSourceDurationSec();
+    if (media.durationSec > limit + 1e-6) {
+      throw new BadRequestException({ code: 'SOURCE_TOO_LONG',
+        message: `EditMode edits clips up to ${Math.round(limit / 60)} minutes. This source is ` +
+          `${Math.round(media.durationSec / 60)} minutes long - trim it first, or use the ` +
+          'automatic clip pipeline to find short sections in it.' });
+    }
     return {
       ...input,
       duration: media.durationSec,
@@ -1005,6 +1037,46 @@ export class EditModeService {
       data: { settings: { ...settings, chat } as Prisma.InputJsonValue } });
   }
 
+  /**
+   * What undo and redo would do right now, without doing it.
+   *
+   * The AI chat editor asks this before offering "undo that", so a turn that
+   * cannot be honoured becomes a question instead of a proposal that would
+   * fail on Apply. It folds the history exactly as `historyMutation` does -
+   * deliberately the same walk, so the answer and the action cannot disagree.
+   */
+  async historyAvailability(id: string) {
+    const history = await this.prisma.editHistory.findMany({
+      where: { editProjectId: id }, orderBy: { revision: 'asc' },
+      select: { id: true, action: true, command: true } });
+    const byId = new Map(history.map((entry) => [entry.id, entry]));
+    const active: string[] = [];
+    let redo: string[] = [];
+    for (const entry of history) {
+      if (MANUAL_ACTIONS.has(entry.action)) { active.push(entry.id); redo = []; }
+      else if (entry.action === 'UNDO' || entry.action === 'REDO') {
+        const target = (entry.command as Record<string, unknown> | null)?.targetHistoryId;
+        if (typeof target !== 'string') continue;
+        if (entry.action === 'UNDO') {
+          const index = active.lastIndexOf(target);
+          if (index >= 0) active.splice(index, 1);
+          redo.push(target);
+        } else {
+          active.push(target);
+          const index = redo.lastIndexOf(target);
+          if (index >= 0) redo.splice(index, 1);
+        }
+      }
+    }
+    const undoTarget = active.at(-1);
+    const redoTarget = redo.at(-1);
+    return {
+      canUndo: !!undoTarget, canRedo: !!redoTarget,
+      undoAction: undoTarget ? byId.get(undoTarget)?.action ?? null : null,
+      redoAction: redoTarget ? byId.get(redoTarget)?.action ?? null : null
+    };
+  }
+
   async undo(id: string, revisionValue: unknown) {
     return this.historyMutation(id, revisionValue, 'UNDO');
   }
@@ -1134,6 +1206,21 @@ export class EditModeService {
       }
       if (Math.abs(element.duration - (trimEnd - trimStart)) > 1e-5) throw new BadRequestException({
         code: 'INVALID_DURATION', message: 'VIDEO duration must match its source trim range' });
+    }
+    // Capacity: counted once per validation, so every path that builds a
+    // timeline - manual, preset and chat alike - is held to the same ceiling.
+    const subtitles = elements.filter((item) => item.type === 'SUBTITLE').length;
+    const overlays = elements.filter((item) => item.type !== 'VIDEO' &&
+      item.type !== 'SUBTITLE').length;
+    if (overlays > maxOverlayElements()) {
+      throw new BadRequestException({ code: 'TOO_MANY_OVERLAYS',
+        message: `This timeline already has the maximum of ${maxOverlayElements()} overlays. ` +
+          'Remove one before adding another.' });
+    }
+    if (subtitles > maxSubtitleElements()) {
+      throw new BadRequestException({ code: 'TOO_MANY_SUBTITLES',
+        message: `This timeline already has the maximum of ${maxSubtitleElements()} caption ` +
+          'lines. Turn captions off, or use a shorter source.' });
     }
     for (const element of elements.filter((item) => item.type !== 'VIDEO')) {
       if (!Number.isFinite(element.startTime) || element.startTime < 0 ||

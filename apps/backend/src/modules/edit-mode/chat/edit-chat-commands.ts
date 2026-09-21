@@ -115,6 +115,12 @@ export type ChatIntent = {
   warnings: string[];
   needsClarification: boolean;
   clarificationQuestion: string;
+  /**
+   * History travel rather than an edit. Only the deterministic planner ever
+   * sets this - it is absent from CHAT_INTENT_SCHEMA and `validateChatIntent`
+   * never produces it, so a model cannot ask for an undo it did not witness.
+   */
+  historyAction?: 'UNDO' | 'REDO';
 };
 
 // --- Confidence policy ------------------------------------------------------
@@ -218,6 +224,9 @@ const validateElementCommand = (record: Record<string, unknown>): ChatElementCom
   const parameters: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (!ALLOWED_PARAMETERS.has(key)) continue;
+    // A strict-schema response sends every parameter key, with null for the
+    // ones it is not setting. Null means "not set", exactly like absent.
+    if (value === null || value === undefined) continue;
     if (typeof value === 'number' && !Number.isFinite(value)) {
       reject(`Parameter "${key}" must be a finite number`);
     }
@@ -227,7 +236,7 @@ const validateElementCommand = (record: Record<string, unknown>): ChatElementCom
     reason: boundedString(record.reason, 300) };
   const target = validateTarget(record.target);
   if (target) command.target = target;
-  if (record.ref !== undefined) {
+  if (record.ref !== undefined && record.ref !== null) {
     if (!HANDLE_PATTERN.test(String(record.ref))) reject('ref is invalid');
     command.ref = String(record.ref);
   }
@@ -256,6 +265,7 @@ const validateSettingsCommand = (record: Record<string, unknown>): ChatSettingsC
   for (const field of SETTINGS_FIELDS[action]) {
     const value = raw[field];
     if (value === undefined) continue;
+    if (value === null && field !== 'hookText') continue;
     if (field === 'hookText') {
       if (value !== null && typeof value !== 'string') reject('hookText must be a string or null');
       parameters.hookText = value === null ? null : String(value).slice(0, 200);
@@ -283,8 +293,12 @@ const validateGrounding = (value: unknown): ChatGrounding[] => {
       confidence: Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : 0,
       evidence: boundedString(record.evidence, 400)
     };
-    if (Number.isFinite(Number(record.startSec))) entry.startSec = Number(record.startSec);
-    if (Number.isFinite(Number(record.endSec))) entry.endSec = Number(record.endSec);
+    // `null` is "no range", and must not become 0 - a grounding that claimed
+    // 0s would be a real timestamp the transcript check would then honour.
+    if (record.startSec !== null && record.startSec !== undefined &&
+      Number.isFinite(Number(record.startSec))) entry.startSec = Number(record.startSec);
+    if (record.endSec !== null && record.endSec !== undefined &&
+      Number.isFinite(Number(record.endSec))) entry.endSec = Number(record.endSec);
     return [entry];
   });
 };
@@ -345,7 +359,68 @@ export function validateChatIntent(value: unknown): ChatIntent {
   };
 }
 
-/** The strict schema the ONLINE/OFFLINE structured-generation route enforces. */
+/**
+ * The strict schema the ONLINE/OFFLINE structured-generation route enforces.
+ *
+ * Shaped for OpenAI-style STRICT structured outputs, which are stricter than
+ * ordinary JSON Schema in two ways that matter here: every object must set
+ * `additionalProperties: false`, and every object's `required` must list every
+ * one of its properties. An optional field is therefore expressed as a
+ * NULLABLE required field, not as an absent one.
+ *
+ * The Phase 7 provider soak is what forced this: the Phase 6 shape left `ref`
+ * out of the target's `required` and declared `parameters` as an open object,
+ * and the provider rejected every request with HTTP 400 before the model ever
+ * saw it. `validateChatIntent` treats null and absent identically, so both
+ * shapes validate the same way.
+ *
+ * Declaring the parameter keys explicitly is a bonus: the model is now held to
+ * the same allowlist the validator enforces, rather than being free to invent a
+ * field that would be silently dropped afterwards.
+ */
+const NUMBER_PARAMETERS = ['trimStart', 'trimEnd', 'playheadSec', 'toPosition', 'startTime',
+  'duration', 'x', 'y', 'width', 'height', 'opacity', 'zIndex', 'fontSize', 'fontWeight',
+  'volume', 'fadeInSec', 'fadeOutSec'] as const;
+const STRING_PARAMETERS = ['content', 'fontFamily', 'textAlign', 'color',
+  'backgroundColor'] as const;
+const BOOLEAN_PARAMETERS = ['muted'] as const;
+// ELEMENT and SETTINGS commands share one `parameters` object, so the style
+// fields have to be declared here too - otherwise a strict response has no
+// legal way to express "set the aspect ratio" and every SETTINGS command comes
+// back empty. Each is enumerated, so a policy value the editor does not
+// support cannot be returned at all.
+const STYLE_PARAMETERS = ['aspectRatio', 'subtitlePolicy', 'zoomPolicy', 'reframePolicy',
+  'gradingPolicy', 'hookPolicy', 'textPolicy', 'overlayPolicy', 'musicPolicy',
+  'informationRegionPolicy', 'pacing', 'hookText'] as const;
+
+const nullable = (type: string) => ({ type: [type, 'null'] });
+
+const nullableEnum = (values: readonly string[]) =>
+  ({ type: ['string', 'null'], enum: [...values, null] as unknown as string[] });
+
+const PARAMETERS_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: [...NUMBER_PARAMETERS, ...STRING_PARAMETERS, ...BOOLEAN_PARAMETERS,
+    ...STYLE_PARAMETERS],
+  properties: {
+    ...Object.fromEntries(NUMBER_PARAMETERS.map((key) => [key, nullable('number')])),
+    ...Object.fromEntries(STRING_PARAMETERS.map((key) => [key, nullable('string')])),
+    ...Object.fromEntries(BOOLEAN_PARAMETERS.map((key) => [key, nullable('boolean')])),
+    aspectRatio: nullableEnum(EDIT_ASPECT_RATIOS),
+    subtitlePolicy: nullableEnum(SUBTITLE_POLICIES),
+    zoomPolicy: nullableEnum(ZOOM_POLICIES),
+    reframePolicy: nullableEnum(REFRAME_POLICIES),
+    gradingPolicy: nullableEnum(GRADING_POLICIES),
+    hookPolicy: nullable('string'),
+    textPolicy: nullable('string'),
+    overlayPolicy: nullable('string'),
+    musicPolicy: nullable('string'),
+    informationRegionPolicy: nullable('string'),
+    pacing: nullable('string'),
+    hookText: nullable('string')
+  }
+};
+
 export const CHAT_INTENT_SCHEMA: StrictJsonSchema = {
   type: 'object', additionalProperties: false,
   required: ['intent', 'summary', 'commands', 'grounding', 'warnings',
@@ -357,24 +432,26 @@ export const CHAT_INTENT_SCHEMA: StrictJsonSchema = {
       type: 'array', maxItems: 12,
       items: {
         type: 'object', additionalProperties: false,
-        required: ['action', 'parameters', 'reason'],
+        required: ['action', 'parameters', 'reason', 'ref', 'assetHandle', 'target'],
         properties: {
           action: { type: 'string',
             enum: [...CHAT_ELEMENT_ACTIONS, ...CHAT_SETTINGS_ACTIONS] as unknown as string[] },
           reason: { type: 'string' },
-          ref: { type: 'string' },
-          assetHandle: { type: 'string' },
+          ref: nullable('string'),
+          assetHandle: nullable('string'),
           target: {
-            type: 'object', additionalProperties: false, required: ['kind'],
+            type: ['object', 'null'], additionalProperties: false,
+            required: ['kind', 'ref', 'role', 'atSec', 'handle'],
             properties: {
               kind: { type: 'string', enum: [...CHAT_TARGET_KINDS] as unknown as string[] },
-              ref: { type: 'string' },
-              role: { type: 'string', enum: [...CHAT_TARGET_ROLES] as unknown as string[] },
-              atSec: { type: 'number' },
-              handle: { type: 'string' }
+              ref: nullable('string'),
+              role: { type: ['string', 'null'],
+                enum: [...CHAT_TARGET_ROLES, null] as unknown as string[] },
+              atSec: nullable('number'),
+              handle: nullable('string')
             }
           },
-          parameters: { type: 'object', additionalProperties: true, properties: {} }
+          parameters: PARAMETERS_SCHEMA
         }
       }
     },
@@ -382,13 +459,13 @@ export const CHAT_INTENT_SCHEMA: StrictJsonSchema = {
       type: 'array', maxItems: 12,
       items: {
         type: 'object', additionalProperties: false,
-        required: ['type', 'confidence', 'evidence'],
+        required: ['type', 'confidence', 'evidence', 'startSec', 'endSec'],
         properties: {
           type: { type: 'string', enum: [...CHAT_GROUNDING_TYPES] as unknown as string[] },
           confidence: { type: 'number' },
           evidence: { type: 'string' },
-          startSec: { type: 'number' },
-          endSec: { type: 'number' }
+          startSec: nullable('number'),
+          endSec: nullable('number')
         }
       }
     },
