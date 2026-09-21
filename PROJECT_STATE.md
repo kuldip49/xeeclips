@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-09-18
+Last updated: 2026-09-21
 
 ## Milestones
 
@@ -11,6 +11,9 @@ Last updated: 2026-09-18
 - Milestone 5: complete
 - Milestone 6: complete
 - AI Editing Quality (EDITED_CLIPS): complete — see `docs/ai-editing-quality.md`
+- EditMode Phase 1–3 (foundation, manual timeline, assets/overlays): complete — see
+  `docs/edit-mode-phase3.md`
+- EditMode Phase 4 (presets + no-prompt auto edit): complete — see `docs/edit-mode-phase4.md`
 
 ## Product Flow — Analysis-First, Platform-Aware Clip Creation
 
@@ -601,6 +604,69 @@ information-heavy screen, Luna available, Luna deliberately unavailable, and
 music variety across clips from one source — measures the hook's glyph pixels in
 the first and final frames and on the cover), `verify:edited-clips` (real videos
 in the Docker stack, disposable).
+
+## EditMode Phase 4 — Presets and No-Prompt Auto Edit
+
+EditMode is additive and isolated from the frozen auto pipeline. Phase 4 adds reusable presets and
+automatic editing that requires no prompt. Full contract: `docs/edit-mode-phase4.md`.
+
+- Eight presets: `INSTAGRAM_REEL_PROFESSIONAL`, `PODCAST_CLIP`, `EDUCATIONAL`, `PRODUCT_PROMO`,
+  `MOTIVATIONAL`, `CLEAN_BUSINESS`, `MINIMAL`, `SOURCE_MANUAL`. Each is a typed policy of closed
+  enums, not a fixed sequence; `SOURCE_MANUAL` records the selection and transforms nothing.
+- Pipeline: source + cached analysis → preset policy → content-aware planner → validated EditMode
+  commands → canonical `EditProject`/`EditElement`/`EditHistory` → existing manual editor. Manual
+  and preset edits share one mutation path (`EditModeService.applyElementCommand`), so both are
+  normalised and validated identically. No preset code writes element rows or patches settings.
+- Content-aware, evidence-driven: no semantic emphasis in the transcript means no zoom; slides or
+  screen content force `INFORMATION_PRESERVING` framing and refuse zoom; a requested face-focused
+  framing degrades to `AUTO` without a reliable face; pair composition is preserved when two faces
+  both survive the crop; an already-vertical source is not reframed; no product overlay, CTA, hook,
+  music or speaker label is invented when the source does not support it.
+- Cached reuse only: the planner reads `EditAsset.transcript` and `EditAsset.analysis` from the
+  Phase 1 analyze step and never re-transcribes or re-analyses. Frozen editing intelligence is
+  reused as pure logic with unchanged defaults (`classifyShots`, `detectInformationRegion`,
+  `buildSubtitlePhrases`, `detectSemanticZoomCandidates`, `buildEditedTimeline`,
+  `deterministicHook`/`chooseBestHook`).
+- `GET /edit-mode/presets`; `POST /edit-mode/projects/:id/preset/preview` returns a structured
+  proposal and writes nothing; `POST /edit-mode/projects/:id/preset/apply` commits atomically. Both
+  reject a stale `revision` before doing any work.
+- One apply is one `EditHistory` row (`actor: PRESET`, `action: APPLY_PRESET`) whose before/after
+  state carries both elements and settings, so a single undo restores the complete pre-preset
+  project and a single redo restores the applied one.
+- Ownership metadata in `EditElement.properties` (`origin` USER/PRESET/ASSISTANT, `presetId`,
+  `presetRunId`, `presetRole`, `createdAtRevision`) makes a reapply replace only preset-owned
+  elements. Manual logos, text, images, music, trims and arrangement always survive; preset elements
+  are replaced rather than duplicated; a hand-made trim is never overwritten and a preset trim is
+  idempotent across reapplies. No schema change was required.
+- `EditProject.settings` persists `selectedPreset`, `aspectRatio`, `pacing`, `subtitlePolicy`,
+  `hookPolicy`, `zoomPolicy`, `reframePolicy`, `musicPolicy`, `gradingPolicy`, `textPolicy`,
+  `overlayPolicy`, `informationRegionPolicy`, `hookText`, and a `presetRun` record. No new table.
+- Subtitles are transcript-exact: one `SUBTITLE` element per phrase with the transcript's own words
+  and timings, capped by `EDIT_MODE_MAX_SUBTITLE_ELEMENTS` (default 400), above which the policy is
+  persisted for the render phase instead. Hooks are grounded by the existing hook scorer and omitted
+  when nothing clears the bar.
+- Phase 4 renders nothing. Reframe, zoom and grading are persisted intent for a later render phase.
+- LLM use is limited to headline wording via the existing `LlmRouterService` `hookGeneration` role
+  under a strict schema, so existing ONLINE/OFFLINE/`FALLBACK_ONLY` routing applies and no API key
+  was added. A provider failure or a rejected proposal degrades to the deterministic hook.
+  `EDIT_MODE_PRESET_LLM_ENABLED=false` forces the deterministic path.
+- Isolation: no `ProcessingJob`, `ClipCandidate` or `GeneratedClip` is created, nothing is enqueued,
+  and no `Project` or `Video` row is read or written. `EditModeModule` provides `LlmRouterService`
+  directly rather than importing `ProcessingModule`, keeping the frozen queue and video processor out
+  of EditMode's injector graph.
+
+### Phase 4 verification
+
+- Backend and frontend TypeScript checks and all workspace production builds passed.
+- `npm --workspace apps/backend run test:edit-mode` — Phase 1, 2, 3 and 4 suites all green.
+  Phase 4 (`test-edit-mode-presets.cjs`, also `test:edit-mode-presets`) covers the catalogue and its
+  typed enums, invalid presets, `SOURCE_MANUAL` applying nothing, a plan per preset over
+  talking-head / two-person / slide / silent fixtures, cached-analysis reuse, auto-pipeline
+  isolation, PREVIEW purity, APPLY, single-revision `PRESET` history, undo/redo, manual-edit
+  preservation across reapply, generated-command validation, stale revisions, the no-prompt flow,
+  and the deterministic fallback.
+- Frozen auto-pipeline regressions all passed: `test:edit-quality` (56/56), `test:editing`,
+  `test:editing-media`, `test:editing-benchmark` (9 scenarios), `test:clip-selection`.
 
 ## Milestone 6 — Visual Intelligence
 

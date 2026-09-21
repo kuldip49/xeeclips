@@ -15,6 +15,9 @@ import { StorageService } from '../storage/storage.service';
 import { EditModeAnalysisService } from './edit-mode-analysis.service';
 import type { EditElementInput, PreparedEditSource } from './edit-mode.types';
 import { editProjectState } from './edit-mode.types';
+import type { PresetCommand } from './presets/edit-preset-commands';
+import { EDIT_PRESET_IDS, readEditProjectStyle,
+  type EditPresetRun } from './presets/edit-preset-policy';
 
 const MIN_VIDEO_DURATION_SEC = 0.05;
 const PHASE3_ACTIONS = [
@@ -22,8 +25,15 @@ const PHASE3_ACTIONS = [
   'SET_ELEMENT_TIMING', 'SET_ELEMENT_OPACITY', 'SET_ELEMENT_Z_INDEX', 'UPDATE_TEXT',
   'SET_AUDIO_VOLUME', 'SET_AUDIO_MUTED', 'SET_AUDIO_FADE', 'DUPLICATE_ELEMENT', 'REMOVE_ELEMENT'
 ] as const;
+// Phase 4 adds one element action, reachable only through a validated preset
+// plan: a transcript-exact caption line. There is no manual subtitle editor.
+const PRESET_ONLY_ACTIONS = ['ADD_SUBTITLE'] as const;
+// Actions that produce an undoable user-level revision. A whole preset
+// application is one entry here, so it undoes and redoes as a single step.
 const MANUAL_ACTIONS = new Set(['TRIM_ELEMENT', 'SPLIT_ELEMENT', 'DELETE_ELEMENT',
-  'MOVE_ELEMENT', ...PHASE3_ACTIONS]);
+  'MOVE_ELEMENT', 'APPLY_PRESET', ...PHASE3_ACTIONS]);
+const ELEMENT_ORIGINS = new Set(['USER', 'PRESET', 'ASSISTANT']);
+const PRESET_ROLES = new Set(['HOOK', 'SUBTITLE', 'KEY_POINT', 'CTA', 'PRODUCT', 'LOGO', 'MUSIC']);
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const AUDIO_MIMES = new Set(['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav',
   'audio/mp4', 'audio/x-m4a', 'audio/aac']);
@@ -456,12 +466,9 @@ export class EditModeService {
     const trimStart = this.finiteNumber(input.trimStart, 'trimStart');
     const trimEnd = this.finiteNumber(input.trimEnd, 'trimEnd');
     return this.manualMutation(id, input.revision, 'TRIM_ELEMENT',
-      { elementId, trimStart, trimEnd }, (elements) => {
-        const target = this.videoElement(elements, elementId);
-        return elements.map((element) => element.id === target.id
-          ? { ...element, trimStart, trimEnd, duration: trimEnd - trimStart }
-          : element);
-      });
+      { elementId, trimStart, trimEnd }, (elements, assets) =>
+        this.applyElementCommand('TRIM_ELEMENT', { elementId, trimStart, trimEnd },
+          elements, assets));
   }
 
   async splitElement(id: string, input: { revision?: unknown; elementId?: unknown; playheadSec?: unknown }) {
@@ -517,12 +524,32 @@ export class EditModeService {
 
   async phase3Command(id: string, actionValue: string, input: Record<string, unknown>) {
     const action = actionValue.replace(/-/gu, '_').toUpperCase();
+    if (PRESET_ONLY_ACTIONS.includes(action as typeof PRESET_ONLY_ACTIONS[number])) {
+      throw new BadRequestException({ code: 'PRESET_ONLY_COMMAND',
+        message: `${action} is produced by a preset plan and is not a manual command` });
+    }
     if (!PHASE3_ACTIONS.includes(action as typeof PHASE3_ACTIONS[number])) {
       throw new BadRequestException({ code: 'UNSUPPORTED_COMMAND', message: 'Unsupported EditMode command' });
     }
     const { revision: _revision, ...commandValue } = input;
     const command = commandValue as Prisma.InputJsonObject;
-    return this.manualMutation(id, input.revision, action, command, (elements, assets) => {
+    return this.manualMutation(id, input.revision, action, command,
+      (elements, assets) => this.applyElementCommand(action, input, elements, assets));
+  }
+
+  /**
+   * The single element mutation path.
+   *
+   * Manual Phase 3 commands and preset-generated commands both run through
+   * here, so a preset can never reach the timeline by a route that skips the
+   * validation the manual editor is held to.
+   */
+  private applyElementCommand(action: string, input: Record<string, unknown>,
+    elements: TimelineElement[], assets: Map<string, {
+      id: string; role: EditAssetRole; duration: number | null;
+      width: number | null; height: number | null;
+    }>): TimelineElement[] {
+    {
       const projectDuration = elements.filter((item) => item.type === 'VIDEO' && item.track === 0)
         .reduce((total, item) => total + item.duration, 0);
       const assetId = typeof input.assetId === 'string' ? input.assetId : '';
@@ -539,8 +566,12 @@ export class EditModeService {
       };
       const requireVisual = () => {
         const item = requireTarget();
-        if (item.type !== 'IMAGE' && item.type !== 'TEXT') throw new BadRequestException({
-          code: 'INVALID_ELEMENT_TYPE', message: 'Command requires an IMAGE, LOGO, or TEXT element' });
+        // Preset-authored caption lines are repositionable by hand, but their
+        // wording stays transcript-exact: UPDATE_TEXT remains TEXT-only.
+        if (item.type !== 'IMAGE' && item.type !== 'TEXT' && item.type !== 'SUBTITLE') {
+          throw new BadRequestException({ code: 'INVALID_ELEMENT_TYPE',
+            message: 'Command requires an IMAGE, LOGO, TEXT, or SUBTITLE element' });
+        }
         return item;
       };
       const withProperties = (item: TimelineElement, properties: Record<string, unknown>) =>
@@ -548,6 +579,13 @@ export class EditModeService {
           properties: { ...(item.properties as Record<string, unknown>), ...properties } as Prisma.InputJsonValue }
           : candidate);
 
+      if (action === 'TRIM_ELEMENT') {
+        const trimStart = this.finiteNumber(input.trimStart, 'trimStart');
+        const trimEnd = this.finiteNumber(input.trimEnd, 'trimEnd');
+        const item = this.videoElement(elements, this.requiredString(input.elementId, 'elementId'));
+        return elements.map((candidate) => candidate.id === item.id
+          ? { ...candidate, trimStart, trimEnd, duration: trimEnd - trimStart } : candidate);
+      }
       if (action === 'ADD_IMAGE' || action === 'ADD_LOGO') {
         const expectedRole = action === 'ADD_LOGO' ? 'LOGO' : 'IMAGE';
         if (!asset || asset.role !== expectedRole) throw new BadRequestException({ code: 'INVALID_ASSET',
@@ -561,7 +599,8 @@ export class EditModeService {
           position: nextPosition(2), startTime: 0, duration: normalizedDuration(projectDuration),
           trimStart: 0, trimEnd: null, properties: { x, y, width, height, scale: 1, rotation: 0,
             opacity: 1, zIndex: expectedRole === 'LOGO' ? 20 : 10, anchor: 'top-left',
-            locked: false, role: expectedRole, preserveAspectRatio: true } });
+            locked: false, role: expectedRole, preserveAspectRatio: true,
+            ...this.originProperties(input) } });
       }
       if (action === 'ADD_TEXT') {
         return add({ id: randomUUID(), assetId: null, type: 'TEXT', track: 1,
@@ -570,7 +609,7 @@ export class EditModeService {
             width: 0.6, height: 0.16, scale: 1, fontSize: 48, fontWeight: 700,
             fontFamily: 'Arial, sans-serif', textAlign: 'center', color: '#ffffff',
             backgroundColor: 'transparent', rotation: 0, opacity: 1, zIndex: 30,
-            anchor: 'top-left', locked: false } });
+            anchor: 'top-left', locked: false, ...this.originProperties(input) } });
       }
       if (action === 'ADD_AUDIO') {
         if (!asset || asset.role !== 'AUDIO' || !asset.duration) throw new BadRequestException({
@@ -579,7 +618,8 @@ export class EditModeService {
         return add({ id: randomUUID(), assetId, type: 'AUDIO', track: 3,
           position: nextPosition(3), startTime: 0, duration, trimStart: 0, trimEnd: duration,
           properties: { volume: 0.25, muted: false, fadeInSec: 0, fadeOutSec: 0,
-            duckUnderSpeech: false, duckLevel: 0.25, attackMs: 150, releaseMs: 350 } });
+            duckUnderSpeech: false, duckLevel: 0.25, attackMs: 150, releaseMs: 350,
+            ...this.originProperties(input) } });
       }
       if (action === 'MOVE_ELEMENT') {
         const item = requireVisual();
@@ -666,8 +706,147 @@ export class EditModeService {
         if (item.type === 'VIDEO') throw new BadRequestException('Use VIDEO delete for ripple deletion');
         return elements.filter((candidate) => candidate.id !== item.id);
       }
-      return elements;
-    });
+      if (action === 'ADD_SUBTITLE') {
+        // Caption text and timing come straight from the cached transcript, so
+        // they are accepted verbatim and only bounds-checked here.
+        if (typeof input.content !== 'string' || !input.content.trim()) {
+          throw new BadRequestException('content is required for ADD_SUBTITLE');
+        }
+        const startTime = this.nonNegativeNumber(input.startTime, 'startTime');
+        const duration = this.positiveNumber(input.duration, 'duration');
+        if (startTime + duration > projectDuration + 1e-6) throw new BadRequestException({
+          code: 'TIMING_OUT_OF_RANGE', message: 'Subtitle timing must stay within the video timeline' });
+        return add({ id: randomUUID(), assetId: null, type: 'SUBTITLE', track: 1,
+          position: nextPosition(1), startTime, duration, trimStart: 0, trimEnd: null,
+          properties: { content: input.content.slice(0, 500),
+            x: this.unitNumber(input.x ?? 0.1, 'x'), y: this.unitNumber(input.y ?? 0.73, 'y'),
+            width: this.unitNumber(input.width ?? 0.8, 'width'),
+            height: this.unitNumber(input.height ?? 0.13, 'height'),
+            scale: 1, fontSize: 40, fontWeight: 700, fontFamily: 'Arial, sans-serif',
+            textAlign: 'center', color: '#ffffff', backgroundColor: '#00000099', rotation: 0,
+            opacity: 1, zIndex: this.integer(input.zIndex ?? 35, 'zIndex'), anchor: 'top-left',
+            locked: false, ...this.originProperties(input) } });
+      }
+      throw new BadRequestException({ code: 'UNSUPPORTED_COMMAND',
+        message: 'Unsupported EditMode command' });
+    }
+  }
+
+  /**
+   * Typed provenance for a newly created element.
+   *
+   * Every add stamps an origin, so a preset reapply can tell the elements it
+   * owns from the ones the user made by hand. Manual adds default to USER.
+   */
+  private originProperties(input: Record<string, unknown>): Record<string, unknown> {
+    const origin = input.origin === undefined ? 'USER' : String(input.origin);
+    if (!ELEMENT_ORIGINS.has(origin)) throw new BadRequestException('origin is invalid');
+    const properties: Record<string, unknown> = { origin };
+    if (origin === 'USER') return properties;
+    if (input.presetId !== undefined) {
+      if (!(EDIT_PRESET_IDS as readonly string[]).includes(String(input.presetId))) {
+        throw new BadRequestException('presetId is invalid');
+      }
+      properties.presetId = String(input.presetId);
+    }
+    if (input.presetRole !== undefined) {
+      if (!PRESET_ROLES.has(String(input.presetRole))) {
+        throw new BadRequestException('presetRole is invalid');
+      }
+      properties.presetRole = String(input.presetRole);
+    }
+    if (input.presetRunId !== undefined) {
+      if (typeof input.presetRunId !== 'string' || !/^[a-z0-9-]{1,64}$/iu.test(input.presetRunId)) {
+        throw new BadRequestException('presetRunId is invalid');
+      }
+      properties.presetRunId = input.presetRunId;
+    }
+    if (input.createdAtRevision !== undefined) {
+      properties.createdAtRevision = this.integer(input.createdAtRevision, 'createdAtRevision');
+    }
+    return properties;
+  }
+
+  /**
+   * Applies a validated preset plan as ONE user-level action.
+   *
+   * Every element command is folded through `applyElementCommand` and the
+   * timeline is normalised and validated after each step, exactly as a manual
+   * command would be. Settings commands fold into the project style block. The
+   * whole bundle commits in one transaction and writes exactly one EditHistory
+   * row, actor PRESET, whose before/after state carries both the elements and
+   * the settings - so a single undo restores the complete pre-preset project.
+   */
+  async applyPresetBundle(id: string, revisionValue: unknown, bundle: {
+    presetId: string; presetRunId: string; summary: string;
+    commands: PresetCommand[]; plannedZoomMoments: EditPresetRun['plannedZoomMoments'];
+  }) {
+    const expectedRevision = parseRevision(revisionValue);
+    if (!(EDIT_PRESET_IDS as readonly string[]).includes(bundle.presetId)) {
+      throw new BadRequestException({ code: 'UNKNOWN_PRESET', message: 'Unknown preset' });
+    }
+    return serialize(await this.prisma.$transaction(async (tx) => {
+      const current = await tx.editProject.findUnique({ where: { id }, include: { elements: true,
+        assets: { select: { id: true, role: true, duration: true, width: true, height: true } } } });
+      if (!current) throw new NotFoundException('EditProject not found');
+      this.assertRevision(current.revision, expectedRevision);
+      const before = current.elements.map((element) =>
+        timelineElementState(element as unknown as Record<string, unknown>));
+      const assetMap = new Map(current.assets.map((asset) => [asset.id, asset]));
+      const revision = current.revision + 1;
+      const settingsBefore = current.settings && typeof current.settings === 'object' &&
+        !Array.isArray(current.settings) ? current.settings as Record<string, unknown> : {};
+
+      let elements = before.map((element) => ({ ...element }));
+      let style = readEditProjectStyle(settingsBefore);
+      const refs = new Map<string, string>();
+      const trims: EditPresetRun['trims'] = [];
+
+      for (const command of bundle.commands) {
+        if (command.kind === 'SETTINGS') { style = { ...style, ...command.payload }; continue; }
+        const payload: Record<string, unknown> = { ...command.payload };
+        if (typeof payload.ref === 'string') {
+          const resolved = refs.get(payload.ref);
+          if (!resolved) throw new BadRequestException({ code: 'INVALID_PRESET_COMMAND',
+            message: `Preset plan references an element it never created ("${payload.ref}")` });
+          payload.elementId = resolved;
+          delete payload.ref;
+        }
+        const creates = command.action.startsWith('ADD_');
+        if (creates) {
+          payload.origin = payload.origin ?? 'PRESET';
+          payload.presetRunId = bundle.presetRunId;
+          payload.createdAtRevision = revision;
+        }
+        const priorIds = new Set(elements.map((element) => element.id));
+        const next = normalizeVideoTrack(
+          this.applyElementCommand(command.action, payload, elements, assetMap));
+        this.validateTimeline(next, assetMap);
+        elements = next;
+        if (creates && command.ref) {
+          const created = elements.find((element) => !priorIds.has(element.id));
+          if (created) refs.set(command.ref, created.id);
+        }
+        if (command.action === 'TRIM_ELEMENT') {
+          trims.push({ elementId: String(payload.elementId),
+            trimStart: Number(payload.trimStart), trimEnd: Number(payload.trimEnd) });
+        }
+      }
+
+      await this.replaceElements(tx, id, elements);
+      const presetRun: EditPresetRun = { presetId: bundle.presetId as EditPresetRun['presetId'],
+        presetRunId: bundle.presetRunId, appliedAtRevision: revision, summary: bundle.summary,
+        plannedZoomMoments: bundle.plannedZoomMoments, trims };
+      const settingsAfter = { ...settingsBefore, ...style, presetRun } as Prisma.InputJsonValue;
+      await tx.editProject.update({ where: { id }, data: { revision, settings: settingsAfter } });
+      await tx.editHistory.create({ data: { editProjectId: id, revision, actor: 'PRESET',
+        action: 'APPLY_PRESET',
+        command: { presetId: bundle.presetId, presetRunId: bundle.presetRunId,
+          commandCount: bundle.commands.length, summary: bundle.summary },
+        beforeState: { elements: serialize(before), settings: settingsBefore as Prisma.InputJsonValue },
+        afterState: { elements: serialize(elements), settings: settingsAfter } } });
+      return tx.editProject.findUniqueOrThrow({ where: { id }, include: includeProject });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
   }
 
   async undo(id: string, revisionValue: unknown) {
@@ -735,18 +914,27 @@ export class EditModeService {
       if (!target) throw new BadRequestException({ code: `NOTHING_TO_${direction}`,
         message: `There is nothing to ${direction.toLowerCase()}` });
       const state = (direction === 'UNDO' ? target.beforeState : target.afterState) as
-        { elements?: unknown } | null;
+        { elements?: unknown; settings?: unknown } | null;
       if (!state || !Array.isArray(state.elements)) throw new BadRequestException({
         code: 'INVALID_HISTORY_STATE', message: 'The history entry cannot be restored' });
       const elements = state.elements.map((element, position) =>
         this.parseElement(element, position) as TimelineElement);
       await this.replaceElements(tx, id, elements);
       const revision = current.revision + 1;
-      await tx.editProject.update({ where: { id }, data: { revision } });
+      // A preset application changes settings as well as elements, so its
+      // history entries carry both and both are restored together. Entries
+      // written before Phase 4 carry no settings and leave them alone.
+      const restoresSettings = state.settings && typeof state.settings === 'object' &&
+        !Array.isArray(state.settings);
+      await tx.editProject.update({ where: { id }, data: { revision,
+        ...(restoresSettings ? { settings: state.settings as Prisma.InputJsonValue } : {}) } });
       await tx.editHistory.create({ data: { editProjectId: id, revision, actor: 'USER', action: direction,
         command: { targetHistoryId: target.id, targetAction: target.action },
         beforeState: { elements: current.elements.map((element) => timelineElementState(
-          element as unknown as Record<string, unknown>)) }, afterState: { elements } } });
+          element as unknown as Record<string, unknown>)),
+        ...(restoresSettings ? { settings: current.settings } : {}) },
+        afterState: serialize({ elements,
+          ...(restoresSettings ? { settings: state.settings } : {}) }) as Prisma.InputJsonValue } });
       return tx.editProject.findUniqueOrThrow({ where: { id }, include: includeProject });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
   }

@@ -93,3 +93,95 @@ export type SourceVideoOption = {
   originalName: string;
   project?: { id: string; name: string };
 };
+
+// --- EditMode Phase 4: presets ---------------------------------------------
+
+export type EditPresetId = 'INSTAGRAM_REEL_PROFESSIONAL' | 'PODCAST_CLIP' | 'EDUCATIONAL' |
+  'PRODUCT_PROMO' | 'MOTIVATIONAL' | 'CLEAN_BUSINESS' | 'MINIMAL' | 'SOURCE_MANUAL';
+export type EditAspectRatio = '9:16' | '16:9' | '1:1' | 'SOURCE';
+export type SubtitlePolicy = 'OFF' | 'AUTO' | 'ALWAYS';
+export type HookPolicy = 'OFF' | 'AUTO' | 'RECOMMENDED';
+export type ZoomPolicy = 'OFF' | 'SUBTLE' | 'MODERATE' | 'STRONG';
+export type ReframePolicy = 'SOURCE' | 'AUTO' | 'FACE_FOCUSED' | 'INFORMATION_PRESERVING';
+export type MusicPolicy = 'OFF' | 'KEEP_EXISTING' | 'OPTIONAL_USER_ASSET';
+export type GradingPolicy = 'NONE' | 'SUBTLE' | 'CLEAN' | 'WARM' | 'CONTRAST';
+
+export type EditPresetSummary = {
+  id: EditPresetId;
+  displayName: string;
+  description: string;
+  automatic: boolean;
+  aspectRatio: EditAspectRatio;
+  pacing: string;
+  subtitlePolicy: SubtitlePolicy;
+  hookPolicy: HookPolicy;
+  reframingPolicy: ReframePolicy;
+  zoomPolicy: ZoomPolicy;
+  textPolicy: string;
+  audioPolicy: MusicPolicy;
+  overlayPolicy: string;
+  gradingPolicy: GradingPolicy;
+  informationRegionPolicy: string;
+};
+
+/** The style block a preset persists on EditProject.settings. */
+export type EditProjectStyle = {
+  selectedPreset: EditPresetId;
+  aspectRatio: EditAspectRatio;
+  pacing: string;
+  subtitlePolicy: SubtitlePolicy;
+  hookPolicy: HookPolicy;
+  zoomPolicy: ZoomPolicy;
+  reframePolicy: ReframePolicy;
+  musicPolicy: MusicPolicy;
+  gradingPolicy: GradingPolicy;
+  textPolicy: string;
+  overlayPolicy: string;
+  informationRegionPolicy: string;
+  hookText: string | null;
+};
+
+export type EditPresetEstimatedChanges = {
+  trims: number;
+  overlays: number;
+  subtitles: number;
+  removedPresetElements: number;
+  subtitlePolicyChanged: boolean;
+  zoomPolicyChanged: boolean;
+  reframePolicyChanged: boolean;
+  aspectRatioChanged: boolean;
+  hookChanged: boolean;
+};
+
+/** A preview proposal. `commands` is intentionally not surfaced in the UI. */
+export type EditPresetProposal = {
+  mode?: 'PREVIEW';
+  presetId: EditPresetId;
+  displayName: string;
+  description: string;
+  summary: string;
+  plannedChanges: string[];
+  affectedElements: string[];
+  warnings: string[];
+  estimatedChanges: EditPresetEstimatedChanges;
+  style: EditProjectStyle;
+  generation: 'DETERMINISTIC' | 'LLM_ASSISTED';
+  evidence: {
+    sourceDurationSec: number;
+    transcriptAvailable: boolean;
+    analysisAvailable: boolean;
+    analysisSource: string;
+    shotCount: number;
+    informationShotRatio: number;
+    faceShotRatio: number;
+    pairShotRatio: number;
+    semanticPeakCount: number;
+  };
+};
+
+export type EditPresetApplyResult = {
+  mode: 'APPLY';
+  presetRunId: string;
+  plan: Omit<EditPresetProposal, 'mode'>;
+  project: EditProject;
+};

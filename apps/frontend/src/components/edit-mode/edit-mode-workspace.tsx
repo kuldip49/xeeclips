@@ -8,8 +8,10 @@ import {
   uploadEditAsset, uploadEditSource
 } from '@/lib/edit-mode-api';
 import { historyAvailability, timelineDuration, videoTrack } from '@/lib/edit-mode-timeline';
-import type { EditAsset, EditElement, EditHistory, EditProject } from '@/lib/edit-mode-types';
+import type { EditAsset, EditElement, EditHistory, EditPresetApplyResult, EditProject,
+  EditProjectStyle } from '@/lib/edit-mode-types';
 import { EditAssetPicker } from './edit-asset-picker';
+import { EditPresetPanel } from './edit-preset-panel';
 import { EditHistoryPanel } from './edit-history-panel';
 import { EditInspector } from './edit-inspector';
 import { EditPreview, type EditPreviewHandle } from './edit-preview';
@@ -39,6 +41,10 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
   const source = project.assets.find((asset) => asset.role === 'SOURCE');
   const selected = (project.elements ?? []).find((element) => element.id === selectedElementId);
   const availability = historyAvailability(history);
+  // The style block a preset persists on settings; absent until one is applied.
+  const style = (project.settings && typeof project.settings === 'object' &&
+    'selectedPreset' in project.settings
+    ? project.settings as unknown as EditProjectStyle : null);
 
   const setProject = useCallback((next: EditProject | ((current: EditProject) => EditProject)) => {
     setProjectState((current) => {
@@ -206,6 +212,17 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
     catch (caught) { setError(caught instanceof Error ? caught.message : 'Asset delete failed'); }
     finally { setBusy(null); }
   };
+  const presetApplied = useCallback((result: EditPresetApplyResult) => {
+    setError('');
+    acceptServerProject(result.project);
+    const videos = videoTrack(result.project.elements ?? []);
+    if (!videos.some((element) => element.id === selectedElementId)) {
+      setSelectedElementId(videos[0]?.id ?? null);
+    }
+    setCurrentPlayheadSec((time) => Math.min(time, timelineDuration(result.project.elements ?? [])));
+    void refreshHistory();
+  }, [acceptServerProject, refreshHistory, selectedElementId]);
+
   const addAsset = (asset: EditAsset) => {
     const action = asset.role === 'AUDIO' ? 'add-audio' : asset.role === 'LOGO' ? 'add-logo' : 'add-image';
     void applyCommand({ action, assetId: asset.id });
@@ -233,7 +250,9 @@ export function EditModeWorkspace({ initialProject, initialHistory }: {
         currentPlayheadSec={currentPlayheadSec} onPlayheadChange={setCurrentPlayheadSec}
         onSelect={setSelectedElementId} onPreviewElements={(elements) => setProject((current) => ({ ...current, elements }))}
         onCommitTransform={commitTransform} />
-      <div className='grid content-start gap-5'><EditInspector project={project} source={source} selected={selected}
+      <div className='grid content-start gap-5'><EditPresetPanel projectId={project.id}
+        revision={project.revision} style={style} disabled={!!busy} hasSource={!!source}
+        onApplied={presetApplied} onError={setError} /><EditInspector project={project} source={source} selected={selected}
         onPreview={previewElement} onCommit={(command) => void applyCommand(command)} onDebounced={debouncedCommand}
         onDuplicate={() => selectedElementId && void applyCommand({ action: 'duplicate-element', elementId: selectedElementId })}
         onDelete={remove} /><EditHistoryPanel history={history} /></div>

@@ -70,7 +70,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   return <section className='overflow-hidden rounded-2xl border border-white/10 bg-black/40'>
     <div ref={canvas} className='relative mx-auto aspect-video w-full overflow-hidden bg-black'>
       <video ref={video} src={editAssetPlaybackUrl(source.id)} className='absolute inset-0 h-full w-full object-contain' preload='metadata' onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onTimeUpdate={(event) => timeUpdate(event.currentTarget)} />
-      {active.filter((item) => item.type === 'IMAGE' || item.type === 'TEXT').map((element) => {
+      {active.filter((item) => item.type === 'IMAGE' || item.type === 'TEXT' || item.type === 'SUBTITLE').map((element) => {
         const p = element.properties as unknown as VisualElementProperties; const selected = element.id === selectedElementId;
         const asset = element.assetId ? assets.find((item) => item.id === element.assetId) : undefined;
         return <div key={element.id} role='button' tabIndex={0} onPointerDown={(event) => interaction(event, element, 'move')}

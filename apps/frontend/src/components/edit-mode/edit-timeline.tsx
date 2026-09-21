@@ -73,6 +73,7 @@ export function EditTimeline({ elements, selectedElementId, currentPlayheadSec, 
   const tracks = [
     { label: 'Video', items: videos, color: 'border-violet-300/20 bg-violet-500/20 text-violet-100' },
     { label: 'Text', items: elements.filter((item) => item.type === 'TEXT'), color: 'border-cyan-300/20 bg-cyan-500/20 text-cyan-100' },
+    { label: 'Captions', items: elements.filter((item) => item.type === 'SUBTITLE'), color: 'border-sky-300/20 bg-sky-500/20 text-sky-100' },
     { label: 'Image / Logo', items: elements.filter((item) => item.type === 'IMAGE'), color: 'border-fuchsia-300/20 bg-fuchsia-500/20 text-fuchsia-100' },
     { label: 'Music', items: elements.filter((item) => item.type === 'AUDIO'), color: 'border-emerald-300/20 bg-emerald-500/20 text-emerald-100' }
   ];

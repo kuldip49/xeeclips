@@ -26,11 +26,20 @@ import {
   SplitElementDto,
   TrimElementDto
 } from './dto/manual-edit-command.dto';
+import { ApplyEditPresetDto } from './dto/apply-edit-preset.dto';
+import { EditModePresetService } from './edit-mode-preset.service';
 import { EditModeService } from './edit-mode.service';
 
 @Controller('edit-mode')
 export class EditModeController {
-  constructor(private readonly editMode: EditModeService) {}
+  constructor(private readonly editMode: EditModeService,
+    private readonly presets: EditModePresetService) {}
+
+  /** The preset catalogue: typed policies, not templates. */
+  @Get('presets')
+  listPresets() {
+    return this.presets.list();
+  }
 
   @Post('projects')
   create(@Body() body: CreateEditProjectDto) {
@@ -99,6 +108,18 @@ export class EditModeController {
   @Post('projects/:id/analyze')
   analyze(@Param('id') id: string, @Body('revision') revision: unknown) {
     return this.editMode.analyze(id, revision);
+  }
+
+  /** PREVIEW: returns a structured proposal and mutates nothing. */
+  @Post('projects/:id/preset/preview')
+  previewPreset(@Param('id') id: string, @Body() body: ApplyEditPresetDto) {
+    return this.presets.preview(id, body);
+  }
+
+  /** APPLY: executes the validated plan as one PRESET history revision. */
+  @Post('projects/:id/preset/apply')
+  applyPreset(@Param('id') id: string, @Body() body: ApplyEditPresetDto) {
+    return this.presets.apply(id, body);
   }
 
   @Patch('projects/:id/elements')

@@ -1,4 +1,5 @@
-import type { EditAsset, EditAssetRole, EditHistory, EditProject, SourceVideoOption } from './edit-mode-types';
+import type { EditAsset, EditAssetRole, EditHistory, EditPresetApplyResult, EditPresetId,
+  EditPresetProposal, EditPresetSummary, EditProject, SourceVideoOption } from './edit-mode-types';
 
 export class EditModeApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string,
@@ -131,3 +132,21 @@ export const deleteEditAsset = (id: string, revision: number, assetId: string) =
     `/edit-mode/projects/${encodeURIComponent(id)}/assets/${encodeURIComponent(assetId)}`, {
       method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ revision })
     });
+
+// --- EditMode Phase 4: presets ---------------------------------------------
+
+export const listEditPresets = () => request<EditPresetSummary[]>('/edit-mode/presets');
+
+/** PREVIEW never mutates the project. */
+export const previewEditPreset = (id: string, revision: number, presetId: EditPresetId) =>
+  request<EditPresetProposal>(`/edit-mode/projects/${encodeURIComponent(id)}/preset/preview`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ revision, presetId })
+  });
+
+/** APPLY commits the plan as one PRESET history revision. */
+export const applyEditPreset = (id: string, revision: number, presetId: EditPresetId) =>
+  request<EditPresetApplyResult>(`/edit-mode/projects/${encodeURIComponent(id)}/preset/apply`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ revision, presetId })
+  });

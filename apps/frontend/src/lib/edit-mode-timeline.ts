@@ -42,6 +42,7 @@ export function resolvePreviewPosition(elements: EditElement[], timelineTime: nu
 export function historyAvailability(history: Array<{ id: string; action: string; revision: number;
   command?: Record<string, unknown> | null }>) {
   const manual = new Set(['TRIM_ELEMENT', 'SPLIT_ELEMENT', 'DELETE_ELEMENT', 'MOVE_ELEMENT',
+    'APPLY_PRESET',
     'ADD_IMAGE', 'ADD_LOGO', 'ADD_TEXT', 'ADD_AUDIO', 'RESIZE_ELEMENT', 'SET_ELEMENT_TIMING',
     'SET_ELEMENT_OPACITY', 'SET_ELEMENT_Z_INDEX', 'UPDATE_TEXT', 'SET_AUDIO_VOLUME',
     'SET_AUDIO_MUTED', 'SET_AUDIO_FADE', 'DUPLICATE_ELEMENT', 'REMOVE_ELEMENT']);
