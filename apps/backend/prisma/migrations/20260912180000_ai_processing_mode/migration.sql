@@ -1,0 +1,4 @@
+CREATE TYPE "AiProcessingMode" AS ENUM ('ONLINE', 'OFFLINE', 'FALLBACK_ONLY');
+
+ALTER TABLE "ProcessingJob"
+  ADD COLUMN "aiMode" "AiProcessingMode" NOT NULL DEFAULT 'FALLBACK_ONLY';

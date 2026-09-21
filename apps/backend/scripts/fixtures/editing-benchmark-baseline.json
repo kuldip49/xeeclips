@@ -1,0 +1,477 @@
+{
+  "single-speaker-weak-opening": {
+    "status": "DEGRADED",
+    "renderAttempts": 1,
+    "failed": [],
+    "degraded": [
+      "hookStartAligned",
+      "subtitleFontValid"
+    ],
+    "repairs": [],
+    "rawDuration": 20.76,
+    "editedDuration": 17.82,
+    "leadInRemoved": true,
+    "deadAirAtEndMs": 280,
+    "layouts": [
+      "FILL"
+    ],
+    "shotClasses": [
+      "SINGLE_SPEAKER"
+    ],
+    "shotReframes": 0,
+    "hookRendered": true,
+    "hookInsideSafeZone": true,
+    "hookFontSize": 92,
+    "hookLines": 2,
+    "subtitleRendered": 1,
+    "animationVisible": 1,
+    "highlightVisible": 1,
+    "syncMeasurement": "AUDIO_ONSET",
+    "syncAverageMs": 10,
+    "syncResidualMs": -10,
+    "whisperErrorMs": 4,
+    "subjectSafety": 1,
+    "twoPersonPreserved": null,
+    "informationPreserved": null,
+    "zoomCount": 2,
+    "zoomVisible": [
+      true,
+      true
+    ],
+    "backgroundApplied": true,
+    "preset": "CLEAN_SOCIAL",
+    "gradingApplied": true,
+    "exposure": 0.05,
+    "gradingDelta": {
+      "brightness": 0.0205,
+      "contrast": 0.0193,
+      "chroma": 0.0381,
+      "sharpness": 0.0015
+    },
+    "gradingDirection": true,
+    "musicRendered": null,
+    "speechToMusicDb": null,
+    "renderMs": 15603
+  },
+  "two-person-interview": {
+    "status": "DEGRADED",
+    "renderAttempts": 1,
+    "failed": [],
+    "degraded": [
+      "hookStartAligned",
+      "subtitleFontValid"
+    ],
+    "repairs": [],
+    "rawDuration": 16.7,
+    "editedDuration": 13.76,
+    "leadInRemoved": true,
+    "deadAirAtEndMs": 280,
+    "layouts": [
+      "FIT"
+    ],
+    "shotClasses": [
+      "TWO_PERSON"
+    ],
+    "shotReframes": 0,
+    "hookRendered": true,
+    "hookInsideSafeZone": true,
+    "hookFontSize": 92,
+    "hookLines": 2,
+    "subtitleRendered": 1,
+    "animationVisible": 1,
+    "highlightVisible": 1,
+    "syncMeasurement": "AUDIO_ONSET",
+    "syncAverageMs": 10,
+    "syncResidualMs": -10,
+    "whisperErrorMs": 3.3,
+    "subjectSafety": null,
+    "twoPersonPreserved": 1,
+    "informationPreserved": null,
+    "zoomCount": 0,
+    "zoomVisible": [],
+    "backgroundApplied": true,
+    "preset": "CLEAN_SOCIAL",
+    "gradingApplied": true,
+    "exposure": 0.05,
+    "gradingDelta": {
+      "brightness": 0.0167,
+      "contrast": 0.0081,
+      "chroma": 0.023,
+      "sharpness": 0.0007
+    },
+    "gradingDirection": true,
+    "musicRendered": null,
+    "speechToMusicDb": null,
+    "renderMs": 17093
+  },
+  "shot-change-reframe": {
+    "status": "DEGRADED",
+    "renderAttempts": 1,
+    "failed": [],
+    "degraded": [
+      "hookStartAligned",
+      "subtitleFontValid"
+    ],
+    "repairs": [],
+    "rawDuration": 16.7,
+    "editedDuration": 13.76,
+    "leadInRemoved": true,
+    "deadAirAtEndMs": 280,
+    "layouts": [
+      "FILL",
+      "FILL"
+    ],
+    "shotClasses": [
+      "SINGLE_SPEAKER",
+      "SINGLE_SPEAKER"
+    ],
+    "shotReframes": 1,
+    "hookRendered": true,
+    "hookInsideSafeZone": true,
+    "hookFontSize": 92,
+    "hookLines": 2,
+    "subtitleRendered": 1,
+    "animationVisible": 1,
+    "highlightVisible": 1,
+    "syncMeasurement": "AUDIO_ONSET",
+    "syncAverageMs": 10,
+    "syncResidualMs": -10,
+    "whisperErrorMs": 3.3,
+    "subjectSafety": 0.9818,
+    "twoPersonPreserved": null,
+    "informationPreserved": null,
+    "zoomCount": 1,
+    "zoomVisible": [
+      true
+    ],
+    "backgroundApplied": true,
+    "preset": "CLEAN_SOCIAL",
+    "gradingApplied": true,
+    "exposure": 0.05,
+    "gradingDelta": {
+      "brightness": 0.0207,
+      "contrast": 0.019,
+      "chroma": 0.0395,
+      "sharpness": 0.0008
+    },
+    "gradingDirection": true,
+    "musicRendered": null,
+    "speechToMusicDb": null,
+    "renderMs": 11798
+  },
+  "webpage-article": {
+    "status": "DEGRADED",
+    "renderAttempts": 1,
+    "failed": [],
+    "degraded": [
+      "hookStartAligned",
+      "subtitleFontValid",
+      "subtitleSourceGraphicCollisionSafe",
+      "finalVisualCohesionPass"
+    ],
+    "repairs": [],
+    "rawDuration": 14.9,
+    "editedDuration": 13.76,
+    "leadInRemoved": true,
+    "deadAirAtEndMs": 280,
+    "layouts": [
+      "FIT"
+    ],
+    "shotClasses": [
+      "FULL_FRAME_INFORMATION"
+    ],
+    "shotReframes": 0,
+    "hookRendered": true,
+    "hookInsideSafeZone": true,
+    "hookFontSize": 92,
+    "hookLines": 2,
+    "subtitleRendered": 1,
+    "animationVisible": 1,
+    "highlightVisible": 1,
+    "syncMeasurement": "AUDIO_ONSET",
+    "syncAverageMs": 10,
+    "syncResidualMs": -10,
+    "whisperErrorMs": 3.3,
+    "subjectSafety": null,
+    "twoPersonPreserved": null,
+    "informationPreserved": 1,
+    "zoomCount": 0,
+    "zoomVisible": [],
+    "backgroundApplied": true,
+    "preset": "SOURCE_ALREADY_GRADED",
+    "gradingApplied": true,
+    "exposure": 0,
+    "gradingDelta": {
+      "brightness": -0.0155,
+      "contrast": 0.0024,
+      "chroma": 0.0048,
+      "sharpness": 0.0013
+    },
+    "gradingDirection": true,
+    "musicRendered": null,
+    "speechToMusicDb": null,
+    "renderMs": 16495
+  },
+  "chart-presentation": {
+    "status": "DEGRADED",
+    "renderAttempts": 1,
+    "failed": [],
+    "degraded": [
+      "hookStartAligned",
+      "subtitleFontValid"
+    ],
+    "repairs": [],
+    "rawDuration": 14.9,
+    "editedDuration": 13.76,
+    "leadInRemoved": true,
+    "deadAirAtEndMs": 280,
+    "layouts": [
+      "FIT"
+    ],
+    "shotClasses": [
+      "FULL_FRAME_INFORMATION"
+    ],
+    "shotReframes": 0,
+    "hookRendered": true,
+    "hookInsideSafeZone": true,
+    "hookFontSize": 92,
+    "hookLines": 2,
+    "subtitleRendered": 1,
+    "animationVisible": 1,
+    "highlightVisible": 1,
+    "syncMeasurement": "AUDIO_ONSET",
+    "syncAverageMs": 10,
+    "syncResidualMs": -10,
+    "whisperErrorMs": 3.3,
+    "subjectSafety": null,
+    "twoPersonPreserved": null,
+    "informationPreserved": 1,
+    "zoomCount": 0,
+    "zoomVisible": [],
+    "backgroundApplied": true,
+    "preset": "SOURCE_ALREADY_GRADED",
+    "gradingApplied": true,
+    "exposure": 0,
+    "gradingDelta": {
+      "brightness": -0.0083,
+      "contrast": -0.0001,
+      "chroma": 0.0003,
+      "sharpness": 0.0007
+    },
+    "gradingDirection": true,
+    "musicRendered": null,
+    "speechToMusicDb": null,
+    "renderMs": 17326
+  },
+  "poor-lighting": {
+    "status": "DEGRADED",
+    "renderAttempts": 1,
+    "failed": [],
+    "degraded": [
+      "hookStartAligned",
+      "subtitleFontValid"
+    ],
+    "repairs": [],
+    "rawDuration": 14.9,
+    "editedDuration": 13.76,
+    "leadInRemoved": true,
+    "deadAirAtEndMs": 280,
+    "layouts": [
+      "FILL"
+    ],
+    "shotClasses": [
+      "SINGLE_SPEAKER"
+    ],
+    "shotReframes": 0,
+    "hookRendered": true,
+    "hookInsideSafeZone": true,
+    "hookFontSize": 92,
+    "hookLines": 2,
+    "subtitleRendered": 1,
+    "animationVisible": 1,
+    "highlightVisible": 1,
+    "syncMeasurement": "AUDIO_ONSET",
+    "syncAverageMs": 10,
+    "syncResidualMs": -10,
+    "whisperErrorMs": 3.3,
+    "subjectSafety": 1,
+    "twoPersonPreserved": null,
+    "informationPreserved": null,
+    "zoomCount": 1,
+    "zoomVisible": [
+      true
+    ],
+    "backgroundApplied": true,
+    "preset": "CLEAN_SOCIAL",
+    "gradingApplied": true,
+    "exposure": 0.05,
+    "gradingDelta": {
+      "brightness": 0.012,
+      "contrast": -0.0003,
+      "chroma": 0.0043,
+      "sharpness": 0.0006
+    },
+    "gradingDirection": true,
+    "musicRendered": null,
+    "speechToMusicDb": null,
+    "renderMs": 10995
+  },
+  "already-graded": {
+    "status": "DEGRADED",
+    "renderAttempts": 1,
+    "failed": [],
+    "degraded": [
+      "hookStartAligned",
+      "subtitleFontValid"
+    ],
+    "repairs": [],
+    "rawDuration": 14.9,
+    "editedDuration": 13.76,
+    "leadInRemoved": true,
+    "deadAirAtEndMs": 280,
+    "layouts": [
+      "FILL"
+    ],
+    "shotClasses": [
+      "OTHER"
+    ],
+    "shotReframes": 0,
+    "hookRendered": true,
+    "hookInsideSafeZone": true,
+    "hookFontSize": 92,
+    "hookLines": 2,
+    "subtitleRendered": 1,
+    "animationVisible": 1,
+    "highlightVisible": 1,
+    "syncMeasurement": "AUDIO_ONSET",
+    "syncAverageMs": 10,
+    "syncResidualMs": -10,
+    "whisperErrorMs": 3.3,
+    "subjectSafety": null,
+    "twoPersonPreserved": null,
+    "informationPreserved": null,
+    "zoomCount": 0,
+    "zoomVisible": [],
+    "backgroundApplied": true,
+    "preset": "SOURCE_ALREADY_GRADED",
+    "gradingApplied": true,
+    "exposure": 0,
+    "gradingDelta": {
+      "brightness": -0.0034,
+      "contrast": -0.0047,
+      "chroma": 0.0236,
+      "sharpness": -0.0002
+    },
+    "gradingDirection": true,
+    "musicRendered": null,
+    "speechToMusicDb": null,
+    "renderMs": 10884
+  },
+  "subtitle-timing-whisper-early": {
+    "status": "DEGRADED",
+    "renderAttempts": 1,
+    "failed": [],
+    "degraded": [
+      "hookStartAligned",
+      "subtitleFontValid"
+    ],
+    "repairs": [],
+    "rawDuration": 16.58,
+    "editedDuration": 13.76,
+    "leadInRemoved": true,
+    "deadAirAtEndMs": 280,
+    "layouts": [
+      "FILL"
+    ],
+    "shotClasses": [
+      "SINGLE_SPEAKER"
+    ],
+    "shotReframes": 0,
+    "hookRendered": true,
+    "hookInsideSafeZone": true,
+    "hookFontSize": 92,
+    "hookLines": 2,
+    "subtitleRendered": 1,
+    "animationVisible": 1,
+    "highlightVisible": 1,
+    "syncMeasurement": "AUDIO_ONSET",
+    "syncAverageMs": 9.5,
+    "syncResidualMs": 0,
+    "whisperErrorMs": 116.7,
+    "subjectSafety": 1,
+    "twoPersonPreserved": null,
+    "informationPreserved": null,
+    "zoomCount": 1,
+    "zoomVisible": [
+      true
+    ],
+    "backgroundApplied": true,
+    "preset": "CLEAN_SOCIAL",
+    "gradingApplied": true,
+    "exposure": 0.05,
+    "gradingDelta": {
+      "brightness": 0.0206,
+      "contrast": 0.0193,
+      "chroma": 0.0371,
+      "sharpness": 0.0016
+    },
+    "gradingDirection": true,
+    "musicRendered": null,
+    "speechToMusicDb": null,
+    "renderMs": 11631
+  },
+  "strong-opening-dead-air-ending": {
+    "status": "DEGRADED",
+    "renderAttempts": 1,
+    "failed": [],
+    "degraded": [
+      "hookStartAligned",
+      "subtitleFontValid"
+    ],
+    "repairs": [],
+    "rawDuration": 12.56,
+    "editedDuration": 10.04,
+    "leadInRemoved": false,
+    "deadAirAtEndMs": 280,
+    "layouts": [
+      "FILL"
+    ],
+    "shotClasses": [
+      "SINGLE_SPEAKER"
+    ],
+    "shotReframes": 0,
+    "hookRendered": true,
+    "hookInsideSafeZone": true,
+    "hookFontSize": 92,
+    "hookLines": 2,
+    "subtitleRendered": 1,
+    "animationVisible": 1,
+    "highlightVisible": 1,
+    "syncMeasurement": "AUDIO_ONSET",
+    "syncAverageMs": 12.5,
+    "syncResidualMs": 20,
+    "whisperErrorMs": 5.6,
+    "subjectSafety": 1,
+    "twoPersonPreserved": null,
+    "informationPreserved": null,
+    "zoomCount": 2,
+    "zoomVisible": [
+      true,
+      true
+    ],
+    "backgroundApplied": true,
+    "preset": "CLEAN_SOCIAL",
+    "gradingApplied": true,
+    "exposure": 0.05,
+    "gradingDelta": {
+      "brightness": 0.0208,
+      "contrast": 0.0192,
+      "chroma": 0.0367,
+      "sharpness": 0.0015
+    },
+    "gradingDirection": true,
+    "musicRendered": null,
+    "speechToMusicDb": null,
+    "renderMs": 8772
+  }
+}

@@ -1,0 +1,47 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 225 44% 5%;
+    --foreground: 210 40% 98%;
+    --card: 221 42% 11%;
+    --card-foreground: 210 40% 98%;
+    --primary: 258 90% 66%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 222 35% 15%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 222 35% 15%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 220 37% 13%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 20% 23%;
+    --input: 220 20% 23%;
+    --ring: 258 90% 66%;
+    --radius: 1rem;
+  }
+  * { @apply border-border; }
+  html { scroll-behavior: smooth; }
+  body { @apply bg-background text-foreground antialiased; font-family: Arial, Helvetica, sans-serif; }
+  ::selection { background: #8b5cf666; color: #fff; }
+}
+
+@layer components {
+  .page-enter { animation: page-enter .35s ease-out both; }
+  .surface { background: #0d111c; border: 1px solid rgba(255,255,255,.08); }
+  .eyebrow { @apply text-xs font-semibold uppercase tracking-[.18em] text-violet-400; }
+  .section-title { @apply text-xl font-semibold tracking-tight text-slate-50; }
+  .soft-panel { @apply rounded-2xl border border-white/[.08] bg-[#111827]; }
+  .empty-state { @apply flex flex-col items-center justify-center rounded-2xl border border-dashed border-white/10 bg-white/[.02] px-6 py-12 text-center; }
+  .skeleton { @apply animate-pulse rounded-lg bg-white/[.07]; }
+}
+
+@keyframes page-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}

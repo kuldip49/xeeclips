@@ -1,0 +1,2 @@
+ALTER TABLE "ClipCandidate"
+  ADD COLUMN "hooks" JSONB NOT NULL DEFAULT '[]'::JSONB;

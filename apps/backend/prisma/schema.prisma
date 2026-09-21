@@ -1,0 +1,430 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  videos      Video[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Video {
+  id               String                 @id @default(uuid())
+  projectId        String
+  project          Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  originalName     String
+  objectKey        String                 @unique
+  bucket           String
+  mimeType         String
+  sizeBytes        BigInt
+  duration         Float?
+  fps              Float?
+  width            Int?
+  height           Int?
+  codec            String?
+  bitrate          BigInt?
+  hasVideo         Boolean?
+  hasAudio         Boolean?
+  audioCodec       String?
+  videoStreamIndex Int?
+  audioStreamIndex Int?
+  formatName       String?
+  targetPlatform   TargetPlatform?
+  audioObjectKey   String?
+  audioBucket      String?
+  processingJobs   ProcessingJob[]
+  processingStages VideoProcessingStage[]
+  transcript       Transcript?
+  chunks           TranscriptChunk[]
+  understanding    VideoUnderstanding?
+  clipCandidates   ClipCandidate[]
+  generatedClips   GeneratedClip[]
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+
+  @@index([projectId])
+}
+
+enum ProcessingJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum AiProcessingMode {
+  ONLINE
+  OFFLINE
+  FALLBACK_ONLY
+}
+
+enum ProcessingType {
+  NORMAL_CLIPS
+  EDITED_CLIPS
+}
+
+enum TargetPlatform {
+  INSTAGRAM_REELS
+  YOUTUBE_SHORTS
+  TIKTOK
+}
+
+enum OutputStyle {
+  NORMAL
+  AI_EDITED
+}
+
+enum ClipRenderStatus {
+  IDLE
+  QUEUED
+  RENDERING
+  COMPLETED
+  FAILED
+}
+
+enum ProcessingStage {
+  UPLOADED
+  INSPECT_MEDIA
+  EXTRACT_AUDIO
+  TRANSCRIBE
+  BUILD_CHUNKS
+  MULTIMODAL_UNDERSTANDING
+  WHOLE_VIDEO_UNDERSTANDING
+  ANALYZE_CHUNKS
+  EVIDENCE_FUSION
+  CLIP_UNDERSTANDING
+  GENERATE_CLIP_CANDIDATES
+  CONTENT_GENERATION
+  CRITIC_VALIDATION
+  VISUAL_ANALYSIS
+  COMPLETED
+  FAILED
+}
+
+enum ProcessingStageStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+model VideoProcessingStage {
+  id          String                @id @default(uuid())
+  videoId     String
+  video       Video                 @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  stage       ProcessingStage
+  status      ProcessingStageStatus @default(PENDING)
+  startedAt   DateTime?
+  completedAt DateTime?
+  error       String?
+  progress    Int                   @default(0)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  @@unique([videoId, stage])
+}
+
+model ProcessingJob {
+  id          String              @id @default(uuid())
+  videoId     String
+  video       Video               @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  status      ProcessingJobStatus @default(PENDING)
+  aiMode      AiProcessingMode    @default(FALLBACK_ONLY)
+  processingType ProcessingType   @default(NORMAL_CLIPS)
+  outputAspectRatio String?
+  // Post-analysis clip creation request (null until the user asks for clips).
+  outputStyle          OutputStyle?
+  requestedClipCount   Int?
+  maxClipCount         Int?
+  selectedCandidateIds String[]          @default([])
+  clipRenderStatus     ClipRenderStatus?
+  clipRenderError      String?
+  clipRequestedAt      DateTime?
+  clipRenderStartedAt  DateTime?
+  progress    Int                 @default(0)
+  error       String?
+  errorCode   String?
+  retryable   Boolean             @default(true)
+  telemetry   Json                @default("{}")
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([videoId])
+  @@index([status])
+}
+
+model Transcript {
+  id                  String              @id @default(uuid())
+  videoId             String              @unique
+  video               Video               @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  text                String
+  language            String?
+  languageProbability Float?
+  duration            Float?
+  segments            TranscriptSegment[]
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+}
+
+model TranscriptSegment {
+  id           String     @id @default(uuid())
+  transcriptId String
+  transcript   Transcript @relation(fields: [transcriptId], references: [id], onDelete: Cascade)
+  position     Int
+  start        Float
+  end          Float
+  text         String
+  words        Json       @default("[]")
+  confidence   Float?
+  speaker      String?
+  createdAt    DateTime   @default(now())
+
+  @@unique([transcriptId, position])
+  @@index([transcriptId])
+}
+
+model TranscriptChunk {
+  id             String          @id @default(uuid())
+  videoId        String
+  video          Video           @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  position       Int
+  startTime      Float
+  endTime        Float
+  text           String
+  duration       Float
+  wordCount      Int
+  analysis       ChunkAnalysis?
+  visualAnalysis VisualAnalysis?
+
+  @@unique([videoId, position])
+}
+
+model ChunkAnalysis {
+  id                    String          @id @default(uuid())
+  chunkId               String          @unique
+  chunk                 TranscriptChunk @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+  questionCount         Int
+  exclamationCount      Int
+  keywordDensity        Float
+  averageSentenceLength Float
+  speechRate            Float
+  informationDensity    Float
+  readabilityScore      Float
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+}
+
+model VideoUnderstanding {
+  id               String                      @id @default(uuid())
+  videoId          String                      @unique
+  video            Video                       @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  summary          String
+  mainTopic        String
+  contentType      String
+  targetAudience   String
+  language         String
+  topics           String[]
+  keyClaims        String[]
+  questions        String[]
+  stories          String[]
+  importantMoments Json
+  provider         String
+  model            String
+  schemaVersion    Int                         @default(1)
+  chapters         VideoUnderstandingChapter[]
+  createdAt        DateTime                    @default(now())
+  updatedAt        DateTime                    @updatedAt
+}
+
+model VideoUnderstandingChapter {
+  id              String             @id @default(uuid())
+  understandingId String
+  understanding   VideoUnderstanding @relation(fields: [understandingId], references: [id], onDelete: Cascade)
+  position        Int
+  startTime       Float
+  endTime         Float
+  title           String
+  summary         String
+  topics          String[]
+  importanceScore Float
+
+  @@unique([understandingId, position])
+  @@index([understandingId, startTime])
+}
+
+model ClipCandidate {
+  id                   String         @id @default(uuid())
+  videoId              String
+  video                Video          @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  rangeKey             String
+  startTime            Float
+  endTime              Float
+  duration             Float
+  transcriptText       String
+  titleCandidate       String
+  hookCandidate        String
+  captionCandidate     String
+  synopsis             String
+  hashtags             String[]
+  reason               String
+  hookScore            Float
+  sourceHookScore      Float          @default(0)
+  informationScore     Float
+  emotionScore         Float
+  controversyScore     Float
+  standaloneScore      Float
+  viralPotentialScore  Float
+  heuristicScore       Float
+  payoffScore          Float
+  flowScore            Float
+  retentionScore       Float
+  shareabilityScore    Float
+  contentPotential     Float          @default(0)
+  generationQuality    Float          @default(0)
+  confidence           Float          @default(0)
+  overallScore         Float
+  reject               Boolean        @default(false)
+  topic                String
+  rejectionReason      String
+  judgeSource          String
+  rank                 Int?
+  bestHook             String         @default("")
+  alternateHooks       String[]       @default([])
+  hooks                Json           @default("[]")
+  generatedHookScore   Float          @default(0)
+  selectedHookStrategy String         @default("educational/value")
+  title                String         @default("")
+  caption              String         @default("")
+  cta                  String         @default("")
+  contentType          String         @default("")
+  whySelected          String         @default("")
+  provider             String         @default("")
+  model                String         @default("")
+  promptVersion        String         @default("")
+  generationStatus     String         @default("PENDING")
+  fallbackReason       String         @default("")
+  contentFingerprint   String         @default("")
+  evidence             Json           @default("{}")
+  clipUnderstanding    Json           @default("{}")
+  criticResult         Json           @default("{}")
+  providerMetadata     Json           @default("[]")
+  creativeCandidates   Json           @default("{}")
+  generationMode       String         @default("DETERMINISTIC_FALLBACK")
+  fallbackUsed         Boolean        @default(false)
+  failureCategory      String         @default("")
+  decisionSource       String         @default("DETERMINISTIC_FALLBACK")
+  openingStrength      Float          @default(0)
+  endingStrength       Float          @default(0)
+  generatedClips       GeneratedClip[]
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@unique([videoId, rank])
+  @@unique([videoId, rangeKey])
+  @@index([videoId, viralPotentialScore])
+  @@index([videoId, overallScore])
+  @@index([videoId, contentPotential])
+  @@index([videoId, contentFingerprint])
+}
+
+model GeneratedClip {
+  id          String         @id @default(uuid())
+  videoId     String
+  video       Video          @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  candidateId String?
+  candidate   ClipCandidate? @relation(fields: [candidateId], references: [id], onDelete: SetNull)
+  rangeKey    String
+  startTime   Float
+  endTime     Float
+  duration    Float
+  bucket      String
+  objectKey   String         @unique
+  mimeType    String
+  sizeBytes   BigInt
+  width       Int
+  height      Int
+  codec       String
+  processingType ProcessingType @default(NORMAL_CLIPS)
+  aspectRatio String          @default("SOURCE")
+  editPlan    Json?
+  editTelemetry Json?
+  // Grounded identity/category/hook/caption/hashtag/subtitle packaging used by
+  // this rendered variant. Kept separate from editPlan so future A/B packaging
+  // variants do not alter frozen clip ranking or camera/edit decisions.
+  contentPackaging Json?
+  // Designed cover for the rendered clip, in the same bucket as the clip itself.
+  // Only EDITED_CLIPS renders one today, hence nullable.
+  thumbnailObjectKey String?
+  thumbnailMimeType  String?
+  thumbnailWidth     Int?
+  thumbnailHeight    Int?
+  targetPlatform TargetPlatform?
+  // One rendered file per output variant (processingType + targetPlatform) of a source range, so
+  // Normal and AI Edited renders of the same moment coexist.
+  variantKey  String
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([videoId, rangeKey, variantKey])
+  @@index([candidateId])
+  @@index([videoId, createdAt])
+}
+
+model VisualAnalysis {
+  id                       String          @id @default(uuid())
+  chunkId                  String          @unique
+  chunk                    TranscriptChunk @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+  sampledFrameCount        Int             @default(0)
+  yoloFrameCount           Int?
+  faceFrameCount           Int?
+  ocrFrameCount            Int?
+  configFingerprint        String?
+  shotBoundaries           Json
+  sceneChangeCount         Int
+  sceneCutRate             Float           @default(0)
+  averageShotDuration      Float           @default(0)
+  visualTransitionScore    Float           @default(0)
+  averageMotion            Float
+  visualNovelty            Float           @default(0)
+  faceCount                Int
+  faceTracks               Json            @default("[]")
+  personTracks             Json            @default("[]")
+  largestFaceRatio         Float
+  facePresenceRatio        Float           @default(0)
+  averageFaceCount         Float           @default(0)
+  primaryFaceAreaRatio     Float           @default(0)
+  primaryFaceCenteredness  Float           @default(0)
+  faceStability            Float           @default(0)
+  talkingHeadLikelihood    Float           @default(0)
+  personPresenceRatio      Float           @default(0)
+  averagePersonCount       Float           @default(0)
+  objectActivity           Float           @default(0)
+  objectDiversity          Int             @default(0)
+  detectedObjectClasses    Json            @default("[]")
+  largestPersonProminence  Float           @default(0)
+  centralPersonScore       Float           @default(0)
+  detectionConfidenceMean  Float           @default(0)
+  brightness               Float
+  contrast                 Float
+  colorfulness             Float
+  sharpnessScore           Float           @default(0)
+  blackFrameRatio          Float           @default(0)
+  ocrText                  String
+  ocrConfidence            Float           @default(0)
+  textAreaRatio            Float           @default(0)
+  subtitleDetected         Boolean
+  titleCardPresence        Boolean         @default(false)
+  createdAt                DateTime        @default(now())
+  updatedAt                DateTime        @updatedAt
+}

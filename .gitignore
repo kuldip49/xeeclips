@@ -1,0 +1,62 @@
+node_modules/
+.next/
+dist/
+*.tsbuildinfo
+build/
+.turbo/
+.env
+.env.local
+.env.*.local
+.venv/
+venv/
+.uv-cache/
+.uv-python/
+Ultralytics/
+.runtime-user/
+.mplconfig/
+.paddle/
+.paddlex-cache/
+.cache/
+.visual-models/
+__pycache__/
+*.pyc
+tmp/
+temp/
+storage/
+uploads/
+clips/
+*.log
+.DS_Store
+Thumbs.db
+models/
+
+# Local QA tooling and generated previews
+.media-qa-tools/
+.real-qa-preview/
+
+# Generated backend AI mode test builds
+apps/backend/dist-ai-mode-test/
+apps/backend/dist-ai-mode-test2/
+apps/backend/dist-ai-mode-test3/
+apps/backend/dist-ai-mode-test4/
+
+# Curated music: the folder layout and README are tracked, the audio you drop in
+# (and the manifest scanned from it) is yours and stays local.
+apps/backend/assets/music/**/*.mp3
+apps/backend/assets/music/**/*.m4a
+apps/backend/assets/music/**/*.wav
+apps/backend/assets/music/**/*.aac
+apps/backend/assets/music/**/*.ogg
+apps/backend/assets/music/**/*.flac
+apps/backend/assets/music/curated.json
+# Generated beds (scripts/generate-music-library.cjs), rebuilt on every image build
+apps/backend/assets/music-generated/
+
+# Local sound-design assets: the folder layout and README are tracked, the audio
+# you drop in (and the sfx.json that refines it) is yours and stays local.
+apps/backend/assets/sfx/**/*.wav
+apps/backend/assets/sfx/**/*.mp3
+apps/backend/assets/sfx/**/*.m4a
+apps/backend/assets/sfx/**/*.ogg
+apps/backend/assets/sfx/**/*.flac
+apps/backend/assets/sfx/sfx.json

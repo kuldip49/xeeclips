@@ -1,0 +1,19 @@
+{
+  "name": "ai-content-platform",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Personal AI-powered short-form content assistant monorepo.",
+  "workspaces": [
+    "apps/frontend",
+    "apps/backend",
+    "packages/shared"
+  ],
+  "scripts": {
+    "dev": "docker compose up --build",
+    "dev:frontend": "npm --workspace apps/frontend run dev",
+    "dev:backend": "npm --workspace apps/backend run start:dev",
+    "test:editing-media": "npm --workspace apps/backend run test:editing-media",
+    "build": "npm --workspaces run build",
+    "lint": "npm --workspaces run lint"
+  }
+}
