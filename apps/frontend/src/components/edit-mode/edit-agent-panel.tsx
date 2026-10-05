@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, Ban, Check, CircleHelp, CornerDownLeft, Crosshair, LoaderCircle,
+import { AlertTriangle, ArrowUp, Ban, Check, CircleHelp, CornerDownLeft, Crosshair, LoaderCircle,
   ShieldCheck, Sparkles, X } from 'lucide-react';
 import { getEditAgent, getEditChatThread, runEditAgent, setEditAgentAutonomy } from '@/lib/edit-mode-api';
 import { contextLine } from '@/lib/edit-mode-chat';
@@ -38,7 +38,9 @@ const STATUS: Record<AgentLedgerEntry['status'], { label: string; tone: string }
 };
 
 export function EditAgentPanel({ projectId, revision, hasSource, disabled, selectedElementId,
-  selected, selectedTimeRange, playheadSec, onEdited, onError }: {
+  selected, selectedTimeRange, playheadSec, onEdited, onError, layout = 'panel' }: {
+  /** `sheet`: the phone drawer - a scrolling thread with the composer pinned at the bottom. */
+  layout?: 'panel' | 'sheet';
   projectId: string;
   revision: number;
   hasSource: boolean;
@@ -59,6 +61,7 @@ export function EditAgentPanel({ projectId, revision, hasSource, disabled, selec
   const [guards, setGuards] = useState<string[]>([]);
   const [aiNote, setAiNote] = useState('');
   const scroller = useRef<HTMLDivElement>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -106,6 +109,91 @@ export function EditAgentPanel({ projectId, revision, hasSource, disabled, selec
 
   const idle = !busy && !disabled && hasSource;
   const held = run?.ledger.filter((entry) => entry.status === 'NEEDS_CONFIRMATION') ?? [];
+
+  if (layout === 'sheet') {
+    // The keyboard opening shrinks the drawer; keep the newest message in view above the input.
+    const revealLatest = () => window.setTimeout(() =>
+      scroller.current?.scrollTo({ top: scroller.current.scrollHeight }), 280);
+    const grow = (node: HTMLTextAreaElement) => {
+      node.style.height = 'auto';
+      node.style.height = `${Math.min(128, node.scrollHeight)}px`;
+    };
+    return <section data-testid='agent-panel' className='flex h-full min-h-0 min-w-0 flex-col'>
+      <div ref={scroller} className='min-h-0 flex-1 overflow-y-auto overscroll-contain'>
+        <div className='grid content-start gap-3 pb-3'>
+          <div className='flex items-center gap-2'>
+            <Sparkles size={16} className='shrink-0 text-violet-300' />
+            <select aria-label='AI autonomy' value={autonomy === 'AI_AUTONOMOUS' ? 'AI_AUTONOMOUS' : 'AI_ASSISTED'}
+              onChange={(event) => changeAutonomy(event.target.value as AgentAutonomy)}
+              className='h-10 min-w-0 flex-1 rounded-xl border border-white/10 bg-slate-950/60 px-3 text-sm text-slate-200'>
+              <option value='AI_ASSISTED'>Ask before major changes</option>
+              <option value='AI_AUTONOMOUS'>Edit automatically</option>
+            </select>
+          </div>
+          {aiNote && <p data-testid='agent-ai-note' className='flex items-start gap-2 rounded-xl border border-amber-300/20 bg-amber-400/5 px-3 py-2 text-xs leading-5 text-amber-100'>
+            <AlertTriangle size={14} className='mt-0.5 shrink-0' />{aiNote}</p>}
+          {!messages.length && <p className='text-sm leading-6 text-slate-400'>
+            Tell me what to change in any words - English, Hindi or Hinglish. I edit this clip directly,
+            check the result, and ask before removing anything.</p>}
+          {messages.slice(-30).map((message) => <p key={message.id} className={message.role === 'USER'
+            ? 'ml-8 break-words rounded-2xl rounded-br-md bg-violet-500/20 px-3.5 py-2.5 text-sm leading-6 text-slate-50'
+            : 'mr-6 whitespace-pre-line break-words rounded-2xl rounded-bl-md border border-white/10 bg-white/[.03] px-3.5 py-2.5 text-sm leading-6 text-slate-200'}>
+            {message.text}</p>)}
+          {busy && <p className='flex items-center gap-2 text-sm text-slate-400'>
+            <LoaderCircle size={15} className='animate-spin' />Editing and checking…</p>}
+          {run && <Ledger run={run} />}
+          {!!held.length && <div className='grid grid-cols-[1fr_auto] gap-2'>
+            <button type='button' disabled={!idle} onClick={() => void send('yes, do it')}
+              className='flex h-11 items-center justify-center gap-1.5 rounded-xl bg-amber-300 px-3 text-sm font-bold text-slate-950 disabled:opacity-40'>
+              <Check size={15} />Yes, do it ({held.length})</button>
+            <button type='button' disabled={!idle} onClick={() => setRun({ ...run!, ledger: run!.ledger.map((entry) =>
+              entry.status === 'NEEDS_CONFIRMATION' ? { ...entry, status: 'SKIPPED', detail: 'Skipped by you.' } : entry) })}
+              className='flex h-11 items-center justify-center gap-1.5 rounded-xl border border-white/10 px-4 text-sm font-semibold text-slate-300 disabled:opacity-40'>
+              <X size={15} />Skip</button>
+          </div>}
+          {!messages.length && <div className='flex flex-wrap gap-2'>
+            {SUGGESTIONS.map((suggestion) => <button key={suggestion} type='button' disabled={!idle}
+              onClick={() => { setDraft(suggestion); composer.current?.focus(); }}
+              className='min-h-[40px] rounded-full border border-white/10 px-3.5 text-sm text-slate-300 disabled:opacity-40'>
+              {suggestion}</button>)}
+          </div>}
+          <details className='group rounded-xl border border-white/[.07] text-sm'>
+            <summary className='flex min-h-[44px] cursor-pointer list-none items-center gap-2 px-3 text-slate-300 [&::-webkit-details-marker]:hidden'>
+              <ShieldCheck size={15} className='shrink-0 text-emerald-300/80' />Rules for the AI
+              {guards.length ? <span className='rounded-full bg-emerald-400/15 px-2 text-xs text-emerald-200'>{guards.length}</span> : null}</summary>
+            <div className='flex flex-wrap gap-2 px-3 pb-3' role='group' aria-label='Rules for the AI'>
+              {GUARDS.map((guard) => { const on = guards.includes(guard.type); return <button key={guard.type}
+                type='button' aria-pressed={on}
+                onClick={() => setGuards((current) => on ? current.filter((item) => item !== guard.type)
+                  : [...current, guard.type])}
+                className={`flex min-h-[38px] items-center gap-1.5 rounded-full border px-3 text-xs ${on
+                  ? 'border-emerald-300/40 bg-emerald-400/10 text-emerald-100' : 'border-white/10 text-slate-400'}`}>
+                <ShieldCheck size={12} />{guard.label}</button>; })}
+            </div>
+          </details>
+          <p data-testid='chat-context' className='flex items-start gap-1.5 text-xs text-slate-500'>
+            <Crosshair size={13} className='mt-0.5 shrink-0 text-slate-600' />
+            <span className='min-w-0 break-words'>AI sees: {contextLine({ selected, range: selectedTimeRange, playheadSec })}</span>
+          </p>
+        </div>
+      </div>
+      <div className='shrink-0 border-t border-white/[.07] pt-3 pb-[max(.5rem,var(--safe-bottom))]'>
+        <div className='flex items-end gap-2'>
+          <textarea ref={composer} value={draft} rows={1} disabled={!idle} aria-label='Tell the AI editor what to change'
+            enterKeyHint='send'
+            onChange={(event) => { setDraft(event.target.value); grow(event.currentTarget); }}
+            onFocus={revealLatest}
+            onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); } }}
+            placeholder={hasSource ? 'Tell the AI what to change…' : 'Attach a source video first'}
+            className='max-h-32 min-h-[48px] min-w-0 flex-1 resize-none rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-base leading-6 text-slate-100 placeholder:text-slate-500 focus:border-violet-300/50 focus:outline-none disabled:opacity-40' />
+          <button type='button' disabled={!idle || !draft.trim()} onClick={() => { void send(); if (composer.current) composer.current.style.height = 'auto'; }}
+            aria-label='Edit with AI'
+            className='grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-violet-500 text-white transition disabled:cursor-not-allowed disabled:opacity-40'>
+            {busy ? <LoaderCircle size={18} className='animate-spin' /> : <ArrowUp size={20} />}</button>
+        </div>
+      </div>
+    </section>;
+  }
 
   return <section data-testid='agent-panel'
     className='grid content-start gap-3 rounded-2xl border border-white/10 bg-white/5 p-4'>

@@ -3,9 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { isAutomaticLook } from '@/lib/automatic-looks';
 import { useRouter } from 'next/navigation';
-import { Bot, Download, Loader2, Minus, Pencil, Plus, Sparkles } from 'lucide-react';
+import { Bot, ChevronDown, Download, Expand, Loader2, Minus, Pencil, Plus, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GenerationSetup, type GenerationChoices } from '@/components/generation/generation-setup';
+import { ClipPlayerSheet, LazyVideo } from '@/components/generation/lazy-video';
+import { StageSteps, stageFromAnalysisLabel } from '@/components/generation/stage-steps';
+import { clipDuration } from '@/lib/format';
+import { cn } from '@/lib/utils';
 import {
   createClips,
   getPublicApiBaseUrl,
@@ -42,7 +46,7 @@ function CopyButton({ label, value }: { label: string; value: string }) {
       setCopied(false);
     }
   }
-  return <Button type='button' variant='ghost' size='sm' className='h-7 px-2 text-xs' disabled={!value}
+  return <Button type='button' variant='ghost' size='sm' className='h-9 px-3 text-xs coarse:h-10' disabled={!value}
     onClick={() => void copy()}>{copied ? 'Copied' : label}</Button>;
 }
 
@@ -99,7 +103,7 @@ const A2_STAGE: Record<string, string> = {
 function Automatic2Pending({ clip }: { clip: ClipCard }) {
   const stage = A2_STAGE[clip.style?.status ?? ''] ?? 'Queued for Automatic 2…';
   return <div data-testid='automatic-2-pending' role='status' aria-label={`Clip ${clip.position}: ${stage}`}
-    className='relative mx-auto aspect-[9/16] max-h-[560px] w-full overflow-hidden rounded-xl bg-black'
+    className='relative mx-auto aspect-[9/16] max-h-[72svh] w-full max-w-[calc(72svh*9/16)] overflow-hidden rounded-xl bg-black md:max-h-[560px] md:max-w-[315px]'
     style={{ containerType: 'inline-size' }}>
     <div className='absolute flex items-center justify-center text-center' style={{
       left: `${A2_HOOK.left * 100}%`, top: `${A2_HOOK.top * 100}%`,
@@ -124,6 +128,8 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
   const [opening, setOpening] = useState<'EDIT' | 'AI' | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [retryingStyle, setRetryingStyle] = useState(false);
+  const [playerOpen, setPlayerOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const styled = STYLE_READY_STATUSES.has(clip.style?.status ?? '') &&
     clip.style?.playbackUrl ? clip.style.playbackUrl : null;
   const requiresCanonicalStyle = clip.templateId === 'AUTOMATIC_2';
@@ -137,6 +143,10 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
   const vertical = styled ? true : clip.height > clip.width;
   const paragraphs = clip.synopsis.split(/\n\s*\n/u).map((part) => part.trim()).filter(Boolean);
   const styleBusy = ['STYLE_APPLYING', 'STYLE_READY', 'STYLING', 'RENDERING'].includes(clip.style?.status ?? '');
+  const playable = !styleFailed && !styleBlocked;
+  const status = styleFailed ? { label: 'Style failed', tone: 'border-amber-400/30 bg-amber-400/10 text-amber-200' }
+    : styleBlocked || styleBusy ? { label: 'Processing', tone: 'border-violet-400/30 bg-violet-500/10 text-violet-200' }
+      : { label: 'Ready', tone: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200' };
   async function open(target: 'EDIT' | 'AI') {
     if (!clip.isEditable || opening) return;
     setOpening(target);
@@ -149,63 +159,75 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
       setOpening(null);
     }
   }
-  return <article data-testid='clip-result' className='flex min-w-0 flex-col overflow-hidden rounded-2xl border border-white/[.08] bg-[#111827]'>
+  const action = 'h-11 w-full rounded-xl text-sm md:h-10';
+  return <article data-testid='clip-result' className='flex min-w-0 flex-col overflow-hidden rounded-[20px] border border-white/[.08] bg-[#111827]'>
     <div className='bg-[#090c15] p-2'>
       {styleFailed
-        ? <div className='mx-auto grid aspect-[9/16] max-h-[560px] w-full place-items-center rounded-xl bg-black px-6 text-center text-sm text-slate-400'>
+        ? <div className='mx-auto grid aspect-[9/16] max-h-[72svh] w-full max-w-[calc(72svh*9/16)] place-items-center rounded-xl bg-black px-6 text-center text-sm text-slate-400 md:max-h-[560px] md:max-w-[315px]'>
           Automatic 2 styling failed. The Automatic 1 base is not being substituted.
         </div>
-        : <div className='relative mx-auto w-full'>
-          {styleBlocked ? <Automatic2Pending clip={clip} /> : <video key={src} className={`mx-auto w-full rounded-xl bg-black object-contain ${vertical ? 'aspect-[9/16] max-h-[560px]' : 'aspect-video'}`}
-            controls preload={poster ? 'none' : 'metadata'} poster={poster} src={src} aria-label={`Preview clip ${clip.position}`} />}
-        </div>}
+        : styleBlocked ? <Automatic2Pending clip={clip} />
+          : <LazyVideo src={src} poster={poster} vertical={vertical} label={`Preview clip ${clip.position}`} />}
     </div>
     <div className='flex flex-1 flex-col gap-4 p-4'>
-      <div className='flex flex-wrap items-center justify-between gap-2'>
-        <p className='text-xs font-semibold uppercase tracking-wider text-slate-500'>Clip {clip.position}</p>
-        <div className='flex flex-wrap items-center gap-1.5'>
-          <Button type='button' size='sm' variant='outline' disabled={!clip.isEditable || !!opening}
-            onClick={() => void open('EDIT')}>
-            {opening === 'EDIT' ? <Loader2 className='animate-spin' size={14} /> : <Pencil size={14} />}
-            {opening === 'EDIT' ? 'Opening…' : 'Edit'}
-          </Button>
-          <Button type='button' size='sm' variant='outline' disabled={!clip.isEditable || !!opening}
-            onClick={() => void open('AI')}>
-            {opening === 'AI' ? <Loader2 className='animate-spin' size={14} /> : <Bot size={14} />}Ask AI
-          </Button>
-          {styleBlocked ? <Button type='button' size='sm' variant='outline' disabled><Download size={14} />Export</Button>
-            : <Button asChild size='sm' variant='outline' aria-disabled={styleBusy}>
-              <a href={src} download aria-label={`Export clip ${clip.position}`}><Download size={14} />Export</a>
-            </Button>}
-        </div>
+      <div className='flex min-w-0 items-center gap-2'>
+        <p className='text-xs font-semibold uppercase tracking-wider text-slate-400'>Clip {clip.position}</p>
+        {clip.durationSec ? <span className='text-xs tabular-nums text-slate-500'>· {clipDuration(clip.durationSec)}</span> : null}
+        <span className={cn('rounded-full border px-2 py-0.5 text-[11px] font-medium', status.tone)}>{status.label}</span>
+        <Button type='button' size='icon' variant='ghost' className='ml-auto h-10 w-10 shrink-0 rounded-xl text-slate-300'
+          disabled={!playable} aria-label={`Open clip ${clip.position} full screen`} onClick={() => setPlayerOpen(true)}>
+          <Expand size={17} aria-hidden /></Button>
       </div>
-      {clip.style && !STYLE_READY_STATUSES.has(clip.style.status) ? <div className='flex items-center gap-2'>
+      <div className='grid grid-cols-2 gap-2'>
+        <Button type='button' variant='outline' className={action} disabled={!clip.isEditable || !!opening}
+          onClick={() => void open('EDIT')}>
+          {opening === 'EDIT' ? <Loader2 className='animate-spin' size={15} /> : <Pencil size={15} />}
+          {opening === 'EDIT' ? 'Opening…' : 'Edit'}
+        </Button>
+        <Button type='button' variant='outline' className={action} disabled={!clip.isEditable || !!opening}
+          onClick={() => void open('AI')}>
+          {opening === 'AI' ? <Loader2 className='animate-spin' size={15} /> : <Bot size={15} />}Ask AI
+        </Button>
+        {styleBlocked ? <Button type='button' className={cn(action, 'col-span-2')} disabled><Download size={15} />Export</Button>
+          : <Button asChild className={cn(action, 'col-span-2')} aria-disabled={styleBusy}>
+            <a href={src} download aria-label={`Export clip ${clip.position}`}><Download size={15} />Export</a>
+          </Button>}
+      </div>
+      {clip.style && !STYLE_READY_STATUSES.has(clip.style.status) ? <div className='flex flex-wrap items-center gap-2'>
         <p role='status' className={`flex items-center gap-2 text-xs ${['FAILED', 'STYLE_FAILED'].includes(clip.style.status) ? 'text-amber-300' : 'text-slate-400'}`}>
           {styleBusy ? <Loader2 className='animate-spin' size={12} /> : null}{STYLE_STATUS[clip.style.status] ?? clip.style.status}</p>
-        {['FAILED', 'STYLE_FAILED'].includes(clip.style.status) ? <Button type='button' size='sm' variant='outline'
+        {['FAILED', 'STYLE_FAILED'].includes(clip.style.status) ? <Button type='button' size='sm' variant='outline' className='h-10'
           disabled={retryingStyle} onClick={() => { setRetryingStyle(true); setEditError(null);
             void retryGeneratedClipStyle(clip.id).then(onRetry).catch((error) =>
               setEditError(error instanceof Error ? error.message : 'Could not retry styling'))
               .finally(() => setRetryingStyle(false)); }}>
           {retryingStyle ? <Loader2 className='animate-spin' size={12} /> : null}Retry styling</Button> : null}
       </div> : null}
-      {editError ? <p className='text-xs text-red-400' role='alert'>{editError}</p> : null}
+      {editError ? <p className='break-words text-xs text-red-400 [overflow-wrap:anywhere]' role='alert'>{editError}</p> : null}
       <CardSection title='Hook' copyValue={clip.hook}>
         <p className='text-lg font-semibold leading-snug'>{clip.hook}</p>
       </CardSection>
-      <CardSection title='Synopsis' copyValue={paragraphs.join('\n\n')}>
-        <div className='space-y-2 text-sm leading-relaxed text-slate-300'>
-          {paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
-        </div>
-      </CardSection>
-      <CardSection title='Caption' copyValue={clip.caption}>
-        <p className='whitespace-pre-wrap text-sm leading-relaxed text-slate-300'>{clip.caption}</p>
-      </CardSection>
-      <CardSection title='Hashtags' copyValue={clip.hashtags.join(' ')}>
-        <p className='break-words text-sm text-violet-300'>{clip.hashtags.join(' ')}</p>
-      </CardSection>
+      {/* Phones: the long copy waits behind one tap; desktop shows it as before. */}
+      <button type='button' aria-expanded={detailsOpen} onClick={() => setDetailsOpen((value) => !value)}
+        className='flex min-h-[44px] items-center justify-between gap-2 rounded-xl border border-white/[.08] px-3 text-sm font-medium text-slate-300 md:hidden'>
+        Synopsis, caption & hashtags<ChevronDown size={16} className={cn('transition-transform', detailsOpen && 'rotate-180')} aria-hidden /></button>
+      <div className={cn('grid gap-4', !detailsOpen && 'hidden md:grid')}>
+        <CardSection title='Synopsis' copyValue={paragraphs.join('\n\n')}>
+          <div className='space-y-2 text-sm leading-relaxed text-slate-300'>
+            {paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+          </div>
+        </CardSection>
+        <CardSection title='Caption' copyValue={clip.caption}>
+          <p className='whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-300'>{clip.caption}</p>
+        </CardSection>
+        <CardSection title='Hashtags' copyValue={clip.hashtags.join(' ')}>
+          <p className='break-words text-sm text-violet-300'>{clip.hashtags.join(' ')}</p>
+        </CardSection>
+      </div>
       <p className='mt-auto border-t border-white/[.06] pt-3 text-xs text-slate-500'>AI mode used: {clip.aiModeUsed}</p>
     </div>
+    {playable ? <ClipPlayerSheet open={playerOpen} onClose={() => setPlayerOpen(false)} src={src} poster={poster}
+      title={`Clip ${clip.position}`} /> : null}
   </article>;
 }
 
@@ -344,12 +366,14 @@ export function ClipCreationPanel({ video }: { video: Video }) {
   if (!job || job.status === 'FAILED') return null;
   if (!analysisDone && autoRequest) {
     const requested = Number(autoRequest.requestedClipCount);
-    return <div className='grid gap-3 rounded-2xl border border-violet-400/15 bg-[#0d111c] p-5' data-testid='entry-progress'>
+    const label = analysisProgressLabel(video.processingStages);
+    return <div className='grid gap-3 rounded-2xl border border-violet-400/15 bg-[#0b0f1a] p-4 sm:p-5' data-testid='entry-progress'>
       <p role='status' className='flex items-center gap-2 text-sm font-semibold'>
-        <Loader2 className='animate-spin text-violet-300' size={16} aria-hidden />{analysisProgressLabel(video.processingStages)}</p>
+        <Loader2 className='animate-spin text-violet-300' size={16} aria-hidden />{label}</p>
+      <StageSteps stage={stageFromAnalysisLabel(label)} styleName={autoTemplate === 'AUTOMATIC_2' ? 'Automatic 2' : null} />
       <div className='h-1.5 w-full overflow-hidden rounded-full bg-white/[.08]'><div className='h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-all duration-500'
         style={{ width: `${Math.max(3, Math.min(100, job.progress ?? 0))}%` }} /></div>
-      <p className='text-xs text-slate-400'>Then {requested} clip{requested === 1 ? '' : 's'}{autoTemplateLabel ? ` with ${autoTemplateLabel}` : ''} will be created automatically.</p>
+      <p className='text-xs leading-5 text-slate-400'>Then {requested} clip{requested === 1 ? '' : 's'}{autoTemplateLabel ? ` with ${autoTemplateLabel}` : ''} will be created automatically. You can leave this page — progress is saved.</p>
     </div>;
   }
   if (!analysisDone) {
@@ -388,7 +412,7 @@ export function ClipCreationPanel({ video }: { video: Video }) {
       : rendering ? `Rendering ${Math.min(clips.length + 1, requestedTotal)} / ${requestedTotal}...`
         : styling ? `Applying ${styleName}... ${results?.deliveredClipCount ?? 0} / ${requestedTotal} ready`
           : request?.status === 'COMPLETED' ? 'Ready' : null;
-  const setup = <div className='grid gap-6 rounded-2xl border border-violet-400/15 bg-[#0d111c] p-5'>
+  const setup = <div className='grid min-w-0 gap-6 rounded-2xl border border-violet-400/15 bg-[#0b0f1a] p-4 sm:p-5'>
       <div className='flex items-start gap-3'>
         <Sparkles className='mt-0.5 shrink-0 text-violet-300' size={20} aria-hidden />
         <div><h3 className='text-lg font-semibold'>Create clips</h3>
@@ -398,17 +422,17 @@ export function ClipCreationPanel({ video }: { video: Video }) {
         onChange={setChoices} resolution={resolution} resolving={resolving} disabled={submitting} />
       <div className='grid gap-3 border-t border-white/[.06] pt-5'>
         <p className='text-sm text-slate-300'>Maximum clips for this video: <span className='font-semibold text-white'>{max}</span></p>
-        <div className='flex flex-wrap items-center gap-4'>
+        <div className='flex items-center justify-between gap-4 sm:justify-start'>
           <span className='text-sm font-medium'>Number of clips</span>
-          <div className='flex items-center gap-2'>
-            <Button type='button' size='sm' variant='outline' aria-label='Fewer clips'
-              disabled={busy || count <= 1} onClick={() => setCount((value) => clampClipCount(value - 1, max))}><Minus size={15} /></Button>
-            <span className='w-10 text-center text-lg font-semibold tabular-nums' aria-live='polite'>{count}</span>
-            <Button type='button' size='sm' variant='outline' aria-label='More clips'
-              disabled={busy || count >= max} onClick={() => setCount((value) => clampClipCount(value + 1, max))}><Plus size={15} /></Button>
+          <div className='flex items-center gap-1.5 rounded-2xl border border-white/10 bg-[#111827] p-1'>
+            <Button type='button' size='icon' variant='ghost' className='h-11 w-11 rounded-xl sm:h-9 sm:w-9' aria-label='Fewer clips'
+              disabled={busy || count <= 1} onClick={() => setCount((value) => clampClipCount(value - 1, max))}><Minus size={17} /></Button>
+            <span className='w-9 text-center text-lg font-semibold tabular-nums' aria-live='polite'>{count}</span>
+            <Button type='button' size='icon' variant='ghost' className='h-11 w-11 rounded-xl sm:h-9 sm:w-9' aria-label='More clips'
+              disabled={busy || count >= max} onClick={() => setCount((value) => clampClipCount(value + 1, max))}><Plus size={17} /></Button>
           </div>
         </div>
-        <Button className='h-11 w-full sm:w-auto sm:justify-self-start' disabled={!canCreate}
+        <Button className='h-12 w-full rounded-2xl text-base sm:h-11 sm:w-auto sm:justify-self-start sm:rounded-xl sm:text-sm' disabled={!canCreate}
           onClick={() => void submit()}>
           {busy ? <><Loader2 className='animate-spin' size={16} />Creating clips...</>
             : `${regenerating ? 'Regenerate' : 'Create'} ${count} Clip${count === 1 ? '' : 's'}`}
@@ -418,15 +442,20 @@ export function ClipCreationPanel({ video }: { video: Video }) {
       </div>
     </div>;
   return <section className='grid min-w-0 gap-5' aria-label='Create clips'>
-    {flowLabel ? <p role='status' data-testid='entry-flow-status' className='flex items-center gap-2 rounded-xl border border-violet-400/15 bg-[#0d111c] px-4 py-3 text-sm font-semibold'>
-      {flowLabel === 'Ready' ? <Sparkles className='text-violet-300' size={16} aria-hidden />
-        : <Loader2 className='animate-spin text-violet-300' size={16} aria-hidden />}{flowLabel}</p> : null}
+    {flowLabel ? <div className='grid gap-2.5 rounded-xl border border-violet-400/15 bg-[#0b0f1a] px-4 py-3'>
+      <p role='status' data-testid='entry-flow-status' className='flex items-center gap-2 text-sm font-semibold'>
+        {flowLabel === 'Ready' ? <Sparkles className='text-violet-300' size={16} aria-hidden />
+          : <Loader2 className='animate-spin text-violet-300' size={16} aria-hidden />}{flowLabel}</p>
+      {flowLabel !== 'Ready' ? <StageSteps styleName={request?.generation?.templateId === 'AUTOMATIC_2' || autoTemplate === 'AUTOMATIC_2' ? 'Automatic 2' : null}
+        stage={flowLabel.startsWith('Finding') ? 'FINDING' : flowLabel.startsWith('Applying') ? 'STYLING' : 'CREATING'} /> : null}
+    </div> : null}
     {autoRequest?.adjustedFrom ? <p role='status' className='rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100'>
       You asked for {autoRequest.adjustedFrom} clips. This video allows up to {String(autoRequest.requestedClipCount)}, so {String(autoRequest.requestedClipCount)} are being made.</p> : null}
     {autoStatus === 'FAILED' && job?.autoGenerationError ? <p role='alert' className='rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100'>
       Clips could not start automatically: {job.autoGenerationError} Your choices are kept below.</p> : null}
-    {autoFlow ? <details className='rounded-2xl border border-white/[.08] bg-[#0d111c]'>
-      <summary className='cursor-pointer px-5 py-3 text-sm font-medium text-slate-300'>Change template or regenerate</summary>
+    {autoFlow ? <details className='group rounded-2xl border border-white/[.08] bg-[#0b0f1a]'>
+      <summary className='flex min-h-[48px] cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-slate-300 sm:px-5 [&::-webkit-details-marker]:hidden'>Change template or regenerate
+        <ChevronDown size={16} className='shrink-0 transition-transform group-open:rotate-180' aria-hidden /></summary>
       <div className='p-1'>{setup}</div>
     </details> : setup}
 

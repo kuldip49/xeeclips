@@ -33,13 +33,22 @@ const Toggle = ({ label, hint, on, mixed, onClick, disabled, children }: {
 </button>;
 
 export const EditTimelineTrackHeader = memo(function EditTimelineTrackHeader({ track, count,
-  hidden, locked, muted, disabled, onToggleHidden, onToggleLocked, onToggleMuted }: {
+  hidden, locked, muted, disabled, compact = false, onToggleHidden, onToggleLocked, onToggleMuted }: {
   track: TimelineTrack; count: number;
+  /** Phones: name only. Track hide/mute/lock stay on the desktop editor. */
+  compact?: boolean;
   hidden: TrackToggleState; locked: TrackToggleState; muted: TrackToggleState;
   disabled: boolean;
   onToggleHidden: () => void; onToggleLocked: () => void; onToggleMuted: () => void;
 }) {
   const empty = count === 0;
+  if (compact) return <div data-testid={`timeline-track-header-${track.id}`}
+    data-hidden={hidden} data-locked={locked} data-muted={muted} title={track.label}
+    className='flex items-center gap-1 border-b border-white/[.04] px-1.5 last:border-0'
+    style={{ height: `${track.heightPx}px` }}>
+    <span aria-hidden className={`h-5 w-1 shrink-0 rounded-full ${track.chip} ${empty ? 'opacity-25' : 'opacity-80'}`} />
+    <span className='min-w-0 truncate text-[10px] font-medium text-slate-300'>{track.label}</span>
+  </div>;
   return <div data-testid={`timeline-track-header-${track.id}`}
     data-hidden={hidden} data-locked={locked} data-muted={muted}
     className='flex items-center gap-1.5 border-b border-white/[.04] px-2 last:border-0'

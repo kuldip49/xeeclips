@@ -5,6 +5,7 @@ import { RAW_LOOK } from '@/lib/automatic-looks';
 import { CheckCircle2, Circle, Link2, Loader2, Upload, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StylePreview } from '@/components/generation/style-preview';
+import { MobileDisclosure } from '@/components/ui/mobile-disclosure';
 import {
   CATEGORY_LABELS, getReference, referenceFromUrl, SOURCE_LABELS, sourceFileUrl, sourcePosterUrl, STYLE_CATEGORIES, uploadReference,
   type CreativeCatalog, type CreativeResolution, type ReferenceAsset, type SavedStyle, type StyleCategory
@@ -78,17 +79,18 @@ export function GenerationSetup({ videoId, catalog, savedStyles, choices, onChan
   const intent = resolution?.interpreted.intent;
   const derived = choices.reference?.derivedStyle;
 
-  return <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px]'>
+  const advancedCount = Object.keys(choices.components).length + (choices.brief.trim() ? 1 : 0) + (choices.reference ? 1 : 0);
+  return <div className='grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_300px]'>
     <div className='grid min-w-0 content-start gap-6'>
       {/* Native radios: the whole card is the label, so clicks, Enter/Space and arrow keys all work. */}
       <fieldset className='grid gap-3' disabled={disabled}>
         <legend className='mb-2 text-sm font-medium'>Automatic template</legend>
-        <div className='grid gap-3 sm:grid-cols-3'>
+        <div className='grid gap-2 sm:grid-cols-3 sm:gap-3'>
           {looks.map((option) => {
             const selected = choices.look === option.value;
             const Indicator = selected ? CheckCircle2 : Circle;
             return <label key={option.value} data-look={option.value} data-selected={selected}
-              className={cn('block cursor-pointer rounded-xl border p-3 text-left transition-colors focus-within:ring-2 focus-within:ring-violet-400',
+              className={cn('pressable block min-h-[56px] cursor-pointer rounded-2xl border p-3 text-left transition-colors focus-within:ring-2 focus-within:ring-violet-400 sm:rounded-xl',
                 selected ? 'border-violet-400 bg-violet-500/10' : 'border-white/10 bg-[#111827] hover:border-white/25')}>
               <input type='radio' className='sr-only' name={`look-${videoId}`} value={option.value}
                 checked={selected} onChange={() => onChange({ ...choices, look: option.value })} />
@@ -100,6 +102,8 @@ export function GenerationSetup({ videoId, catalog, savedStyles, choices, onChan
         </div>
       </fieldset>
 
+      <MobileDisclosure title='Advanced options' defaultOpen={advancedCount > 0}
+        summary={advancedCount ? `${advancedCount} set` : 'styles, description, reference'}>
       <details className='group rounded-xl border border-white/10 bg-[#111827] p-4' open={Object.keys(choices.components).length > 0}>
         <summary className='cursor-pointer text-sm font-medium'>Mix individual styles
           <span className='ml-2 font-normal text-slate-500'>· overrides the look, one part at a time</span></summary>
@@ -120,7 +124,7 @@ export function GenerationSetup({ videoId, catalog, savedStyles, choices, onChan
                   else delete components[category];
                   onChange({ ...choices, components });
                 }}
-                className='h-9 rounded-lg border border-white/10 bg-[#0b0f1a] px-2 text-sm text-slate-200'>
+                className='h-11 rounded-lg border border-white/10 bg-[#0b0f1a] px-2 text-sm text-slate-200 md:h-9'>
                 <option value=''>From the look</option>
                 {(catalog?.components[category] ?? []).map((style) =>
                   <option key={style.id} value={style.id} disabled={!style.supported} title={style.note ?? style.description}>
@@ -161,7 +165,7 @@ export function GenerationSetup({ videoId, catalog, savedStyles, choices, onChan
               {derived.principles.slice(0, 5).map((line) => <li key={line}>{line}</li>)}</ul> : null}
             {derived?.notMeasured?.length ? <p className='mt-1 text-slate-500'>Not measured: {derived.notMeasured.join('; ')}</p> : null}
           </div>
-          <Button type='button' size='sm' variant='ghost' className='h-7 px-2' disabled={disabled}
+          <Button type='button' size='sm' variant='ghost' className='h-10 w-10 shrink-0 px-0' disabled={disabled}
             aria-label='Remove reference' onClick={() => onChange({ ...choices, reference: null })}><X size={14} /></Button>
         </div> : <div className='flex flex-wrap items-center gap-2'>
           <input ref={fileInput} type='file' accept='video/*' className='hidden' onChange={(event) => {
@@ -169,20 +173,21 @@ export function GenerationSetup({ videoId, catalog, savedStyles, choices, onChan
             event.target.value = '';
             if (file) void addReference(() => uploadReference(file, videoId));
           }} />
-          <Button type='button' size='sm' variant='outline' disabled={disabled || referenceBusy}
+          <Button type='button' size='sm' variant='outline' className='h-11 md:h-9' disabled={disabled || referenceBusy}
             onClick={() => fileInput.current?.click()}>
             {referenceBusy ? <Loader2 className='animate-spin' size={14} /> : <Upload size={14} />}Upload reference</Button>
           <span className='text-xs text-slate-500'>or</span>
           <input value={referenceUrl} onChange={(event) => setReferenceUrl(event.target.value)} disabled={disabled || referenceBusy}
-            placeholder='Direct video URL (.mp4)' className='h-9 min-w-0 flex-1 rounded-lg border border-white/10 bg-[#0b0f1a] px-2 text-sm' />
-          <Button type='button' size='sm' variant='outline' disabled={disabled || referenceBusy || !referenceUrl.trim()}
+            placeholder='Direct video URL (.mp4)' className='h-11 min-w-0 flex-1 basis-40 rounded-lg border border-white/10 bg-[#0b0f1a] px-2 text-sm md:h-9' />
+          <Button type='button' size='sm' variant='outline' className='h-11 md:h-9' disabled={disabled || referenceBusy || !referenceUrl.trim()}
             onClick={() => void addReference(() => referenceFromUrl(referenceUrl.trim(), videoId))}><Link2 size={14} />Add</Button>
         </div>}
-        {referenceError ? <p role='alert' className='text-xs text-red-300'>{referenceError}</p> : null}
+        {referenceError ? <p role='alert' className='break-words text-xs text-red-300'>{referenceError}</p> : null}
       </div>
+      </MobileDisclosure>
     </div>
 
-    <div className='grid content-start gap-3'>
+    <div className='grid min-w-0 content-start gap-3'>
       <StylePreview posterUrl={sourcePosterUrl(videoId)} sourceUrl={sourceFileUrl(videoId)}
         resolved={previewStyle} layout={resolution?.layout ?? null} loading={resolving} />
       {resolved?.notes.length ? <ul className='text-xs text-amber-200/80'>{resolved.notes.map((note) => <li key={note}>{note}</li>)}</ul> : null}

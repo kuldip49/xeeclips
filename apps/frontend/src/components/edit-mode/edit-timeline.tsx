@@ -33,6 +33,29 @@ const MIN_RANGE_SEC = 0.2;
 /** Below this width a block has no room for trim handles; they would cover it. */
 const MIN_HANDLE_WIDTH_PX = 18;
 const HEADER_COLUMN_PX = 152;
+/** Phones: the header column shrinks to a colour chip and a short name. */
+const COMPACT_HEADER_COLUMN_PX = 60;
+/** A finger that travels less than this between down and up is a tap. */
+const TAP_SLOP_PX = 10;
+
+/**
+ * Touch screens scroll the timeline with the same finger that taps it, so on touch a press
+ * only acts when it ends as a tap (it never fights the scroll). Mouse and pen are unchanged.
+ */
+function onTap(event: React.PointerEvent, action: () => void) {
+  const startX = event.clientX; const startY = event.clientY;
+  const finish = (pointer: PointerEvent) => {
+    window.removeEventListener('pointerup', finish);
+    window.removeEventListener('pointercancel', cancel);
+    if (Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < TAP_SLOP_PX) action();
+  };
+  const cancel = () => {
+    window.removeEventListener('pointerup', finish);
+    window.removeEventListener('pointercancel', cancel);
+  };
+  window.addEventListener('pointerup', finish);
+  window.addEventListener('pointercancel', cancel);
+}
 const RULER_HEIGHT_PX = 24;
 /** The video lane splits into a frame strip above and an audio strip below. */
 const VIDEO_WAVEFORM_PX = 14;
@@ -74,19 +97,19 @@ const TimelineBlock = memo(function TimelineBlock({ element, pxPerSecond, track,
     data-locked={locked ? 'true' : 'false'} data-selected={selected ? 'true' : 'false'}
     title={caption ? undefined : `${track.label} · ${clock(element.duration)}`}
     onPointerDown={(event) => onSelect(event, element)}
-    className={`group absolute inset-y-1 flex items-center overflow-hidden rounded-md border px-1.5 text-[10px] font-medium ${cursor} ${
+    className={`group absolute inset-y-1 flex items-center overflow-hidden rounded-md border px-1.5 text-[10px] font-medium ${cursor} ${selected ? 'touch-none ' : ''}${
       selected ? `border-white text-white ring-2 ring-cyan-300/50 ${primary ? 'bg-white/25' : 'bg-white/15'}`
         : translucent ? `${track.color} bg-transparent` : track.color
     }${isHidden(element) ? ' opacity-40' : ''}`}
     style={{ left: `${element.startTime * pxPerSecond}px`, width: `${widthPx}px` }}>
     {showHandles && <span onPointerDown={(event) => onEdge(event, element, 'left')}
       aria-label='Change start' data-testid='timeline-trim-left'
-      className='absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize rounded-l-md bg-white/25 opacity-70 group-hover:bg-cyan-300/70 group-hover:opacity-100' />}
+      className='absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize touch-none rounded-l-md bg-white/25 opacity-70 group-hover:bg-cyan-300/70 group-hover:opacity-100 coarse:w-5 coarse:bg-white/35' />}
     {locked && widthPx >= 22 && <Lock size={9} className='pointer-events-none mr-1 shrink-0 opacity-70' />}
     {widthPx >= 30 && <span className='pointer-events-none w-full truncate text-center drop-shadow-[0_1px_2px_rgba(0,0,0,.9)]'>{label}</span>}
     {showHandles && <span onPointerDown={(event) => onEdge(event, element, 'right')}
       aria-label='Change end' data-testid='timeline-trim-right'
-      className='absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize rounded-r-md bg-white/25 opacity-70 group-hover:bg-cyan-300/70 group-hover:opacity-100' />}
+      className='absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize touch-none rounded-r-md bg-white/25 opacity-70 group-hover:bg-cyan-300/70 group-hover:opacity-100 coarse:w-5 coarse:bg-white/35' />}
   </div>;
 });
 
@@ -107,7 +130,7 @@ const Ruler = memo(function Ruler({ ticks, pxPerSecond }: { ticks: number[]; pxP
 });
 
 export function EditTimeline({ elements, assets, selectedElementId, selectedIds, currentPlayheadSec,
-  sourceDuration, disabled, canUndo, canRedo, selectedRange, collapsed,
+  sourceDuration, disabled, canUndo, canRedo, selectedRange, collapsed, compact = false,
   onSelectRange, onSelect, onSelectMany, onSeek, onPreviewElements,
   onCommitTrim, onCommitTiming, onSplitAt, onDelete, onDuplicate, onMoveTo, onUndo, onRedo,
   onCommand, onToggleCollapsed }: {
@@ -115,6 +138,8 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
   selectedIds: string[]; currentPlayheadSec: number;
   sourceDuration: number; disabled: boolean; canUndo: boolean; canRedo: boolean;
   selectedRange: EditTimeRange | null; collapsed: boolean;
+  /** Phone layout: narrow header column, single-row scrolling toolbar. */
+  compact?: boolean;
   onSelectRange: (range: EditTimeRange | null) => void;
   onSelect: (id: string) => void; onSelectMany: (ids: string[]) => void;
   onSeek: (seconds: number) => void;
@@ -308,15 +333,21 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up, { once: true });
+    window.addEventListener('pointercancel', up, { once: true });
   }, [secondsAt]);
 
   /** Click empty lane space to seek, drag it to mark a range. */
   const beginRange = useCallback((event: React.PointerEvent) => {
     const anchor = secondsAt(event.clientX);
     if (anchor == null) return;
+    if (event.pointerType === 'touch') {
+      onTap(event, () => { live.current.onSeek(anchor); live.current.onSelectMany([]); });
+      return;
+    }
     live.current.onSeek(anchor);
     live.current.onSelectMany([]);
     const startX = event.clientX;
@@ -384,6 +415,14 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
       live.current.onSelect(element.id);
       return;
     }
+    if (event.pointerType === 'touch' && live.current.selectedElementId !== element.id) {
+      onTap(event, () => {
+        live.current.onSelectMany([]);
+        live.current.onSelect(element.id);
+        if (at != null) live.current.onSeek(at);
+      });
+      return;
+    }
     live.current.onSelectMany([]);
     live.current.onSelect(element.id);
     if (at != null) live.current.onSeek(at);
@@ -436,6 +475,7 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
       clearOverlay();
       if (!dragging) return;
       if (sequential) {
@@ -447,6 +487,7 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up, { once: true });
+    window.addEventListener('pointercancel', up, { once: true });
   }, [candidatesFor, clearOverlay, pushOverlay, secondsAt, snapTo]);
 
   /** VIDEO edges retrim the source; everything else resizes its timeline span. */
@@ -476,6 +517,7 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
     const up = () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
       clearOverlay();
       if (!moved) return;
       // One completed gesture, one canonical command, one history revision.
@@ -484,6 +526,7 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up, { once: true });
+    window.addEventListener('pointercancel', up, { once: true });
   }, [candidatesFor, clearOverlay, pushOverlay, secondsAt, snapTo]);
 
   const ticks = useMemo(() => rulerTicks(viewport), [viewport]);
@@ -557,7 +600,7 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
   const headerNodes = TIMELINE_TRACKS.map((track) => {
     const items = trackElements(elements, track);
     return <EditTimelineTrackHeader key={track.id} track={track} count={items.length}
-      disabled={disabled} hidden={trackHidden(items)} locked={trackLocked(items)}
+      disabled={disabled} compact={compact} hidden={trackHidden(items)} locked={trackLocked(items)}
       muted={trackMuted(items)}
       onToggleHidden={() => toggleTrack(track, 'hidden', trackHidden(items))}
       onToggleLocked={() => toggleTrack(track, 'locked', trackLocked(items))}
@@ -567,8 +610,8 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
   const editable = canEdit(selected);
   const multi = selectedIds.length > 1;
 
-  return <section className='flex h-full min-h-0 flex-col gap-1.5 px-3 py-2'>
-    <EditTimelineToolbar tool={tool} snap={snapEnabled} collapsed={collapsed}
+  return <section className={`flex h-full min-h-0 flex-col gap-1.5 ${compact ? 'px-2 py-1.5' : 'px-3 py-2'}`}>
+    <EditTimelineToolbar tool={tool} snap={snapEnabled} collapsed={collapsed} compact={compact}
       zoomPercent={Math.round(viewport.pxPerSecond / DEFAULT_PX_PER_SEC * 100)}
       playheadSec={currentPlayheadSec} durationSec={duration}
       selectedCount={Math.max(selectedIds.length, selected ? 1 : 0)}
@@ -602,7 +645,7 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
           sitting on top of its own blocks. It follows the lanes' vertical
           scroll through a transform written straight to the DOM. */}
       <div className='shrink-0 overflow-hidden border-r border-white/[.07] bg-[#0a0e18]'
-        style={{ width: `${HEADER_COLUMN_PX}px` }}>
+        style={{ width: `${compact ? COMPACT_HEADER_COLUMN_PX : HEADER_COLUMN_PX}px` }}>
         <div className='border-b border-white/[.06]' style={{ height: `${RULER_HEIGHT_PX}px` }} />
         <div ref={headerRef} className='will-change-transform'>{headerNodes}</div>
       </div>
@@ -611,7 +654,7 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
         className='relative min-h-0 flex-1 overflow-auto'>
         <div className='relative' style={{ width: `${Math.max(viewport.contentWidthPx, viewportWidth)}px` }}>
           <div onPointerDown={beginScrub} data-testid='timeline-ruler'
-            className='sticky top-0 z-30 cursor-ew-resize border-b border-white/[.06] bg-[#080b13]'
+            className='sticky top-0 z-30 cursor-ew-resize touch-none border-b border-white/[.06] bg-[#080b13]'
             style={{ height: `${RULER_HEIGHT_PX}px` }}>
             <Ruler ticks={ticks} pxPerSecond={viewport.pxPerSecond} />
             <div aria-hidden className='pointer-events-none absolute z-10 h-0 w-0 border-x-[5px] border-t-[7px] border-x-transparent border-t-cyan-300'

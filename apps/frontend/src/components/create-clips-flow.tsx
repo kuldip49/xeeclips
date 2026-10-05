@@ -1,0 +1,21 @@
+'use client';
+
+import { useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { OfflineNotice } from '@/components/offline-notice';
+import { UploadVideoForm } from '@/components/upload-video-form';
+import { createProject } from '@/lib/api';
+import { useBackendStatus } from '@/lib/use-backend-status';
+
+export function CreateClipsFlow() {
+  const router = useRouter();
+  const { offline, recheck } = useBackendStatus();
+  const create = useCallback(async (name: string) => (await createProject({ name })).id, []);
+  return <div className='grid gap-5'>
+    {offline ? <OfflineNotice onRetry={recheck} detail='Choose your video and settings now; Generate unlocks as soon as it is back.' /> : null}
+    <div className='rounded-[24px] border border-white/[.08] bg-[#0d111c] p-4 sm:p-6'>
+      <UploadVideoForm createProject={create} showHeading={false} stickyCta offline={offline}
+        onStarted={(projectId) => router.push(`/projects/${projectId}`)} />
+    </div>
+  </div>;
+}

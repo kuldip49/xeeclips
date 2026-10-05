@@ -130,6 +130,9 @@ count → generate → result cards with Preview / Edit / Ask AI / Export (`comp
 `clip-creation-panel.tsx`). Edit and Ask AI open the same canonical EditProject in `app/edit-mode/[id]`
 (`?panel=ai` opens the AI editor). Any URL placed in the DOM must use `getPublicApiBaseUrl()` (SSR's
 `SERVER_API_URL` is not browser-reachable). Browser E2E: `apps/frontend/e2e/` (`npm run test:e2e`).
+Phones/tablets use a separate shell (bottom tab bar, `/create` one-step flow, docked editor drawers
++ tool bar; see the "Mobile-first responsive frontend" section of `PROJECT_STATE.md`); keep desktop
+layouts unchanged and cover phone paths in `e2e/mobile-responsive.spec.ts`.
 
 ### AI service boundary
 

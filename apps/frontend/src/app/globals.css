@@ -22,11 +22,33 @@
     --input: 220 20% 23%;
     --ring: 258 90% 66%;
     --radius: 1rem;
+    /* Mobile shell metrics, shared by the bottom nav, sticky CTAs and sheets. */
+    --mobile-header-h: 56px;
+    --bottom-nav-h: 64px;
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    /* How far fixed/sticky content must stay above the bottom edge to clear the tab bar. */
+    --nav-offset: calc(var(--bottom-nav-h) + var(--safe-bottom));
   }
+  @media (min-width: 1024px) { :root { --nav-offset: 0px; } }
+  /* While typing, the tab bar steps aside so the keyboard, field and its button get the room. */
+  :root[data-keyboard='open'] { --nav-offset: 0px; }
   * { @apply border-border; }
-  html { scroll-behavior: smooth; }
-  body { @apply bg-background text-foreground antialiased; font-family: Arial, Helvetica, sans-serif; }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; background: #070a12; }
+  body { @apply bg-background text-foreground antialiased; font-family: Arial, Helvetica, sans-serif;
+    -webkit-tap-highlight-color: transparent; }
   ::selection { background: #8b5cf666; color: #fff; }
+  /* No 300ms double-tap delay on controls; pinch-zoom of the page itself stays available. */
+  a, button, label, summary, [role='button'], [role='tab'] { touch-action: manipulation; }
+  video { max-width: 100%; }
+  /* iOS Safari zooms the page into any focused field under 16px. Phones get 16px fields;
+     desktop keeps the compact editor typography. */
+  @media (max-width: 767px) {
+    input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+    textarea, select { font-size: max(16px, 1em) !important; }
+  }
 }
 
 @layer components {
@@ -37,6 +59,22 @@
   .soft-panel { @apply rounded-2xl border border-white/[.08] bg-[#111827]; }
   .empty-state { @apply flex flex-col items-center justify-center rounded-2xl border border-dashed border-white/10 bg-white/[.02] px-6 py-12 text-center; }
   .skeleton { @apply animate-pulse rounded-lg bg-white/[.07]; }
+  /* Content that must clear the fixed mobile bottom nav (and the home indicator). */
+  .pb-mobile-nav { padding-bottom: calc(var(--bottom-nav-h) + var(--safe-bottom) + 24px); }
+  @media (min-width: 1024px) { .pb-mobile-nav { padding-bottom: 2rem; } }
+  .pb-safe { padding-bottom: var(--safe-bottom); }
+  .pt-safe { padding-top: var(--safe-top); }
+  .px-safe { padding-left: max(var(--safe-left), 0px); padding-right: max(var(--safe-right), 0px); }
+  /* Horizontal rails (chips, tool bars) scroll without a visible bar. */
+  .scrollbar-none { scrollbar-width: none; }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+  /* A finger is ~44px; small visual handles get an invisible larger hit area on touch screens.
+     Only for elements that are already positioned (absolute/relative). */
+  @media (pointer: coarse) {
+    .touch-hit::after { content: ''; position: absolute; inset: -12px; }
+  }
+  .pressable { transition: transform .12s ease, background-color .15s ease, opacity .15s ease; }
+  .pressable:active { transform: scale(.97); }
 }
 
 @keyframes page-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }

@@ -20,7 +20,7 @@ export function EditToolRail({ active, cropDisabled = false, onSelect }: {
   onSelect: (id: EditToolId | null) => void;
 }) {
   return <nav aria-label='Editing tools'
-    className='flex w-[72px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-white/10 bg-[#0d111c] py-2'>
+    className='hidden w-[72px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-white/10 bg-[#0d111c] py-2 md:flex'>
     {EDIT_TOOLS.map((tool) => {
       const Icon = ICONS[tool.id];
       const selected = active === tool.id;

@@ -1,13 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { ScanSearch } from 'lucide-react';
+import { ScanSearch, X } from 'lucide-react';
 import {
   analyzeEditSource, deleteEditAsset, editFailureMessage, EditModeApiError, getEditHistory, getEditProject,
   importEditSource, type ManualEditCommand, redoEdit, runManualEditCommand, undoEdit,
   uploadEditAsset, uploadEditSource
 } from '@/lib/edit-mode-api';
-import { historyAvailability, timelineDuration, videoTrack } from '@/lib/edit-mode-timeline';
+import { historyAvailability, resolvePreviewPosition, timelineDuration, videoTrack } from '@/lib/edit-mode-timeline';
+import { useIsMobile } from '@/lib/use-media-query';
+import { useTypingFlag } from '@/lib/use-typing';
+import { useVisualViewport } from '@/lib/use-visual-viewport';
 import { cropInsetsFromRect, cropRectFromInsets, fitCropToAspect, inferCropPreset, setCropZoom,
   type CropAspectPreset, type CropRect } from '@/lib/edit-mode-crop';
 import { readCropInsets } from '@/lib/edit-mode-transform';
@@ -16,8 +19,13 @@ import type { ChatApplyResult, EditAsset, EditElement, EditHistory, EditPresetAp
 import type { TemplateApplyResult } from '@/lib/edit-mode-templates';
 import { EditPreview, type EditPreviewHandle } from './edit-preview';
 import { EditTimeline } from './edit-timeline';
-import { EditRightPanel, type RightTab } from './shell/edit-right-panel';
-import { EditToolPanel } from './shell/edit-tool-panel';
+import { EditAiContent, EditInspectorContent, EditRightPanel, type EditPanelContentProps,
+  type RightTab } from './shell/edit-right-panel';
+import { EditToolPanel, EditToolPanelBody, type EditToolPanelProps } from './shell/edit-tool-panel';
+import { EditMobileDrawer, EditMobileToolbar, MOBILE_PANEL_TITLES,
+  type MobilePanelId } from './shell/edit-mobile-chrome';
+import { EditExportPanel } from './edit-export-panel';
+import { EditPresetPanel } from './edit-preset-panel';
 import type { CropSession } from './shell/edit-crop-panel';
 import { EditToolRail } from './shell/edit-tool-rail';
 import { EditTopBar } from './shell/edit-top-bar';
@@ -66,6 +74,12 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
   const [activeTool, setActiveTool] = useState<EditToolId | null>('MEDIA');
   const [cropSession, setCropSession] = useState<CropSession | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  // Phones: one docked drawer at a time instead of the rail, side panels and inspector.
+  // "Ask AI" from a result card lands with the AI drawer open, like the desktop AI tab.
+  const isMobile = useIsMobile();
+  const typing = useTypingFlag();
+  const viewport = useVisualViewport(isMobile);
+  const [mobilePanel, setMobilePanel] = useState<MobilePanelId | null>(initialRightTab === 'AI' ? 'AI' : null);
   // The colour clipboard. Pure view state: pasting is a normal typed command
   // that reads the SOURCE segment on the server, so a clipboard pointing at an
   // element that has since been deleted is refused rather than acted on.
@@ -85,6 +99,10 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
       : Math.min(1, end / 2);
     setCurrentPlayheadSec((current) => current > 0 ? current : Math.max(0, Math.min(target, end - 0.05)));
   }, [project.elements]);
+  // Below `lg` the left panel floats over the preview, so tablets open with it closed.
+  useEffect(() => {
+    if (window.innerWidth < 1024) setActiveTool((current) => current === 'MEDIA' ? null : current);
+  }, []);
   useEffect(() => {
     try {
       const saved = Number(window.localStorage.getItem(TIMELINE_HEIGHT_KEY));
@@ -502,46 +520,107 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
     void applyCommand({ action, assetId: asset.id });
   };
 
-  return <div className='flex h-[100dvh] min-h-0 flex-col overflow-hidden bg-[#070a12] text-[#f8fafc]'>
+  const panelProps: EditPanelContentProps = { project, source, selected, style, history, busy: !!busy,
+    selectedElementId, selectedTimeRange: selectedRange, playheadSec: currentPlayheadSec,
+    onPreview: previewElement, onCommit: (command) => void applyCommand(command),
+    onDebounced: debouncedCommand, onDuplicate: duplicate, onDelete: remove,
+    onPresetApplied: presetApplied, onChatApplied: chatApplied,
+    onAgentEdited: () => void agentEdited(),
+    onReviewPreview: (range) => { setSelectedRange(range); setCurrentPlayheadSec(range.startSec); },
+    onError: setError };
+  const toolProps: Omit<EditToolPanelProps, 'tool'> = { assets: project.assets,
+    elements: project.elements ?? [], busy: !!busy, hasSource: !!source,
+    projectId: project.id, revision: project.revision,
+    onTemplateApplied: templateApplied,
+    onError: (message) => setError(`PREVIEW_LAYOUT_FAILED: ${message}`),
+    selectedElementId, playheadSec: currentPlayheadSec,
+    duckingAvailable, copiedAdjustmentsId,
+    onClose: () => selectTool(null),
+    onSelectElement: setSelectedElementId,
+    onCommand: (command) => void applyCommand(command),
+    onPreviewElement: previewElement, cropSession,
+    onCropPreset: setCropPreset, onCropZoom: setCropEditorZoom, onCropReset: resetCrop,
+    onCropApplyAll: (checked) => setCropSession((current) => current
+      ? { ...current, applyAll: checked && current.applyAllCompatible } : current),
+    onCropCancel: cancelCrop, onCropDone: doneCrop,
+    onCopyAdjustments: setCopiedAdjustmentsId,
+    onUploadSource: (file) => run('upload', () => uploadEditSource(project.id, project.revision, file)),
+    onImportSource: (videoId) => run('import', () => importEditSource(project.id, project.revision, videoId)),
+    onUploadAsset: (role, file) => void uploadLibraryAsset(role, file),
+    onAddAsset: addAsset, onDeleteAsset: (asset) => void deleteLibraryAsset(asset) };
+
+  const closeMobilePanel = () => {
+    if (mobilePanel === 'CROP') cancelCrop();
+    setMobilePanel(null);
+  };
+  /** A phone tool tap. Crop needs a video segment, so it picks the one under the playhead
+   *  instead of asking the user to select one on a 350px timeline first. */
+  const openMobilePanel = (id: MobilePanelId) => {
+    if (id === mobilePanel) { closeMobilePanel(); return; }
+    if (mobilePanel === 'CROP') setCropSession(null);
+    if (id === 'CROP') {
+      const elements = projectRef.current.elements ?? [];
+      const current = elements.find((item) => item.id === selectedElementId);
+      const target = current?.type === 'VIDEO' ? current
+        : resolvePreviewPosition(elements, currentPlayheadSec)?.element ?? videoTrack(elements)[0];
+      if (target) {
+        setSelectedElementId(target.id);
+        setActiveTool('CROP');
+        beginCrop(target);
+      }
+    } else setActiveTool(id === 'AI' || id === 'INSPECTOR' || id === 'EXPORT' ? null : id);
+    setMobilePanel(id);
+  };
+  const mobileDrawer = isMobile && mobilePanel ? (() => {
+    const title = MOBILE_PANEL_TITLES[mobilePanel];
+    if (mobilePanel === 'AI') return <EditMobileDrawer title={title} size='tall' expanded={typing}
+      scroll={false} onClose={closeMobilePanel}><EditAiContent {...panelProps} layout='sheet' /></EditMobileDrawer>;
+    if (mobilePanel === 'INSPECTOR') return <EditMobileDrawer title={title} expanded={typing}
+      onClose={closeMobilePanel}><EditInspectorContent {...panelProps} /></EditMobileDrawer>;
+    if (mobilePanel === 'EXPORT') return <EditMobileDrawer title={title} onClose={closeMobilePanel}>
+      <EditExportPanel projectId={project.id} revision={project.revision} hasSource={!!source}
+        disabled={!!busy} onStatusChange={refreshProject} onPhaseChange={setExportPhase} /></EditMobileDrawer>;
+    if (mobilePanel === 'CROP') return <EditMobileDrawer title={title} size='auto' onClose={closeMobilePanel}>
+      <EditToolPanelBody {...toolProps} tool='CROP' compact
+        onCropCancel={() => { cancelCrop(); setMobilePanel(null); }}
+        onCropDone={() => { doneCrop(); setMobilePanel(null); }} /></EditMobileDrawer>;
+    return <EditMobileDrawer title={title} expanded={typing} onClose={closeMobilePanel}>
+      <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4'>
+        <EditToolPanelBody {...toolProps} tool={mobilePanel} compact />
+        {mobilePanel === 'TEMPLATES' && <EditPresetPanel projectId={project.id} revision={project.revision} style={style}
+          disabled={!!busy} hasSource={!!source} onApplied={presetApplied}
+          onError={(message) => setError(`PREVIEW_LAYOUT_FAILED: ${message}`)} />}
+      </div>
+    </EditMobileDrawer>;
+  })() : null;
+  // iOS keeps the layout viewport when the keyboard opens; pin the editor to the visible part.
+  const keyboardFrame = isMobile && viewport.keyboardOpen && viewport.height
+    ? { position: 'fixed' as const, left: 0, right: 0, top: viewport.offsetTop, height: viewport.height } : undefined;
+
+  return <div className='flex h-[100dvh] min-h-0 flex-col overflow-hidden overscroll-none bg-[#070a12] text-[#f8fafc]'
+    style={keyboardFrame} data-mobile-layout={isMobile ? 'true' : 'false'}>
     <EditTopBar projectName={project.name} revision={project.revision} busy={busy}
       exportPhase={exportPhase} canUndo={availability.canUndo} canRedo={availability.canRedo}
       aspectRatio={style?.aspectRatio ?? 'SOURCE'}
       onUndo={() => void travelHistory('undo')} onRedo={() => void travelHistory('redo')}
-      onExport={() => setExportOpen(true)} exportDisabled={!source || !!busy} />
+      onExport={() => isMobile ? openMobilePanel('EXPORT') : setExportOpen(true)} exportDisabled={!source || !!busy} />
 
     {error && <div role='alert'
-      className='shrink-0 border-b border-red-400/20 bg-red-400/10 px-4 py-2 text-xs text-red-200'>
-      {error}</div>}
+      className='flex shrink-0 items-start gap-2 border-b border-red-400/20 bg-red-400/10 py-1 pl-4 pr-1 text-xs text-red-200'>
+      <span className='min-w-0 flex-1 break-words py-1 [overflow-wrap:anywhere] max-md:line-clamp-3'>{error}</span>
+      <button type='button' aria-label='Dismiss error' onClick={() => setError('')}
+        className='grid h-8 w-8 shrink-0 place-items-center rounded-lg text-red-200/80 hover:bg-red-400/10 coarse:h-10 coarse:w-10'><X size={14} /></button></div>}
 
     {/* Rail, optional tool panel, preview and inspector share one row; the
         timeline takes the bottom band. Only this row scrolls internally, so the
         editor itself never grows a page scrollbar. */}
-    <div className='relative flex min-h-0 flex-1'>
+    <div className='relative flex min-h-[96px] min-w-0 flex-1'>
       <EditToolRail active={activeTool} cropDisabled={!!busy || selected?.type !== 'VIDEO'}
         onSelect={selectTool} />
-      {activeTool && <EditToolPanel tool={activeTool} assets={project.assets}
-        elements={project.elements ?? []} busy={!!busy} hasSource={!!source}
-        projectId={project.id} revision={project.revision}
-        onTemplateApplied={templateApplied}
-        onError={(message) => setError(`PREVIEW_LAYOUT_FAILED: ${message}`)}
-        selectedElementId={selectedElementId} playheadSec={currentPlayheadSec}
-        duckingAvailable={duckingAvailable} copiedAdjustmentsId={copiedAdjustmentsId}
-        onClose={() => selectTool(null)}
-        onSelectElement={setSelectedElementId}
-        onCommand={(command) => void applyCommand(command)}
-        onPreviewElement={previewElement} cropSession={cropSession}
-        onCropPreset={setCropPreset} onCropZoom={setCropEditorZoom} onCropReset={resetCrop}
-        onCropApplyAll={(checked) => setCropSession((current) => current
-          ? { ...current, applyAll: checked && current.applyAllCompatible } : current)}
-        onCropCancel={cancelCrop} onCropDone={doneCrop}
-        onCopyAdjustments={setCopiedAdjustmentsId}
-        onUploadSource={(file) => run('upload', () => uploadEditSource(project.id, project.revision, file))}
-        onImportSource={(videoId) => run('import', () => importEditSource(project.id, project.revision, videoId))}
-        onUploadAsset={(role, file) => void uploadLibraryAsset(role, file)}
-        onAddAsset={addAsset} onDeleteAsset={(asset) => void deleteLibraryAsset(asset)} />}
+      {!isMobile && activeTool && <EditToolPanel {...toolProps} tool={activeTool} />}
 
       <main className='flex min-w-0 flex-1 flex-col bg-[#05070d]'>
-        <div className='flex min-h-0 flex-1 items-center justify-center p-2'>
+        <div className='flex min-h-0 flex-1 items-center justify-center p-2 max-md:p-0'>
           <EditPreview ref={previewRef} source={source} assets={project.assets}
             aspectRatio={style?.aspectRatio} reframePolicy={style?.reframePolicy}
             fitBackground={typeof (project.settings as Record<string, unknown> | undefined)?.fitBackground === 'string'
@@ -561,48 +640,45 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
               sourceHeight: cropSession.sourceHeight, sourceAssetId: cropSession.sourceAssetId,
               onChange: setCropRect } : null} />
         </div>
-        {source && !source.analysis && <div className='shrink-0 border-t border-white/10 px-3 py-2'>
+        {source && !source.analysis && !mobileDrawer && <div className='shrink-0 border-t border-white/10 px-3 py-2'>
           <button disabled={!!busy}
             onClick={() => void run('analyze', () => analyzeEditSource(project.id, project.revision))}
-            className='flex items-center gap-1.5 rounded-lg border border-cyan-300/25 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-40'>
+            className='flex items-center gap-1.5 rounded-lg border border-cyan-300/25 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-40 coarse:min-h-[40px] coarse:px-3 coarse:text-xs'>
             <ScanSearch size={13} />Analyze source</button>
         </div>}
       </main>
 
-      <EditRightPanel project={project} source={source} selected={selected} style={style}
-        history={history} busy={!!busy} selectedElementId={selectedElementId}
-        selectedTimeRange={selectedRange} playheadSec={currentPlayheadSec} exportOpen={exportOpen}
-        onPreview={previewElement} onCommit={(command) => void applyCommand(command)}
-        onDebounced={debouncedCommand}
-        onDuplicate={duplicate} onDelete={remove} onPresetApplied={presetApplied} onChatApplied={chatApplied}
-        onAgentEdited={() => void agentEdited()} initialTab={initialRightTab}
-        onReviewPreview={(range) => { setSelectedRange(range); setCurrentPlayheadSec(range.startSec); }}
-        onExportStatus={refreshProject} onExportPhase={setExportPhase} onError={setError}
-        onCloseExport={() => setExportOpen(false)} />
+      {!isMobile && <EditRightPanel {...panelProps} exportOpen={exportOpen} initialTab={initialRightTab}
+        onExportStatus={refreshProject} onExportPhase={setExportPhase}
+        onCloseExport={() => setExportOpen(false)} />}
     </div>
 
+    {mobileDrawer ?? <>
     {/* The timeline is a fixed bottom band rather than a card in the page flow:
         it is a primary editing surface, not a summary of one. It keeps the
         professional ~⅓-of-the-screen proportion, floors at a height that still
         shows every track on a 1366x768 screen, and can be collapsed to its
         toolbar when the preview needs the room. It never overlays the preview
-        or the top bar - the three are siblings in one column. */}
+        or the top bar - the three are siblings in one column. Phones get a
+        shorter band with a compact header column. */}
     {!timelineCollapsed && <div role='separator' aria-orientation='horizontal' aria-label='Resize timeline'
       title='Drag to resize the preview and timeline' onPointerDown={resizeTimeline}
       onDoubleClick={() => { setTimelineHeight(null);
         try { window.localStorage.removeItem(TIMELINE_HEIGHT_KEY); } catch { /* ignore */ } }}
-      className='group relative z-10 h-1.5 shrink-0 cursor-row-resize bg-transparent hover:bg-violet-400/30'>
+      className='group relative z-10 h-1.5 shrink-0 cursor-row-resize bg-transparent hover:bg-violet-400/30 max-md:hidden'>
       <span aria-hidden className='absolute left-1/2 top-1/2 h-1 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/15 group-hover:bg-violet-300/70' />
     </div>}
-    <div style={!timelineCollapsed && timelineHeight ? { height: `${timelineHeight}px` } : undefined}
+    <div style={!isMobile && !timelineCollapsed && timelineHeight ? { height: `${timelineHeight}px` } : undefined}
+      data-testid='timeline-band'
       className={`shrink-0 overflow-hidden border-t border-white/10 bg-[#0b0f1a] ${
-      timelineCollapsed ? 'h-auto' : timelineHeight ? '' : 'h-[38vh] min-h-[248px] max-h-[440px]'}`}>
+      timelineCollapsed ? 'h-auto' : timelineHeight && !isMobile ? ''
+        : 'h-[38vh] min-h-[248px] max-h-[440px] max-md:h-[30dvh] max-md:min-h-[168px] max-md:max-h-[280px]'}`}>
       <EditTimeline elements={project.elements ?? []} assets={project.assets}
         selectedElementId={selectedElementId} selectedIds={selectedIds}
         currentPlayheadSec={currentPlayheadSec} sourceDuration={source?.duration ?? 0}
         disabled={!!busy || !!cropSession}
         canUndo={availability.canUndo} canRedo={availability.canRedo}
-        selectedRange={selectedRange} collapsed={timelineCollapsed}
+        selectedRange={selectedRange} collapsed={timelineCollapsed} compact={isMobile}
         onSelectRange={setSelectedRange} onSelect={setSelectedElementId}
         onSelectMany={setSelectedIds} onSeek={setCurrentPlayheadSec}
         onPreviewElements={(elements) => setProject((current) => ({ ...current, elements }))}
@@ -612,5 +688,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
         onToggleCollapsed={() => setTimelineCollapsed((value) => !value)}
         onUndo={() => void travelHistory('undo')} onRedo={() => void travelHistory('redo')} />
     </div>
+    </>}
+    {!(isMobile && typing) && <EditMobileToolbar active={isMobile ? mobilePanel : null} onSelect={openMobilePanel} />}
   </div>;
 }

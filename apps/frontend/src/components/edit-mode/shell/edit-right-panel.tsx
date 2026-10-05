@@ -13,19 +13,9 @@ import { EditInspector } from '../edit-inspector';
 import { EditPresetPanel } from '../edit-preset-panel';
 
 export type RightTab = 'INSPECTOR' | 'AI';
-type AiMode = 'CHAT' | 'REVIEW' | 'BRIEF';
+export type AiMode = 'CHAT' | 'REVIEW' | 'BRIEF';
 
-/**
- * The contextual half of the editor: what the selected element is, or the AI
- * editor. Only one is mounted at a time so the panel never becomes the stack of
- * unrelated cards the old workspace was.
- */
-export function EditRightPanel({ project, source, selected, style, history, busy,
-  selectedElementId, selectedTimeRange, playheadSec, exportOpen,
-  onPreview, onCommit, onDebounced, onDuplicate, onDelete,
-  onPresetApplied, onChatApplied, onAgentEdited, onReviewPreview, onExportStatus, onExportPhase,
-  onError, onCloseExport, initialTab = 'INSPECTOR' }: {
-  initialTab?: RightTab;
+export type EditPanelContentProps = {
   project: EditProject;
   source?: EditAsset;
   selected?: EditElement;
@@ -35,7 +25,6 @@ export function EditRightPanel({ project, source, selected, style, history, busy
   selectedElementId: string | null;
   selectedTimeRange: EditTimeRange | null;
   playheadSec: number;
-  exportOpen: boolean;
   onPreview: (element: EditElement) => void;
   onCommit: (command: ManualEditCommand) => void;
   onDebounced: (command: ManualEditCommand) => void;
@@ -46,13 +35,84 @@ export function EditRightPanel({ project, source, selected, style, history, busy
   /** The AI editor agent changed the canonical project. */
   onAgentEdited: (run: AgentRun) => void;
   onReviewPreview: (range: EditTimeRange) => void;
+  onError: (message: string) => void;
+};
+
+/** What the selected element is, plus the project's history. */
+export function EditInspectorContent({ project, source, selected, history, playheadSec,
+  onPreview, onCommit, onDebounced, onDuplicate, onDelete }: EditPanelContentProps) {
+  return <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3'>
+    <EditInspector project={project} source={source} selected={selected}
+      playheadSec={playheadSec}
+      onPreview={onPreview} onCommit={onCommit} onDebounced={onDebounced}
+      onDuplicate={onDuplicate} onDelete={onDelete} />
+    <EditHistoryPanel history={history} />
+  </div>;
+}
+
+/**
+ * The AI editor: Chat, Review and Edit plan. `layout='sheet'` is the phone drawer: the chat
+ * fills the drawer with its input pinned at the bottom, and looks move to the Style tool.
+ */
+export function EditAiContent({ project, source, selected, style, busy, selectedElementId,
+  selectedTimeRange, playheadSec, onPresetApplied, onChatApplied, onAgentEdited, onReviewPreview,
+  onError, layout = 'panel', mode, onModeChange }: EditPanelContentProps & { layout?: 'panel' | 'sheet';
+  /** Optional controlled mode, so a parent can keep it across tab switches. */
+  mode?: AiMode; onModeChange?: (mode: AiMode) => void }) {
+  const [ownMode, setOwnMode] = useState<AiMode>('CHAT');
+  const aiMode = mode ?? ownMode;
+  const setAiMode = (next: AiMode) => { setOwnMode(next); onModeChange?.(next); };
+  const sheet = layout === 'sheet';
+  const tabs = <div role='tablist' aria-label='AI mode' className={`grid shrink-0 grid-cols-3 gap-1 rounded-lg bg-black/30 p-1 ${sheet ? 'rounded-xl' : ''}`}>
+    {([['CHAT', 'Chat'], ['REVIEW', 'Review'], ['BRIEF', 'Edit plan']] as const).map(([value, label]) =>
+      <button key={value} role='tab' aria-selected={aiMode === value}
+        onClick={() => setAiMode(value)} className={`rounded-md font-semibold ${sheet ? 'h-10 rounded-lg text-xs' : 'py-1.5 text-[10px]'} ${
+          aiMode === value ? 'bg-violet-400/15 text-violet-200' : 'text-slate-500'}`}>{label}</button>)}
+  </div>;
+  const chat = <EditAgentPanel projectId={project.id} revision={project.revision} hasSource={!!source}
+    disabled={busy} selectedElementId={selectedElementId} selected={selected}
+    selectedTimeRange={selectedTimeRange} playheadSec={playheadSec} layout={layout}
+    onEdited={onAgentEdited} onError={(message) => onError(`AGENT_FAILED: ${message}`)} />;
+  const review = <EditReviewPanel projectId={project.id} revision={project.revision}
+    disabled={busy} selected={selected} selectedTimeRange={selectedTimeRange}
+    playheadSec={playheadSec} onApplied={onChatApplied}
+    onPreviewRange={onReviewPreview} onError={(message) => onError(`ANALYSIS_FAILED: ${message}`)} />;
+  const brief = <EditBriefPanel projectId={project.id} revision={project.revision}
+    disabled={busy} selected={selected} selectedTimeRange={selectedTimeRange}
+    playheadSec={playheadSec} onProject={onChatApplied}
+    onError={(message) => onError(`PREVIEW_LAYOUT_FAILED: ${message}`)} />;
+  if (sheet) return <div className='flex h-full min-h-0 min-w-0 flex-col gap-3'>
+    {tabs}
+    {aiMode === 'CHAT' ? <div className='flex min-h-0 flex-1 flex-col'>{chat}</div>
+      : <div className='min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[max(.75rem,var(--safe-bottom))]'>{aiMode === 'REVIEW' ? review : brief}</div>}
+  </div>;
+  return <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3'>
+    {tabs}
+    {aiMode === 'CHAT' && chat}
+    {aiMode === 'REVIEW' && review}
+    {aiMode === 'BRIEF' && brief}
+    {aiMode === 'CHAT' && <EditPresetPanel projectId={project.id} revision={project.revision} style={style}
+      disabled={busy} hasSource={!!source} onApplied={onPresetApplied}
+      onError={(message) => onError(`PREVIEW_LAYOUT_FAILED: ${message}`)} />}
+  </div>;
+}
+
+/**
+ * The contextual half of the editor: what the selected element is, or the AI
+ * editor. Only one is mounted at a time so the panel never becomes the stack of
+ * unrelated cards the old workspace was.
+ */
+export function EditRightPanel({ exportOpen, onExportStatus, onExportPhase, onCloseExport,
+  initialTab = 'INSPECTOR', ...content }: EditPanelContentProps & {
+  initialTab?: RightTab;
+  exportOpen: boolean;
   onExportStatus: () => void;
   onExportPhase: (phase: string | null) => void;
-  onError: (message: string) => void;
   onCloseExport: () => void;
 }) {
   const [tab, setTab] = useState<RightTab>(initialTab);
   const [aiMode, setAiMode] = useState<AiMode>('CHAT');
+  const { project, source, busy } = content;
   const tabClass = (value: RightTab) =>
     `flex-1 rounded-md py-1.5 text-[11px] font-semibold transition-colors ${
       tab === value ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-slate-200'}`;
@@ -67,37 +127,7 @@ export function EditRightPanel({ project, source, selected, style, history, busy
       </div>
     </div>
     <div className='min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3'>
-      {tab === 'INSPECTOR'
-        ? <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3'>
-          <EditInspector project={project} source={source} selected={selected}
-            playheadSec={playheadSec}
-            onPreview={onPreview} onCommit={onCommit} onDebounced={onDebounced}
-            onDuplicate={onDuplicate} onDelete={onDelete} />
-          <EditHistoryPanel history={history} />
-        </div>
-        : <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3'>
-          <div role='tablist' aria-label='AI mode' className='grid grid-cols-3 gap-1 rounded-lg bg-black/30 p-1'>
-            {([['CHAT', 'Chat'], ['REVIEW', 'Review'], ['BRIEF', 'Edit plan']] as const).map(([value, label]) =>
-              <button key={value} role='tab' aria-selected={aiMode === value}
-                onClick={() => setAiMode(value)} className={`rounded-md py-1.5 text-[10px] font-semibold ${
-                  aiMode === value ? 'bg-violet-400/15 text-violet-200' : 'text-slate-500'}`}>{label}</button>)}
-          </div>
-          {aiMode === 'CHAT' && <EditAgentPanel projectId={project.id} revision={project.revision} hasSource={!!source}
-            disabled={busy} selectedElementId={selectedElementId} selected={selected}
-            selectedTimeRange={selectedTimeRange} playheadSec={playheadSec}
-            onEdited={onAgentEdited} onError={(message) => onError(`AGENT_FAILED: ${message}`)} />}
-          {aiMode === 'REVIEW' && <EditReviewPanel projectId={project.id} revision={project.revision}
-            disabled={busy} selected={selected} selectedTimeRange={selectedTimeRange}
-            playheadSec={playheadSec} onApplied={onChatApplied}
-            onPreviewRange={onReviewPreview} onError={(message) => onError(`ANALYSIS_FAILED: ${message}`)} />}
-          {aiMode === 'BRIEF' && <EditBriefPanel projectId={project.id} revision={project.revision}
-            disabled={busy} selected={selected} selectedTimeRange={selectedTimeRange}
-            playheadSec={playheadSec} onProject={onChatApplied}
-            onError={(message) => onError(`PREVIEW_LAYOUT_FAILED: ${message}`)} />}
-          {aiMode === 'CHAT' && <EditPresetPanel projectId={project.id} revision={project.revision} style={style}
-            disabled={busy} hasSource={!!source} onApplied={onPresetApplied}
-            onError={(message) => onError(`PREVIEW_LAYOUT_FAILED: ${message}`)} />
-          }</div>}
+      {tab === 'INSPECTOR' ? <EditInspectorContent {...content} /> : <EditAiContent {...content} mode={aiMode} onModeChange={setAiMode} />}
       {exportOpen && <div className='mt-3'>
         <EditExportPanel projectId={project.id} revision={project.revision} hasSource={!!source}
           disabled={busy} onStatusChange={onExportStatus} onPhaseChange={onExportPhase} />

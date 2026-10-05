@@ -22,9 +22,12 @@ const choice = (active: boolean) => `rounded-lg border px-2 py-2 text-[11px] fon
   active ? 'border-violet-300/60 bg-violet-400/20 text-violet-50'
     : 'border-white/10 bg-white/[.025] text-slate-400 hover:bg-white/[.06] hover:text-slate-200'}`;
 
-export function EditCropPanel({ session, busy, onPreset, onZoom, onReset, onApplyAll, onCancel, onDone }: {
+export function EditCropPanel({ session, busy, onPreset, onZoom, onReset, onApplyAll, onCancel, onDone,
+  compact = false }: {
   session: CropSession | null;
   busy: boolean;
+  /** Phone dock: one row of aspect chips, the zoom slider and large Cancel / Done. */
+  compact?: boolean;
   onPreset: (preset: CropAspectPreset) => void;
   onZoom: (zoom: number) => void;
   onReset: () => void;
@@ -37,6 +40,39 @@ export function EditCropPanel({ session, busy, onPreset, onZoom, onReset, onAppl
   </div>;
   const { rect } = session;
   const zoom = cropZoom(rect, session.preset, session.sourceAspect);
+  if (compact) return <div className='grid min-w-0 gap-3'>
+    <p className='text-xs leading-5 text-slate-400'>Drag the video to reposition · pinch or use the slider to zoom · drag a corner to resize.</p>
+    <div className='scrollbar-none -mx-4 flex gap-2 overflow-x-auto px-4' role='group' aria-label='Crop aspect ratio'>
+      {CROP_ASPECT_PRESETS.map((preset) => <button key={preset} type='button' disabled={busy}
+        aria-pressed={session.preset === preset} onClick={() => onPreset(preset)}
+        className={`h-10 shrink-0 whitespace-nowrap rounded-full border px-4 text-xs font-semibold transition-colors disabled:opacity-40 ${
+          session.preset === preset ? 'border-violet-300/60 bg-violet-400/20 text-violet-50' : 'border-white/10 bg-white/[.03] text-slate-300'}`}>
+        {label(preset)}</button>)}
+    </div>
+    <div className='flex items-center gap-3'>
+      <button type='button' aria-label='Zoom out' disabled={busy || zoom <= 1} onClick={() => onZoom(Math.max(1, zoom - 0.1))}
+        className='grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-white/10 text-slate-300 disabled:opacity-30'><Minus size={16} /></button>
+      <input aria-label='Crop zoom' type='range' min={1} max={4} step={0.01}
+        value={zoom} disabled={busy} onChange={(event) => onZoom(Number(event.target.value))}
+        className='h-10 min-w-0 flex-1 accent-violet-400 disabled:opacity-40' />
+      <button type='button' aria-label='Zoom in' disabled={busy || zoom >= 4} onClick={() => onZoom(Math.min(4, zoom + 0.1))}
+        className='grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-white/10 text-slate-300 disabled:opacity-30'><Plus size={16} /></button>
+      <span className='w-12 shrink-0 text-right text-xs tabular-nums text-violet-200'>{zoom.toFixed(2)}×</span>
+    </div>
+    {session.applyAllCompatible ? <label className='flex min-h-[44px] items-center gap-3 rounded-xl border border-white/10 px-3 text-sm text-slate-300'>
+      <input type='checkbox' className='h-5 w-5 accent-violet-500' checked={session.applyAll} disabled={busy}
+        onChange={(event) => onApplyAll(event.target.checked)} />Apply to all video segments</label> : null}
+    <div className='grid grid-cols-[1fr_auto_1.4fr] gap-2'>
+      <button type='button' disabled={busy} onClick={onCancel}
+        className='flex h-12 items-center justify-center gap-1.5 rounded-xl border border-white/15 text-sm font-semibold text-slate-200 disabled:opacity-40'>
+        <X size={16} />Cancel</button>
+      <button type='button' disabled={busy} onClick={onReset} aria-label='Reset crop'
+        className='grid h-12 w-12 place-items-center rounded-xl border border-white/15 text-slate-200 disabled:opacity-40'><RotateCcw size={16} /></button>
+      <button type='button' disabled={busy} onClick={onDone}
+        className='flex h-12 items-center justify-center gap-1.5 rounded-xl bg-violet-500 text-sm font-bold text-white disabled:opacity-40'>
+        <Check size={16} />{busy ? 'Saving…' : 'Done'}</button>
+    </div>
+  </div>;
   return <div className='grid gap-5'>
     <div className='rounded-xl border border-violet-300/20 bg-violet-400/[.05] p-3'>
       <div className='flex items-center gap-2 text-violet-100'><Crop size={15} />

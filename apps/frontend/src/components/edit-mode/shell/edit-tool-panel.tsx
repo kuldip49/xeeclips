@@ -60,12 +60,7 @@ function AssetSection({ role, label, assets, busy, disabled, onUpload, onAdd, on
   </div>;
 }
 
-export function EditToolPanel({ tool, assets, elements, busy, hasSource, selectedElementId,
-  playheadSec, duckingAvailable, copiedAdjustmentsId, projectId, revision, onClose,
-  onSelectElement, onCommand, onPreviewElement, cropSession, onCropPreset,
-  onCropZoom, onCropReset, onCropApplyAll, onCropCancel, onCropDone,
-  onCopyAdjustments, onUploadSource,
-  onImportSource, onUploadAsset, onAddAsset, onDeleteAsset, onTemplateApplied, onError }: {
+export type EditToolPanelProps = {
   tool: EditToolId;
   assets: EditAsset[];
   elements: EditElement[];
@@ -101,18 +96,37 @@ export function EditToolPanel({ tool, assets, elements, busy, hasSource, selecte
   /** One applied template is one server revision, accepted exactly like a preset. */
   onTemplateApplied: (result: TemplateApplyResult) => void;
   onError: (message: string) => void;
-}) {
-  const definition = editTool(tool);
-  const source = assets.find((asset) => asset.role === 'SOURCE');
-  const selected = elements.find((element) => element.id === selectedElementId);
+  /** Phone drawer: the crop controls use their compact dock layout. */
+  compact?: boolean;
+};
+
+/** The desktop left panel: a titled column beside the rail. */
+export function EditToolPanel(props: EditToolPanelProps) {
+  const definition = editTool(props.tool);
   return <aside aria-label={`${definition.label} panel`}
-    className='flex w-[268px] shrink-0 flex-col border-r border-white/10 bg-[#0b0f1a] max-lg:absolute max-lg:bottom-0 max-lg:left-[72px] max-lg:top-0 max-lg:z-30'>
+    className='flex w-[268px] shrink-0 flex-col border-r border-white/10 bg-[#0b0f1a] max-md:hidden max-lg:absolute max-lg:bottom-0 max-lg:left-[72px] max-lg:top-0 max-lg:z-30'>
     <div className='flex h-10 shrink-0 items-center justify-between border-b border-white/10 px-3'>
       <h2 className='text-xs font-semibold uppercase tracking-wider text-slate-300'>{definition.label}</h2>
-      <button onClick={onClose} aria-label={`Close ${definition.label} panel`}
+      <button onClick={props.onClose} aria-label={`Close ${definition.label} panel`}
         className='rounded p-1 text-slate-500 hover:bg-white/10 hover:text-slate-200'><X size={14} /></button>
     </div>
     <div className='min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3'>
+      <EditToolPanelBody {...props} />
+    </div>
+  </aside>;
+}
+
+/** A tool's controls without any chrome, shared by the desktop panel and the phone drawer. */
+export function EditToolPanelBody({ tool, assets, elements, busy, hasSource, selectedElementId,
+  playheadSec, duckingAvailable, copiedAdjustmentsId, projectId, revision,
+  onSelectElement, onCommand, onPreviewElement, cropSession, onCropPreset,
+  onCropZoom, onCropReset, onCropApplyAll, onCropCancel, onCropDone,
+  onCopyAdjustments, onUploadSource,
+  onImportSource, onUploadAsset, onAddAsset, onDeleteAsset, onTemplateApplied, onError,
+  compact = false }: EditToolPanelProps) {
+  const source = assets.find((asset) => asset.role === 'SOURCE');
+  const selected = elements.find((element) => element.id === selectedElementId);
+  return <>
       {tool === 'MEDIA' && <EditAssetPicker assets={assets} busy={busy} onUploadSource={onUploadSource}
         onImport={onImportSource} onUploadAsset={async (role, file) => onUploadAsset(role, file)}
         onAdd={onAddAsset} onDelete={onDeleteAsset} />}
@@ -148,7 +162,7 @@ export function EditToolPanel({ tool, assets, elements, busy, hasSource, selecte
         hasSource={hasSource} selectedElementId={selectedElementId} playheadSec={playheadSec}
         onCommand={onCommand} onSelectElement={onSelectElement} />}
 
-      {tool === 'CROP' && <EditCropPanel session={cropSession} busy={busy}
+      {tool === 'CROP' && <EditCropPanel session={cropSession} busy={busy} compact={compact}
         onPreset={onCropPreset} onZoom={onCropZoom} onReset={onCropReset} onApplyAll={onCropApplyAll}
         onCancel={onCropCancel} onDone={onCropDone} />}
 
@@ -164,6 +178,5 @@ export function EditToolPanel({ tool, assets, elements, busy, hasSource, selecte
             disabled={!hasSource} onUpload={onUploadAsset} onAdd={onAddAsset} onDelete={onDeleteAsset} />
         </div>
       </div>}
-    </div>
-  </aside>;
+  </>;
 }

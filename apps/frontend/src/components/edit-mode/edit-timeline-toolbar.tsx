@@ -23,7 +23,7 @@ const Button = ({ label, hint, onClick, disabled, active, danger, children }: {
 }) => <button type='button' aria-label={label} title={hint ?? label} onClick={onClick}
   disabled={disabled} aria-pressed={active === undefined ? undefined : active}
   data-testid={`timeline-tool-${label.toLowerCase().replace(/[^a-z]+/gu, '-')}`}
-  className={`flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-30 ${
+  className={`flex shrink-0 items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-30 coarse:min-h-[40px] coarse:min-w-[40px] ${
     active ? 'bg-cyan-400/20 text-cyan-100 ring-1 ring-cyan-300/40'
       : danger ? 'text-red-300 hover:bg-red-400/10' : 'text-slate-300 hover:bg-white/10'}`}>
   {children}</button>;
@@ -36,14 +36,14 @@ const clock = (seconds: number) => {
 };
 
 export const EditTimelineToolbar = memo(function EditTimelineToolbar({
-  tool, snap, zoomPercent, playheadSec, durationSec, selectedCount, collapsed,
+  tool, snap, zoomPercent, playheadSec, durationSec, selectedCount, collapsed, compact = false,
   canUndo, canRedo, canSplit, splitHint, canDelete, canDuplicate, canMoveBack, canMoveForward,
   canZoomIn, canZoomOut, disabled,
   onTool, onToggleSnap, onSplit, onDelete, onDuplicate, onMove, onZoomIn, onZoomOut, onFit,
   onUndo, onRedo, onToggleCollapsed
 }: {
   tool: TimelineTool; snap: boolean; zoomPercent: number; playheadSec: number; durationSec: number;
-  selectedCount: number; collapsed: boolean;
+  selectedCount: number; collapsed: boolean; compact?: boolean;
   canUndo: boolean; canRedo: boolean; canSplit: boolean; splitHint: string;
   canDelete: boolean; canDuplicate: boolean; canMoveBack: boolean; canMoveForward: boolean;
   canZoomIn: boolean; canZoomOut: boolean; disabled: boolean;
@@ -53,7 +53,7 @@ export const EditTimelineToolbar = memo(function EditTimelineToolbar({
   onUndo: () => void; onRedo: () => void; onToggleCollapsed: () => void;
 }) {
   return <div data-testid='timeline-toolbar'
-    className='flex shrink-0 flex-wrap items-center gap-x-0.5 gap-y-1'>
+    className={`flex shrink-0 items-center gap-x-0.5 gap-y-1 ${compact ? 'scrollbar-none flex-nowrap overflow-x-auto' : 'flex-wrap'}`}>
     <Button label='Select' hint='Select — click to pick, drag empty space to mark a range'
       active={tool === 'SELECT'} onClick={() => onTool('SELECT')}>
       <MousePointer2 size={14} /></Button>
@@ -91,7 +91,7 @@ export const EditTimelineToolbar = memo(function EditTimelineToolbar({
     <Button label='Redo' hint='Redo (Ctrl+Shift+Z)' disabled={disabled || !canRedo} onClick={onRedo}>
       <Redo2 size={14} /></Button>
 
-    <div className='ml-auto flex items-center gap-2 pl-2'>
+    <div className={`ml-auto flex shrink-0 items-center gap-2 pl-2 ${compact ? 'pl-1' : ''}`}>
       {selectedCount > 1 && <span data-testid='timeline-selection-count'
         className='rounded-md border border-cyan-300/25 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200'>
         {selectedCount} selected</span>}

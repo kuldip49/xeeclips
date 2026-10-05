@@ -20,18 +20,18 @@ export default async function ProjectDetailPage({ params }: ProjectDetailPagePro
   if (!project) notFound();
 
   return (
-    <AppShell title={project.name}>
-      <div className='grid min-w-0 gap-8'>
-        <div>
-          <Button asChild size='sm' variant='ghost'>
+    <AppShell title={project.name} backHref='/projects' backLabel='Back to projects'>
+      <div className='grid min-w-0 gap-5 md:gap-8'>
+        <div className='min-w-0'>
+          <Button asChild size='sm' variant='ghost' className='hidden lg:inline-flex'>
             <Link href='/dashboard'>
               <ArrowLeft size={16} aria-hidden />
               Dashboard
             </Link>
           </Button>
-          <p className='eyebrow mt-5'>Project workspace</p>
-          <h1 className='mt-2 text-3xl font-bold tracking-tight md:text-4xl'>{project.name}</h1>
-          <p className='mt-2 text-muted-foreground'>
+          <p className='eyebrow lg:mt-5'>Project workspace</p>
+          <h1 className='mt-1.5 break-words text-2xl font-bold tracking-tight md:mt-2 md:text-4xl'>{project.name}</h1>
+          <p className='mt-1.5 text-sm text-muted-foreground md:mt-2 md:text-base'>
             {project.description || 'Upload and manage source videos for this project.'}
           </p>
         </div>

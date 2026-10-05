@@ -1197,6 +1197,45 @@ deployment/retriever wording reaches users; the only YouTube question is "I have
 - Ops note: Docker Desktop's VM (~7.4 GB) can run out of memory with two 1080p renders of a 2 h source plus the
   AI service's loaded models; raising its memory limit is recommended.
 
+## Mobile-first responsive frontend (2026-10-05)
+
+Frontend-only pass; no backend, API contract, pipeline, template or export change.
+
+- **Shell.** Below `lg` the sidebar is replaced by a compact sticky header (logo or Back, page
+  title, one contextual action) and a bottom tab bar: Home `/dashboard`, Projects `/projects`
+  (new list page), a prominent Create `/create`, Edits `/edit-mode`, More (sheet). Safe-area
+  insets via `--safe-*` CSS vars; `--nav-offset` keeps sticky CTAs above the tab bar, and the bar
+  steps aside while a text field is focused (`useTypingFlag`, `<html data-keyboard>`).
+- **Create.** `/create` is the one-step flow without naming a project first: `UploadVideoForm`
+  without `projectId` creates a project named after the file / YouTube id on submit (reused on
+  retry), then routes to it. Uploads can be cancelled (`uploadVideo(..., signal)`); offline
+  pauses Generate (`useBackendStatus` polls `/health` every 15 s while down).
+- **Results.** One card per row on phones; `LazyVideo` mounts the `<video>` only near the
+  viewport (poster/placeholder before), pauses off-screen, same src so byte ranges are unchanged.
+  Edit / Ask AI / Export are ≥44px; full-screen player in a `BottomSheet`. Long copy (synopsis,
+  caption, hashtags) folds behind one tap on phones only. `StageSteps` shows Analyzing → Finding
+  moments → Creating clips → Applying Automatic 2 → Ready.
+- **Editor on phones** (`md` and below, `useIsMobile` decides which tree mounts): top bar,
+  preview, then either the compact timeline (60px header column, one-row toolbar) or ONE docked
+  drawer (`EditMobileDrawer`, swipe-down/close), and a horizontally scrolling tool bar (Ask AI,
+  Inspect, Captions, Text, Crop, Audio, Style, Adjust, Filters, Overlay, Media). Drawers reuse the
+  desktop panel bodies (`EditToolPanelBody`, `EditInspectorContent`, `EditAiContent layout='sheet'`,
+  `EditExportPanel`) — no duplicated editing logic. `?panel=ai` opens the AI drawer. Crop picks
+  the segment under the playhead, docks compact controls, supports one-finger pan and two-finger
+  pinch (same `setCropZoom`, so export parity is untouched). Timeline touch: swipe scrolls, tap
+  selects/seeks, a selected block (touch-action none) and trim handles (wider on coarse pointers)
+  drag. iOS keyboard: the editor pins itself to `visualViewport`; Android uses
+  `interactive-widget=resizes-content`.
+- **Desktop** is unchanged (≥768 for the editor shell, ≥1024 for the app sidebar), except tablets
+  (<1024) open the editor with the floating Media panel closed.
+- **Verification.** `npx playwright test e2e/mobile-responsive.spec.ts` (read-only; A shell +
+  overflow at 320/360/375/390/412/430, B create, C result cards, D editor/AI/crop/export, E backend
+  offline). Overflow audit 63/63 page×width combinations clean (320–1440). Real phone-viewport
+  create upload and CDP touch crop (pinch → Done → Undo restores) verified on the local stack.
+- **Limits.** Real iOS Safari/Android keyboards were not available here (emulation only); the
+  dashboard is still server-rendered, so an offline backend shows the notice only after SSR fails;
+  timeline pinch-zoom is not implemented (zoom buttons remain).
+
 ## Explicitly deferred
 
 - LLM features

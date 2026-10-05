@@ -1,8 +1,11 @@
 import type { Config } from "tailwindcss";
 import animate from "tailwindcss-animate";
+import plugin from "tailwindcss/plugin";
 
 const config: Config = {
   darkMode: ["class"],
+  // Touch screens have no hover: a hover style must never be the only state a tap leaves behind.
+  future: { hoverOnlyWhenSupported: true },
   content: ["./src/**/*.{ts,tsx}"],
   theme: {
     extend: {
@@ -44,7 +47,11 @@ const config: Config = {
       }
     }
   },
-  plugins: [animate]
+  plugins: [animate, plugin(({ addVariant }) => {
+    // Touch-first sizing (bigger hit areas, handles) without changing mouse layouts.
+    addVariant("coarse", "@media (pointer: coarse)");
+    addVariant("fine", "@media (pointer: fine)");
+  })]
 };
 
 export default config;

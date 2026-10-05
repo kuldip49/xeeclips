@@ -275,15 +275,16 @@ export function listVideos(projectId?: string, init?: RequestInit) {
 }
 
 export async function uploadVideo(projectId: string, body: FormData,
-  onProgress?: (completed: number, total: number) => void) {
+  onProgress?: (completed: number, total: number) => void, signal?: AbortSignal) {
   const file = body.get('file');
   if (!(file instanceof File)) throw new Error('Choose a video file to upload.');
+  const cancelled = () => new DOMException('The upload was cancelled.', 'AbortError');
 
   // Keep each proxied request well below Cloudflare Free/Pro's 100 MB body limit.
   // The original multipart route remains useful for small uploads and local clients.
   if (file.size <= 20 * 1024 * 1024) {
     return apiFetch<Video>('/projects/' + encodeURIComponent(projectId) + '/videos', {
-      method: 'POST', body
+      method: 'POST', body, signal
     });
   }
 
@@ -296,30 +297,35 @@ export async function uploadVideo(projectId: string, body: FormData,
         aiMode: body.get('aiMode'), processingType: body.get('processingType'),
         aspectRatio: body.get('aspectRatio'), targetPlatform: body.get('targetPlatform'),
         generationRequest: body.get('generationRequest')
-      })
+      }),
+      signal
     }
   );
   for (let index = 0; index < session.chunks; index++) {
     const chunk = file.slice(index * session.chunkBytes,
       Math.min(file.size, (index + 1) * session.chunkBytes));
     for (let attempt = 0; attempt < 3; attempt++) {
+      if (signal?.aborted) throw cancelled();
       try {
         await apiFetch<{ index: number; size: number }>(
           '/upload-sessions/' + encodeURIComponent(session.id) + '/chunks/' + index, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/octet-stream' },
-            body: chunk
+            body: chunk,
+            signal
           });
         break;
       } catch (error) {
+        if (signal?.aborted) throw cancelled();
         if (attempt === 2 || (error instanceof ApiError && error.status < 500)) throw error;
         await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
       }
     }
     onProgress?.(index + 1, session.chunks);
   }
+  if (signal?.aborted) throw cancelled();
   return apiFetch<Video>('/upload-sessions/' + encodeURIComponent(session.id) + '/complete', {
-    method: 'POST'
+    method: 'POST', signal
   });
 }
 

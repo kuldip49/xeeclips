@@ -6,17 +6,17 @@ import { hookEmphasisRuns, stylePreviewModel, type PreviewText, type ResolvedCre
   type ResolvedVisualLayout } from '@/lib/creative-generation';
 import { textStyleCss } from '@/lib/edit-mode-text';
 
-/** Fixed width, so design units (600-wide canvas) scale exactly like the editor. */
-const WIDTH = 270;
-const HEIGHT = 480;
+/** Largest preview width; design units (600-wide canvas) scale from the width actually drawn. */
+const MAX_WIDTH = 270;
+const ASPECT = 16 / 9;
 
 const CORNERS: Record<string, string> = {
   TOP_RIGHT: 'right-2 top-2', TOP_LEFT: 'left-2 top-2',
   BOTTOM_RIGHT: 'right-2 bottom-2', BOTTOM_LEFT: 'left-2 bottom-2'
 };
 
-function PreviewLine({ item, testId }: { item: PreviewText; testId: string }) {
-  const css = textStyleCss(item.style as Record<string, unknown>, WIDTH);
+function PreviewLine({ item, testId, width }: { item: PreviewText; testId: string; width: number }) {
+  const css = textStyleCss(item.style as Record<string, unknown>, width);
   const words = item.text.split(' ');
   return <div data-testid={testId} className='absolute flex justify-center'
     style={{ left: `${item.box.x * 100}%`, top: `${item.box.y * 100}%`,
@@ -45,7 +45,22 @@ export function StylePreview({ posterUrl, sourceUrl, resolved, layout, loading }
   layout: ResolvedVisualLayout | null; loading: boolean;
 }) {
   const [failed, setFailed] = useState(false);
+  const [width, setWidth] = useState(MAX_WIDTH);
+  const figure = useRef<HTMLElement>(null);
   const video = useRef<HTMLVideoElement>(null);
+  // Phones get a narrower frame (never wider than its column); text keeps the same proportions.
+  useEffect(() => {
+    const node = figure.current;
+    if (!node || typeof ResizeObserver === 'undefined') return;
+    const measure = () => {
+      const available = node.clientWidth;
+      if (available > 0) setWidth(Math.min(MAX_WIDTH, Math.floor(available), window.innerWidth < 640 ? 230 : MAX_WIDTH));
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    measure();
+    return () => observer.disconnect();
+  }, []);
   const playback = useRef(0);
   const model = stylePreviewModel(resolved, layout);
   const fitBg = model.fitBackground === 'WHITE' ? '#ffffff' : '#000000';
@@ -64,10 +79,10 @@ export function StylePreview({ posterUrl, sourceUrl, resolved, layout, loading }
         objectFit: model.layout === 'FIT' ? 'contain' : 'cover', objectPosition: model.objectPosition,
         transform: model.zoomScale > 1 ? `scale(${model.zoomScale})` : undefined,
         transition: 'filter 120ms ease, transform 120ms ease' }} />;
-  return <figure className='grid justify-items-center gap-2' aria-label='Style preview'>
+  return <figure ref={figure} className='grid min-w-0 justify-items-center gap-2' aria-label='Style preview'>
     <div data-testid='style-preview' data-layout={model.layout} data-loading={loading}
       className='relative overflow-hidden rounded-xl border border-white/10 shadow-lg'
-      style={{ width: WIDTH, height: HEIGHT, background: fitBg }}>
+      style={{ width, height: Math.round(width * ASPECT), background: fitBg }}>
       {model.layout === 'FIT' && model.fitBackground === 'BLUR' && !failed
         ? <img src={posterUrl} alt='' aria-hidden className='absolute inset-0 h-full w-full scale-110 object-cover blur-xl brightness-75' />
         : null}
@@ -82,9 +97,9 @@ export function StylePreview({ posterUrl, sourceUrl, resolved, layout, loading }
           {model.overlayLayers.map((layer) => <div key={layer.key} className='pointer-events-none absolute inset-0' style={layer.style} />)}
         </div>
       </div>
-      {model.hook ? <PreviewLine item={model.hook} testId='style-preview-hook' /> : null}
-      {model.captions ? <PreviewLine item={model.captions} testId='style-preview-captions' /> : null}
-      {model.supportingText ? <PreviewLine item={model.supportingText} testId='style-preview-supporting' /> : null}
+      {model.hook ? <PreviewLine item={model.hook} testId='style-preview-hook' width={width} /> : null}
+      {model.captions ? <PreviewLine item={model.captions} testId='style-preview-captions' width={width} /> : null}
+      {model.supportingText ? <PreviewLine item={model.supportingText} testId='style-preview-supporting' width={width} /> : null}
       {model.logoCorner && CORNERS[model.logoCorner]
         ? <span className={`absolute ${CORNERS[model.logoCorner]} rounded bg-white/80 px-1.5 py-0.5 text-[9px] font-bold text-slate-900`}>LOGO</span>
         : null}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { FileVideo, Film, Trash2, Upload } from 'lucide-react';
+import { FileVideo, Film, Loader2, Trash2, Upload } from 'lucide-react';
 import { UploadVideoForm } from '@/components/upload-video-form';
 import { ClipCreationPanel } from '@/components/clip-creation-panel';
 import { DeveloperDiagnostics } from '@/components/developer-diagnostics';
@@ -123,7 +123,7 @@ export function ProjectWorkspace({
   }, [project.id]);
 
   return (
-    <div className='grid min-w-0 gap-5'>
+    <div className='grid min-w-0 gap-4 md:gap-5'>
       <WorkspaceAccordion key={`${project.videos.length === 0 ? 'empty' : 'populated'}-${fallback?.key ?? 0}`} title='Generate clips' summary='Upload a file or paste a YouTube link' icon={Upload} defaultOpen={project.videos.length === 0 || !!fallback} className='border-violet-400/15'>
         <UploadVideoForm key={fallback?.key ?? 0} projectId={project.id}
           initialSettings={fallback?.settings ?? entrySettings} onSettingsChange={setEntrySettings}
@@ -131,24 +131,24 @@ export function ProjectWorkspace({
       </WorkspaceAccordion>
 
       {imports.filter((job) => job.status !== 'READY' && !dismissedImports.includes(job.id)).map((job) => (
-        <div key={job.id} className='grid gap-2 rounded-2xl border border-white/10 bg-[#0d111c] p-4'>
-          <div className='flex flex-wrap items-center justify-between gap-2'>
-            <p className='min-w-0 truncate text-sm font-medium'>{job.title || job.sourceUrl}</p>
-            <div className='flex gap-2'>
+        <div key={job.id} className='grid min-w-0 gap-2.5 rounded-2xl border border-white/10 bg-[#0d111c] p-3.5 sm:p-4'>
+          <div className='flex min-w-0 flex-wrap items-center justify-between gap-2'>
+            <p className='min-w-0 flex-1 basis-48 truncate text-sm font-medium'>{job.title || job.sourceUrl}</p>
+            <div className='flex w-full gap-2 sm:w-auto'>
               {job.status === 'IMPORT_FAILED' || job.status === 'CANCELLED' ? (() => {
                 const temporary = job.status === 'CANCELLED' || TEMPORARY_IMPORT_FAILURES.has(job.errorCode ?? '');
                 return <>
-                  <Button type='button' size='sm' variant={temporary ? 'outline' : 'default'} onClick={() => uploadInstead(job)}>
+                  <Button type='button' size='sm' className='h-11 flex-1 sm:h-9 sm:flex-none' variant={temporary ? 'outline' : 'default'} onClick={() => uploadInstead(job)}>
                     <Upload size={14} aria-hidden />Upload file instead</Button>
-                  <Button type='button' size='sm' variant={temporary ? 'default' : 'outline'} disabled={importAction === job.id}
+                  <Button type='button' size='sm' className='h-11 flex-1 sm:h-9 sm:flex-none' variant={temporary ? 'default' : 'outline'} disabled={importAction === job.id}
                     onClick={() => void updateImport(job.id, 'retry')}>Try again</Button></>;
               })() : null}
               {job.status === 'PENDING' || job.status === 'IMPORTING' ?
-                <Button type='button' size='sm' variant='outline' disabled={importAction === job.id}
+                <Button type='button' size='sm' variant='outline' className='h-11 flex-1 sm:h-9 sm:flex-none' disabled={importAction === job.id}
                   onClick={() => void updateImport(job.id, 'cancel')}>Cancel</Button> : null}
             </div>
           </div>
-          <p role={job.status === 'IMPORT_FAILED' ? 'alert' : 'status'} className={job.status === 'IMPORT_FAILED' ? 'text-sm text-red-200' : 'text-xs text-slate-400'}>
+          <p role={job.status === 'IMPORT_FAILED' ? 'alert' : 'status'} className={job.status === 'IMPORT_FAILED' ? 'break-words text-sm text-red-200 [overflow-wrap:anywhere]' : 'text-xs text-slate-400'}>
             {job.status === 'IMPORT_FAILED' ? (job.error || IMPORT_FALLBACK) :
               job.status === 'CANCELLED' ? 'Import cancelled.' : importProgressLabel(job)}</p>
           {job.status === 'PENDING' || job.status === 'IMPORTING' ? <div className='h-1.5 w-full overflow-hidden rounded-full bg-white/10'><div
@@ -156,64 +156,69 @@ export function ProjectWorkspace({
         </div>
       ))}
 
-      <Card>
-        <CardHeader className='pb-4'>
+      {/* Phones: no card-in-card padding. The section is the page; each source is one card. */}
+      <Card className='border-0 bg-transparent shadow-none sm:border sm:bg-[#111827] sm:shadow-[0_16px_40px_rgba(0,0,0,.14)]'>
+        <CardHeader className='p-0 pb-3 sm:p-6 sm:pb-4'>
           <CardTitle>Source videos</CardTitle>
-          <CardDescription>{project.videos.length} source files · live analysis status and created clips.</CardDescription>
+          <CardDescription>{project.videos.length} source file{project.videos.length === 1 ? '' : 's'} · live analysis status and created clips.</CardDescription>
         </CardHeader>
-        <CardContent className='grid gap-4'>
-          {retryError ? <p role='alert' className='rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200'>{retryError}</p> : null}
+        <CardContent className='grid gap-4 p-0 sm:p-6 sm:pt-0'>
+          {retryError ? <p role='alert' className='break-words rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200 [overflow-wrap:anywhere]'>{retryError}</p> : null}
           {project.videos.length === 0 ? (
             <div className='empty-state'><Film className='text-violet-300' size={28} /><h3 className='mt-4 font-semibold'>No videos yet</h3><p className='mt-1 text-sm text-slate-400'>Add your first source video above to begin processing.</p></div>
           ) : project.videos.map((video) => {
+            const job = video.processingJobs?.[0];
+            const progress = Math.max(0, Math.min(100, job?.progress ?? 0));
             return (
-              <article className='grid min-w-0 gap-4 rounded-2xl border border-white/[.08] bg-[#0d111c] p-4 sm:p-5' key={video.id}>
-                <div className='flex min-w-0 flex-wrap items-center gap-3'>
-                  <span className='grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-cyan-400/10 text-cyan-300'><FileVideo className='h-5 w-5' aria-hidden /></span>
+              <article className='grid min-w-0 gap-4 rounded-[20px] border border-white/[.08] bg-[#0d111c] p-3 sm:p-5' key={video.id}>
+                <div className='flex min-w-0 items-center gap-3'>
+                  <span className='hidden h-11 w-11 shrink-0 place-items-center rounded-xl bg-cyan-400/10 text-cyan-300 sm:grid'><FileVideo className='h-5 w-5' aria-hidden /></span>
                   <div className='min-w-0 flex-1'>
                     <h2 className='truncate font-medium'>{video.originalName}</h2>
-                    <p className='truncate text-sm text-muted-foreground'>
+                    <p className='truncate text-xs text-muted-foreground sm:text-sm'>
                       {video.mimeType} · {formatBytes(video.sizeBytes)}
                     </p>
                   </div>
-                  <div className='flex flex-wrap gap-2'>
-                  {video.processingJobs?.[0]?.status === 'FAILED' &&
-                    video.processingJobs[0].retryable !== false ? (
-                    <Button size='sm' disabled={retrying !== null || deleting !== null}
+                  <div className='flex shrink-0 gap-1.5 sm:gap-2'>
+                  {job?.status === 'FAILED' && job.retryable !== false ? (
+                    <Button size='sm' className='h-11 sm:h-9' disabled={retrying !== null || deleting !== null}
                       onClick={() => void retry(video.id)}>
                       {retrying === video.id ? 'Requeuing...' : 'Retry'}
                     </Button>
                   ) : null}
-                  <Button size='sm' variant='outline'
-                    disabled={deleting !== null || retrying !== null ||
-                      video.processingJobs?.[0]?.status === 'PROCESSING'}
+                  <Button size='sm' variant='outline' className='h-11 w-11 px-0 sm:h-9 sm:w-auto sm:px-3'
+                    aria-label={`Delete ${video.originalName}`}
+                    disabled={deleting !== null || retrying !== null || job?.status === 'PROCESSING'}
                     onClick={() => void remove(video.id)}>
-                    <Trash2 size={15} aria-hidden />
-                    {deleting === video.id ? 'Deleting...' : 'Delete'}
+                    {deleting === video.id ? <Loader2 size={15} className='animate-spin' aria-hidden /> : <Trash2 size={15} aria-hidden />}
+                    <span className='hidden sm:inline'>{deleting === video.id ? 'Deleting...' : 'Delete'}</span>
                   </Button>
                   </div>
                 </div>
-                <div className='flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-white/[.06] bg-white/[.02] px-4 py-3 text-xs text-slate-400'>
-                  <span className='font-semibold text-slate-200'>{video.processingJobs?.[0]?.status === 'COMPLETED' ? 'Analyzed'
-                    : video.processingJobs?.[0]?.status === 'FAILED' ? 'Failed'
-                      : analysisProgressLabel(video.processingStages)}</span>
-                  {video.targetPlatform ? <span>{TARGET_PLATFORM_LABELS[video.targetPlatform]}</span> : null}
-                  <span>{video.processingJobs?.[0]?.progress ?? 0}% complete</span>
-                  <div className='h-1.5 w-full overflow-hidden rounded-full bg-white/[.08]'><div className='h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-all duration-500' style={{ width: `${Math.max(0, Math.min(100, video.processingJobs?.[0]?.progress ?? 0))}%` }} /></div>
+                <div className='grid gap-2 rounded-xl border border-white/[.06] bg-white/[.02] px-3.5 py-3 text-xs text-slate-400'>
+                  <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
+                    <span className='font-semibold text-slate-200'>{job?.status === 'COMPLETED' ? 'Analyzed'
+                      : job?.status === 'FAILED' ? 'Failed'
+                        : analysisProgressLabel(video.processingStages)}</span>
+                    {video.targetPlatform ? <span>{TARGET_PLATFORM_LABELS[video.targetPlatform]}</span> : null}
+                    <span className='ml-auto tabular-nums'>{progress}% complete</span>
+                  </div>
+                  <div className='h-1.5 w-full overflow-hidden rounded-full bg-white/[.08]'><div className='h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-all duration-500' style={{ width: `${progress}%` }} /></div>
                 </div>
-                {video.processingJobs?.[0]?.status === 'FAILED' && video.processingJobs[0].errorCode &&
-                  MEDIA_ERROR_UI_MESSAGES[video.processingJobs[0].errorCode as MediaErrorCode] ? (
+                {job?.status === 'FAILED' && job.errorCode &&
+                  MEDIA_ERROR_UI_MESSAGES[job.errorCode as MediaErrorCode] ? (
                   <div role='alert' className='rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200'>
                     <p className='font-semibold'>
-                      {MEDIA_ERROR_UI_MESSAGES[video.processingJobs[0].errorCode as MediaErrorCode].title}
+                      {MEDIA_ERROR_UI_MESSAGES[job.errorCode as MediaErrorCode].title}
                     </p>
                     <p className='mt-1 text-red-200/80'>
-                      {MEDIA_ERROR_UI_MESSAGES[video.processingJobs[0].errorCode as MediaErrorCode].description}
+                      {MEDIA_ERROR_UI_MESSAGES[job.errorCode as MediaErrorCode].description}
                     </p>
                   </div>
                 ) : null}
                 {/* Step 9.1: the source is visible immediately, before any configuration. */}
-                <video data-testid='source-preview' controls preload='none' className='max-h-[360px] w-full rounded-xl bg-black object-contain'
+                <video data-testid='source-preview' controls playsInline preload='none'
+                  className='aspect-video max-h-[56svh] w-full rounded-xl bg-black object-contain sm:max-h-[360px]'
                   poster={sourcePosterUrl(video.id)} src={sourceFileUrl(video.id)} aria-label={`Source: ${video.originalName}`} />
                 <ClipCreationPanel video={video} />
                 {developerDiagnostics ? (
