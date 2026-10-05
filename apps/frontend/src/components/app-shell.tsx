@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { History, Plus, Settings } from 'lucide-react';
+import { History, Pencil, Plus, Settings } from 'lucide-react';
 import { BrandMark } from '@/components/brand';
 import { MobileNav } from '@/components/mobile-nav';
 import { cn } from '@/lib/utils';
@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 const links = [
   { label: 'Create', href: '/', icon: Plus },
   { label: 'History', href: '/history', icon: History },
+  { label: 'Edit', href: '/edit', icon: Pencil },
   { label: 'Settings', href: '/settings', icon: Settings }
 ];
 

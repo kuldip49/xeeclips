@@ -2,13 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { History, Plus, Settings } from 'lucide-react';
+import { History, Pencil, Plus, Settings } from 'lucide-react';
 import { useTypingFlag } from '@/lib/use-typing';
 import { cn } from '@/lib/utils';
 
 const tabs = [
   { label: 'Create', href: '/', icon: Plus, match: (path: string) => path === '/' || path.startsWith('/create') },
   { label: 'History', href: '/history', icon: History, match: (path: string) => path.startsWith('/history') },
+  { label: 'Edit', href: '/edit', icon: Pencil, match: (path: string) => path === '/edit' || path.startsWith('/edit-mode') },
   { label: 'Settings', href: '/settings', icon: Settings, match: (path: string) => path.startsWith('/settings') }
 ];
 

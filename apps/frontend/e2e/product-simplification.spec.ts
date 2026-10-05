@@ -14,15 +14,16 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test('Create is home, with only Create, History and Settings navigation', async ({ page }) => {
+test('Create is home, with Create, History, Edit and Settings navigation', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Create clips' })).toBeVisible();
   const nav = page.getByTestId('mobile-nav');
   await expect(nav.getByRole('link', { name: 'Create' })).toBeVisible();
   await expect(nav.getByRole('link', { name: 'History' })).toBeVisible();
+  await expect(nav.getByRole('link', { name: 'Edit' })).toBeVisible();
   await expect(nav.getByRole('link', { name: 'Settings' })).toBeVisible();
-  await expect(nav.getByRole('link')).toHaveCount(3);
+  await expect(nav.getByRole('link')).toHaveCount(4);
   await expect(page.getByText('StyleZero')).toBeVisible();
   await expect(page.getByText('StyleOne')).toBeVisible();
   await expect(page.getByText('No Edit')).toBeVisible();
@@ -30,18 +31,28 @@ test('Create is home, with only Create, History and Settings navigation', async 
   await expect(page.getByText('XeePro')).toBeVisible();
   await nav.getByRole('link', { name: 'History' }).click();
   await expect(page.getByText('No clips yet.')).toBeVisible();
+  await nav.getByRole('link', { name: 'Edit' }).click();
+  await expect(page.getByRole('heading', { name: 'Edit clips' })).toBeVisible();
+  await expect(page.getByText('No clips to edit yet.')).toBeVisible();
   await nav.getByRole('link', { name: 'Settings' }).click();
   await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
   await page.goto('/dashboard');
   await expect(page).toHaveURL('/');
   await page.goto('/projects');
   await expect(page).toHaveURL('/history');
+  await page.goto('/edit-mode');
+  await expect(page).toHaveURL('/edit');
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.goto('/edit');
+  const desktopNav = page.getByRole('navigation', { name: 'Main navigation' });
+  await expect(desktopNav.getByRole('link', { name: 'Edit' })).toHaveAttribute('aria-current', 'page');
+  await expect(desktopNav.getByRole('link')).toHaveCount(4);
 });
 
 test('main routes have no page-level horizontal overflow at requested widths', async ({ page }) => {
   for (const width of widths) {
     await page.setViewportSize({ width, height: 900 });
-    for (const path of ['/', '/history', '/settings']) {
+    for (const path of ['/', '/history', '/edit', '/settings']) {
       await page.goto(path);
       await expect(page.locator('main')).toBeVisible();
       const size = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth,

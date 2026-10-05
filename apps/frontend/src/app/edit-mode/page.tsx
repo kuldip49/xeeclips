@@ -1,3 +1,3 @@
 import { redirect } from 'next/navigation';
 
-export default function EditorRedirect() { redirect('/history'); }
+export default function EditorRedirect() { redirect('/edit'); }
