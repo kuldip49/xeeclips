@@ -49,25 +49,15 @@ const numberSetting = (name: string, fallback: number, minimum = 0, maximum = 60
   const parsed = Number(process.env[name]);
   return Number.isFinite(parsed) ? Math.max(minimum, Math.min(maximum, Math.floor(parsed))) : fallback;
 };
-const trimSlash = (value: string) => value.replace(/\/+$/u, '');
-
-function localConfig(): LlmEndpointConfig | null {
-  if (!enabled('LOCAL_LLM_ENABLED', false)) return null;
-  return { provider: 'ollama', apiKey: '',
-    baseUrl: trimSlash(process.env.LOCAL_LLM_BASE_URL || 'http://host.docker.internal:11434'),
-    model: 'qwen3:4b', apiStyle: 'ollama',
-    timeoutMs: numberSetting('LOCAL_LLM_TIMEOUT_MS', 60000, 1000), maxRetries: 0,
-    retryBaseDelayMs: numberSetting('LLM_RETRY_BASE_DELAY_MS', 1000, 1, 10000),
-    concurrency: numberSetting('LOCAL_LLM_MAX_CONCURRENCY', 1, 1, 4) };
-}
+// Step 6 production model policy: ONLINE routes to the OpenAI API only; every
+// other mode (FALLBACK_ONLY, and the legacy OFFLINE value, which is normalized to
+// FALLBACK_ONLY) has NO model route and callers use their deterministic fallback.
+// There is no local (Ollama/Qwen) LLM route.
 
 const CREATIVE_ROLES = new Set<LlmTaskRole>(['creativeGeneration', 'hookGeneration',
   'captionGeneration', 'titleGeneration', 'hashtagGeneration', 'synopsisGeneration',
   'componentRepair']);
-const OFFLINE_MODEL_ROLES = new Set<LlmTaskRole>([
-  'clipUnderstanding', 'creativeGeneration', 'critic', 'componentRepair']);
-const OFFLINE_PROVIDER_ALLOWLIST = new Set(['ollama']);
-export const AI_MODE_ROLE_TIMEOUTS: Record<AiProcessingMode.ONLINE | AiProcessingMode.OFFLINE,
+export const AI_MODE_ROLE_TIMEOUTS: Record<AiProcessingMode.ONLINE,
   Readonly<Record<'multimodalUnderstanding' | 'wholeVideoUnderstanding' |
   'clipUnderstanding' | 'creativeGeneration' | 'critic' | 'componentRepair' |
   'editingPlan', number>>> = {
@@ -79,20 +69,7 @@ export const AI_MODE_ROLE_TIMEOUTS: Record<AiProcessingMode.ONLINE | AiProcessin
     critic: 12000,
     componentRepair: 15000,
     editingPlan: 40000
-  },
-  [AiProcessingMode.OFFLINE]: {
-    multimodalUnderstanding: 20000,
-    wholeVideoUnderstanding: 30000,
-    clipUnderstanding: 45000,
-    creativeGeneration: 45000,
-    critic: 35000,
-    componentRepair: 30000,
-    editingPlan: 30000
   }
-};
-const enabled = (name: string, fallback: boolean) => {
-  const value = process.env[name]?.trim().toLowerCase();
-  return value ? ['1', 'true', 'yes', 'on'].includes(value) : fallback;
 };
 
 function roleSettingPrefix(role: LlmTaskRole) {
@@ -110,37 +87,13 @@ function timeoutRole(role: LlmTaskRole): TimeoutRole {
 }
 
 /** Role limits are fail-fast ceilings. Environment settings may shorten, never extend, them. */
-export function effectiveRoleTimeoutMs(mode: AiProcessingMode.ONLINE | AiProcessingMode.OFFLINE,
+export function effectiveRoleTimeoutMs(mode: AiProcessingMode.ONLINE,
   role: LlmTaskRole, providerMaximumMs = 600000) {
   const policyRole = timeoutRole(role);
   const ceiling = AI_MODE_ROLE_TIMEOUTS[mode][policyRole];
-  const prefix = mode === AiProcessingMode.OFFLINE ? 'LOCAL_LLM_' : 'LLM_';
-  const configured = numberSetting(prefix + roleSettingPrefix(policyRole) + '_TIMEOUT_MS',
+  const configured = numberSetting('LLM_' + roleSettingPrefix(policyRole) + '_TIMEOUT_MS',
     ceiling, 1000, ceiling);
   return Math.min(providerMaximumMs, configured, ceiling);
-}
-
-/** LOCAL_LLM_TIMEOUT_MS remains the hard ceiling; role settings can only shorten it. */
-export function effectiveLocalTimeoutMs(role: LlmTaskRole, maximumMs =
-  numberSetting('LOCAL_LLM_TIMEOUT_MS', 60000, 1000)) {
-  return effectiveRoleTimeoutMs(AiProcessingMode.OFFLINE, role, maximumMs);
-}
-
-function uniqueRoutes(routes: Array<LlmEndpointConfig | null>) {
-  const seen = new Set<string>();
-  return routes.filter((route): route is LlmEndpointConfig => {
-    if (!route) return false;
-    const key = route.provider + ':' + route.model;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function routesAllowedForMode(mode: AiProcessingMode,
-  routes: Array<LlmEndpointConfig | null>) {
-  return mode === AiProcessingMode.OFFLINE ? uniqueRoutes(routes).filter(route =>
-    OFFLINE_PROVIDER_ALLOWLIST.has(route.provider.trim().toLowerCase())) : [];
 }
 
 @Injectable()
@@ -149,7 +102,10 @@ export class LlmRouterService {
   private readonly circuits = new Map<string, Circuit>();
   private readonly successful = new Map<string, LlmRouteResult<unknown>>();
   private readonly successfulRouteKeys = new Map<string, string>();
-  private readonly unavailable = new Map<string, { until: number; credentialHash?: string }>();
+  // `kind` keeps WHY a model is unavailable, so later requests report the real cause
+  // (e.g. a rejected key) instead of a generic "paused briefly, try again soon".
+  private readonly unavailable = new Map<string, { until: number; credentialHash?: string;
+    kind?: LlmProviderError['kind'] }>();
 
   constructor(private readonly provider: LlmProviderService = new LlmProviderService(),
     readonly registry: ProviderRegistry = new ProviderRegistry()) {}
@@ -157,15 +113,12 @@ export class LlmRouterService {
   routesFor(role: LlmTaskRole, requestedMode?: unknown): LlmEndpointConfig[] {
     const aiMode = requestedMode === undefined ? currentAiProcessingMode()
       : normalizeAiProcessingMode(requestedMode);
-    if (aiMode === AiProcessingMode.FALLBACK_ONLY) return [];
-    const local = localConfig();
-    if (aiMode === AiProcessingMode.OFFLINE) return OFFLINE_MODEL_ROLES.has(role)
-      ? routesAllowedForMode(aiMode, [local]) : [];
+    if (aiMode !== AiProcessingMode.ONLINE) return [];
     return this.registry.chain(role).map(adapter => adapter.routeFor(role));
   }
 
   isAnyConfigured(role: LlmTaskRole) {
-    if (currentAiProcessingMode() === AiProcessingMode.FALLBACK_ONLY) {
+    if (currentAiProcessingMode() !== AiProcessingMode.ONLINE) {
       this.logger.log(JSON.stringify({ event: 'llm_skipped', role,
         reason: 'AI_MODE_FALLBACK_ONLY', aiMode: AiProcessingMode.FALLBACK_ONLY }));
       return false;
@@ -180,7 +133,7 @@ export class LlmRouterService {
   async generate<T>(input: { role: LlmTaskRole; request: StructuredGenerationRequest }):
     Promise<LlmRouteResult<T>> {
     const aiMode = currentAiProcessingMode();
-    if (aiMode === AiProcessingMode.FALLBACK_ONLY) {
+    if (aiMode !== AiProcessingMode.ONLINE) {
       this.logger.log(JSON.stringify({ event: 'llm_skipped', role: input.role,
         reason: 'AI_MODE_FALLBACK_ONLY', aiMode }));
       throw new LlmProviderError('AI_MODE_FALLBACK_ONLY',
@@ -214,6 +167,9 @@ export class LlmRouterService {
           providerState: 'COOLDOWN' });
         this.logger.warn(JSON.stringify({ event: 'llm_job_route_unavailable', role: input.role,
           provider: route.provider, model: route.model }));
+        // A permanent cause (rejected key, exhausted quota, missing model) is reported as itself.
+        const cause = this.unavailable.get(this.circuitKey(route))?.kind;
+        if (cause) lastError = new LlmProviderError(cause, 'Provider unavailable: ' + cause);
         continue;
       }
       const circuitPermit = this.acquireCircuit(route, input.role);
@@ -228,9 +184,7 @@ export class LlmRouterService {
         continue;
       }
       const started = Date.now();
-      const timeoutMs = route.apiStyle === 'ollama'
-        ? effectiveLocalTimeoutMs(input.role, route.timeoutMs) :
-        effectiveRoleTimeoutMs(AiProcessingMode.ONLINE, input.role, route.timeoutMs);
+      const timeoutMs = effectiveRoleTimeoutMs(AiProcessingMode.ONLINE, input.role, route.timeoutMs);
       // Interactive cloud roles fail over after one attempt per provider.
       const boundedRoute = { ...route, timeoutMs,
         maxRetries: 0 };
@@ -243,8 +197,7 @@ export class LlmRouterService {
           options: { ...this.settingsFor(input.role), ...input.request.options,
             timeoutMs: Math.min(input.request.options?.timeoutMs ?? timeoutMs, timeoutMs) }
         };
-        const adapter = aiMode === AiProcessingMode.ONLINE ?
-          this.registry.get(route.provider) : undefined;
+        const adapter = this.registry.get(route.provider);
         const data = adapter ? await adapter.generateStructured<T>(boundedRoute, request,
           this.provider) : await this.provider.generateStructuredWithConfig<T>(boundedRoute, request);
         attempts.push({ provider: route.provider, model: route.model, success: true,
@@ -289,7 +242,7 @@ export class LlmRouterService {
     resetProviderModelAvailability(); }
 
   stateFor(route: LlmEndpointConfig, role: LlmTaskRole): ProviderState {
-    if (!this.registry.isEnabled(route.provider) && route.apiStyle !== 'ollama') return 'DISABLED';
+    if (!this.registry.isEnabled(route.provider)) return 'DISABLED';
     if (!this.provider.isConfigured(route)) return 'UNCONFIGURED';
     if (this.isUnavailable(route)) return 'UNAVAILABLE';
     if (this.isCircuitOpen(this.circuitKey(route)) ||
@@ -334,7 +287,7 @@ export class LlmRouterService {
 
   private circuitKey(route: LlmEndpointConfig, role?: LlmTaskRole) {
     return route.provider + ':' + route.model +
-      (role && route.apiStyle !== 'ollama' ? ':' + timeoutRole(role) : '');
+      (role ? ':' + timeoutRole(role) : '');
   }
   private acquireCircuit(route: LlmEndpointConfig, role: LlmTaskRole): 'closed' | 'half-open' | null {
     if (this.isCircuitOpen(this.circuitKey(route))) return null;
@@ -368,19 +321,11 @@ export class LlmRouterService {
       const cooldown = error.kind === 'AUTH_FAILURE' || error.kind === 'MODEL_NOT_FOUND'
         ? 365 * 24 * 60 * 60 * 1000 : numberSetting('LLM_QUOTA_COOLDOWN_MS', 3600000, 1000, 86400000);
       this.unavailable.set(this.circuitKey(route), { until: Date.now() + cooldown,
-        credentialHash: createHash('sha256').update(route.apiKey).digest('hex') });
-      return;
-    }
-    if (route.apiStyle === 'ollama' && !['LOCAL_CONNECTION_FAILURE',
-      'LOCAL_PROVIDER_UNAVAILABLE', 'LOCAL_MODEL_NOT_FOUND'].includes(error.kind)) {
-      // Prompt and schema failures say nothing about availability for other roles.
-      if (this.circuits.get(key)?.halfOpenProbe) this.circuits.delete(key);
+        credentialHash: createHash('sha256').update(route.apiKey).digest('hex'), kind: error.kind });
       return;
     }
     if (!['TIMEOUT_FAILURE', 'NETWORK_FAILURE', 'RATE_LIMIT_FAILURE',
-      'PROVIDER_5XX_FAILURE', 'PROVIDER_SATURATION_FAILURE',
-      'LOCAL_PROVIDER_UNAVAILABLE', 'LOCAL_MODEL_NOT_FOUND',
-      'LOCAL_CONNECTION_FAILURE'].includes(error.kind)) {
+      'PROVIDER_5XX_FAILURE', 'PROVIDER_SATURATION_FAILURE'].includes(error.kind)) {
       // A non-health failure proves the provider answered; it must not strand a half-open probe.
       if (this.circuits.get(key)?.halfOpenProbe) this.circuits.delete(key);
       return;
@@ -388,21 +333,14 @@ export class LlmRouterService {
     const now = Date.now();
     const prior = this.circuits.get(key) || { failureTimes: [], cooldownUntil: 0,
       halfOpenProbe: false };
-    const local = route.apiStyle === 'ollama';
-    const threshold = local ? numberSetting('LOCAL_LLM_CIRCUIT_FAILURE_THRESHOLD', 2, 1, 20)
-      : numberSetting('LLM_CIRCUIT_FAILURE_THRESHOLD', 3, 1, 20);
+    const threshold = numberSetting('LLM_CIRCUIT_FAILURE_THRESHOLD', 3, 1, 20);
     const windowMs = numberSetting('LLM_CIRCUIT_WINDOW_MS', 60000, 1000);
     const failureTimes = [...prior.failureTimes.filter(time => now - time <= windowMs),
       ...Array.from({ length: Math.max(1, error.attempts) }, () => now)];
     const rateLimited = error.kind === 'RATE_LIMIT_FAILURE';
-    const localUnavailable = error.kind === 'LOCAL_MODEL_NOT_FOUND' ||
-      error.kind === 'LOCAL_PROVIDER_UNAVAILABLE';
     const reopen = rateLimited || error.kind === 'PROVIDER_SATURATION_FAILURE' ||
-      localUnavailable || prior.halfOpenProbe ||
-      failureTimes.length >= threshold;
-    const normalCooldown = local
-      ? numberSetting('LOCAL_LLM_CIRCUIT_COOLDOWN_MS', 30000, 1000)
-      : numberSetting('LLM_CIRCUIT_COOLDOWN_MS', 45000, 1000);
+      prior.halfOpenProbe || failureTimes.length >= threshold;
+    const normalCooldown = numberSetting('LLM_CIRCUIT_COOLDOWN_MS', 45000, 1000);
     const rateLimitCooldown = numberSetting('GOOGLE_RATE_LIMIT_COOLDOWN_MS', 60000, 1000);
     this.circuits.set(key, { failureTimes, halfOpenProbe: false, cooldownUntil: reopen
       ? now + Math.max(rateLimited ? rateLimitCooldown : normalCooldown,

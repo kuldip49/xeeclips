@@ -13,17 +13,21 @@ function formatBytes(bytes: number) {
 }
 
 export default async function DashboardPage() {
-  const [projectResult, videoResult] = await Promise.allSettled([listProjects(), listVideos()]);
+  const auth: RequestInit = {};
+  const [projectResult, videoResult] = await Promise.allSettled([listProjects(auth), listVideos(undefined, auth)]);
   const projects = projectResult.status === 'fulfilled' ? projectResult.value : [];
   const videos = videoResult.status === 'fulfilled' ? videoResult.value : [];
   const loadFailed = projectResult.status === 'rejected' || videoResult.status === 'rejected';
+  const serverUnavailable = [projectResult, videoResult].some((result) =>
+    result.status === 'rejected' && result.reason instanceof Error &&
+    result.reason.message === 'Processing server is currently unavailable.');
   const active = videos.filter((video) => video.processingJobs?.[0]?.status === 'PROCESSING' || video.processingJobs?.[0]?.status === 'PENDING');
   const completed = videos.filter((video) => video.processingJobs?.[0]?.status === 'COMPLETED');
-  const clipResults = await Promise.allSettled(completed.map(async (video) => ({ video, clips: await getGeneratedClips(video.id) })));
+  const clipResults = await Promise.allSettled(completed.map(async (video) => ({ video, clips: await getGeneratedClips(video.id, auth) })));
   const generatedClips = clipResults.flatMap((result) => result.status === 'fulfilled' ? result.value.clips.map((clip) => ({ clip, video: result.value.video })) : []);
   return <AppShell title='Dashboard'>
     <div className='grid gap-8'>
-      {loadFailed && <div role='alert' className='flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100'><span>Some workspace data could not be loaded. Please try again.</span><Link href='/dashboard' className='font-semibold underline underline-offset-4'>Retry</Link></div>}
+      {loadFailed && <div role='alert' className='flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4 text-sm text-amber-100'><span>{serverUnavailable ? 'Processing server is currently unavailable. Check that the laptop, Docker, and tunnel are running.' : 'Some workspace data could not be loaded. Please try again.'}</span><Link href='/dashboard' className='font-semibold underline underline-offset-4'>Retry</Link></div>}
       <header className='flex flex-col justify-between gap-5 sm:flex-row sm:items-end'>
         <div><p className='eyebrow'>Overview</p><h1 className='mt-2 text-3xl font-bold tracking-tight md:text-4xl'>Welcome to your workspace</h1><p className='mt-3 max-w-2xl text-sm leading-6 text-slate-400'>Create a project, upload a source video, and turn its strongest moments into clips.</p></div>
         <a href='#new-project' className='inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-violet-500 px-4 text-sm font-semibold shadow-lg shadow-violet-500/20 transition hover:-translate-y-0.5 hover:bg-violet-400'><Plus size={16} />New project</a>

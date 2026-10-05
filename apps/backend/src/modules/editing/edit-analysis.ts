@@ -6,6 +6,7 @@ import type { VisualTrack } from './reframe.service';
 export type TextBox = { x: number; y: number; w: number; h: number };
 export type AnalysisFrame = { t: number; faces: VisualTrack[]; persons: VisualTrack[];
   textCoverage: number; textBoxes: TextBox[]; ocrLines: string[]; ocrCoverage?: number;
+  edgeDensity?: number; visualLabels?: string[];
   // Large burned-in lettering; used only to keep captions off source graphics.
   graphicBoxes?: TextBox[] };
 export type EditAnalysis = {
@@ -63,7 +64,8 @@ export function analysisFromStoredChunks(chunks: StoredChunk[], start: number, e
 
 type DenseResponse = { frames: Array<{ t: number; faces: Array<Record<string, number | string>>;
   persons: Array<Record<string, number>>; text_coverage: number;
-  text_boxes: TextBox[]; graphic_boxes?: TextBox[]; ocr_lines?: string[]; ocr_coverage?: number }>;
+  text_boxes: TextBox[]; graphic_boxes?: TextBox[]; ocr_lines?: string[]; ocr_coverage?: number;
+  edge_density?: number; visual_labels?: string[] }>;
   shot_boundaries: number[]; ocr_text: string };
 
 export type DenseAnalysisDeps = {
@@ -101,7 +103,9 @@ export async function requestDenseAnalysis(deps: DenseAnalysisDeps, windowPath: 
         persons: frame.persons.map(toTrack(t)).filter(finiteTrack),
         textCoverage: Number(frame.text_coverage) || 0, textBoxes: frame.text_boxes ?? [],
         graphicBoxes: frame.graphic_boxes ?? [],
-        ocrLines: frame.ocr_lines ?? [], ocrCoverage: frame.ocr_coverage };
+        ocrLines: frame.ocr_lines ?? [], ocrCoverage: frame.ocr_coverage,
+        edgeDensity: frame.edge_density,
+        visualLabels: frame.visual_labels ?? [] };
     }).filter((frame) => frame.t <= windowEnd + .05);
     return { source: 'DENSE', frames,
       shotBoundaries: body.shot_boundaries.map((value) => windowStart + value)

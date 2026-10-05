@@ -1,0 +1,17 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.resolve(__dirname, '..');
+const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+const right = read('src/components/edit-mode/shell/edit-right-panel.tsx');
+const review = read('src/components/edit-mode/edit-review-panel.tsx');
+const brief = read('src/components/edit-mode/edit-brief-panel.tsx');
+assert.match(right, /Chat[\s\S]*Review[\s\S]*Edit plan/);
+assert.match(review, /Evidence[\s\S]*Suggestion/);
+assert.match(review, /Apply suggestion/);
+assert.match(review, /Review my edit/);
+assert.match(review, /Review this selection/);
+assert.match(brief, /AI Edit Plan/);
+for (const label of ['Apply', 'Change', 'Skip', 'Stop', 'Continue']) assert.match(brief, new RegExp(label));
+assert.doesNotMatch(review, /viral score|definitely increase/i);
+console.log('EditMode review/brief UI checks passed.');

@@ -14,6 +14,7 @@ const { validateChatIntent, CHAT_ELEMENT_ACTIONS, CHAT_SETTINGS_ACTIONS,
   CHAT_SAFE_CONFIDENCE } = require(`${C}/edit-chat-commands.js`);
 const { buildChatContext } = require(`${C}/edit-chat-context.js`);
 const { planDeterministicChat, fallbackUnsupported } = require(`${C}/edit-chat-deterministic.js`);
+const { parseNaturalRequest } = require(`${C}/edit-chat-intents.js`);
 const { resolveChatPlan } = require(`${C}/edit-chat-resolver.js`);
 const { searchTranscript, resolveTranscriptSpan, topicTerms } =
   require(`${C}/edit-chat-transcript.js`);
@@ -121,6 +122,26 @@ function contextFixture(overrides = {}) {
   });
 }
 
+/** The fixture's default elements, for tests that add one more. */
+const baseElements = () => contextFixture().elements.filter((view) => !view.virtual)
+  .map((view) => ({ id: view.id, type: view.type, track: view.track, position: view.position,
+    startTime: view.startSec, duration: view.endSec - view.startSec,
+    assetId: { 'video-1': 'asset-source', 'logo-1': 'asset-logo', 'audio-1': 'asset-audio' }[view.id]
+      ?? null, trimStart: view.trimStartSec, trimEnd: view.trimEndSec,
+    properties: view.type === 'IMAGE' ? { role: 'LOGO', x: 0.76, y: 0.04, width: 0.2,
+      height: 0.12, opacity: 1, zIndex: 20, origin: 'USER' }
+      : view.type === 'TEXT' ? { content: 'Hello', x: 0.2, y: 0.42, width: 0.6, height: 0.16,
+        opacity: 1, zIndex: 30, origin: 'USER' }
+        : view.type === 'AUDIO' ? { volume: 0.4, muted: false, fadeInSec: 0, fadeOutSec: 0 } : {} }));
+const captionElement = () => ({ id: 'caption-1', type: 'SUBTITLE', track: 1, position: 2,
+  startTime: 1, duration: 2, assetId: null, trimStart: 0, trimEnd: null,
+  properties: { content: 'Welcome back everyone', y: 0.73 } });
+
+/** The Workstream G natural-language layer, on the Phase 6 fixture. */
+function natural(message, overrides = {}) {
+  return parseNaturalRequest(message, contextFixture({ ...overrides, message }));
+}
+
 /** Plans a sentence and resolves it, the way the service does. */
 function planAndResolve(message, overrides = {}) {
   const context = contextFixture({ ...overrides, message });
@@ -142,7 +163,11 @@ console.log('EditMode Phase 6 AI chat editor:');
   assert.ok(CHAT_ELEMENT_ACTIONS.includes('SPLIT_ELEMENT'));
   assert.ok(CHAT_ELEMENT_ACTIONS.includes('SET_AUDIO_FADE'));
   assert.ok(CHAT_SETTINGS_ACTIONS.includes('SET_ASPECT_RATIO'));
-  assert.ok(CHAT_SETTINGS_ACTIONS.includes('SET_HOOK'));
+  // Workstream G removed SET_HOOK: it wrote settings.hookText, which nothing
+  // renders, so "change the hook" was accepted and changed nothing on screen.
+  // The hook is a TEXT element and is edited with SET_TEXT_CONTENT.
+  assert.ok(!CHAT_SETTINGS_ACTIONS.includes('SET_HOOK'));
+  assert.ok(CHAT_ELEMENT_ACTIONS.includes('SET_TEXT_CONTENT'));
 
   const valid = validateChatIntent({
     intent: 'EDIT_PROJECT', summary: 'Do a thing',
@@ -260,9 +285,11 @@ console.log('EditMode Phase 6 AI chat editor:');
   const mid = planAndResolve('cut from 12 to 17 seconds').resolution;
   assert.deepEqual(mid.commands.slice(-3).map((command) => command.action),
     ['SPLIT_ELEMENT', 'SPLIT_ELEMENT', 'DELETE_ELEMENT']);
-  assert.equal(mid.commands.at(-3).payload.atSec, 12);
-  assert.equal(mid.commands.at(-2).payload.atSec, 17);
-  assert.equal(mid.commands.at(-1).payload.atSec, 14.5);
+  // The segment locator is `targetAtSec` (Workstream G): `atSec` is a real
+  // SPLIT_CAPTION parameter and the bundle must not consume it.
+  assert.equal(mid.commands.at(-3).payload.targetAtSec, 12);
+  assert.equal(mid.commands.at(-2).payload.targetAtSec, 17);
+  assert.equal(mid.commands.at(-1).payload.targetAtSec, 14.5);
   ok('an interior range becomes split/split/delete addressed by time');
 
   const past = planAndResolve('cut from 12 to 400 seconds');
@@ -459,10 +486,16 @@ function handleOfAsset(context, id) {
   assert.equal(aspect.commands[0].payload.aspectRatio, '9:16');
   ok('"make it 9:16" sets the aspect ratio');
 
-  const subs = planAndResolve('turn subtitles on').resolution;
-  assert.equal(subs.commands[0].action, 'SET_SUBTITLE_POLICY');
-  assert.equal(subs.commands[0].payload.subtitlePolicy, 'ALWAYS');
-  ok('"turn subtitles on" sets the caption policy');
+  // Workstream G: caption on/off acts on the caption ELEMENTS. The Phase 6
+  // version set subtitlePolicy, which does not hide caption elements that exist.
+  const hide = natural('turn subtitles off', { elements: [...baseElements(), captionElement()] });
+  assert.equal(hide.outcomes[0].commands[0].action, 'SET_CAPTIONS_VISIBLE');
+  assert.equal(hide.outcomes[0].commands[0].parameters.visible, false);
+  const add = natural('turn subtitles on');
+  assert.ok(add.outcomes[0].type === 'QUESTION' ||
+    add.outcomes[0].commands[0].action === 'GENERATE_CAPTIONS');
+  assert.ok(!JSON.stringify(add).includes('SET_SUBTITLE_POLICY'));
+  ok('"turn subtitles on/off" acts on caption elements, never on a policy that hides nothing');
 
   const zoom = planAndResolve('use subtle zoom').resolution;
   assert.equal(zoom.commands[0].action, 'SET_AUTO_ZOOM');
@@ -483,17 +516,27 @@ function handleOfAsset(context, id) {
   assert.equal(grading.commands[0].payload.gradingPolicy, 'CLEAN');
   ok('"use clean grading" sets the grade');
 
-  const hook = planAndResolve('remove the hook').resolution;
-  assert.equal(hook.commands[0].action, 'SET_HOOK');
-  assert.equal(hook.commands[0].payload.hookText, null);
-  assert.equal(hook.commands[0].payload.hookPolicy, 'OFF');
-  ok('"remove the hook" clears the headline');
+  // Workstream G: "remove the hook" removes the hook ELEMENT that is on
+  // screen. The Phase 6 version cleared settings.hookText and left it there.
+  const hookFixture = [...baseElements(), { id: 'hook-1', type: 'TEXT', track: 1, position: 1,
+    startTime: 0, duration: 3, assetId: null, trimStart: 0, trimEnd: null,
+    properties: { content: 'Old hook', presetRole: 'HOOK', origin: 'PRESET', x: 0.1, y: 0.1,
+      width: 0.8, height: 0.15 } }];
+  const hook = natural('remove the hook', { elements: hookFixture });
+  const hookContext = contextFixture({ elements: hookFixture, message: 'remove the hook' });
+  const removal = resolveChatPlan(hook.outcomes[0].commands, [], hookContext);
+  assert.equal(removal.commands[0].action, 'REMOVE_ELEMENT');
+  assert.equal(removal.commands[0].payload.elementId, 'hook-1');
+  assert.equal(planDeterministicChat('remove the hook', hookContext)?.commands
+    ?.some((command) => command.action === 'SET_HOOK') ?? false, false);
+  ok('"remove the hook" removes the on-screen hook element');
 
-  const noTranscriptSubs = planAndResolve('turn subtitles on', {
+  const noTranscriptSubs = natural('turn subtitles on', {
     evidence: evidenceFixture({ transcript: false })
   });
-  assert.ok(noTranscriptSubs.intent.warnings.some((warning) => /Analyze source/u.test(warning)));
-  ok('enabling captions without a transcript warns rather than pretending');
+  assert.equal(noTranscriptSubs.outcomes[0].type, 'QUESTION');
+  assert.match(noTranscriptSubs.outcomes[0].question, /Analyze source/u);
+  ok('enabling captions without a transcript asks rather than pretending');
 }
 
 // --- 6. Transcript grounding ------------------------------------------------
@@ -657,7 +700,8 @@ function handleOfAsset(context, id) {
     ...many
   ], selection: { selectedElementId: 'text-39', selectedTimeRange: null, playheadSec: 0 } });
   assert.ok(context.elements.length <= 26);
-  assert.ok(context.notes.some((note) => /overlays are listed/u.test(note)));
+  // Workstream G reports truncation per kind ("Only 12 of 40 text elements...").
+  assert.ok(context.notes.some((note) => /of 40 text elements are listed/u.test(note)));
   ok('a crowded project is bounded before it reaches the planner');
 
   const selected = context.elements.find((element) => element.selected);
@@ -668,8 +712,11 @@ function handleOfAsset(context, id) {
   ok('the transcript excerpt is bounded');
 
   const full = contextFixture();
-  assert.ok(full.elements.every((element) => /^el\d+$/u.test(element.handle)));
-  assert.ok(full.assets.every((asset) => /^asset\d+$/u.test(asset.handle)));
+  // Workstream G handles are opaque ROLE handles ("logo:main", "audio:music1",
+  // "asset:logo1") rather than "el3" - readable, still never a database id.
+  assert.ok(full.elements.every((element) => /^[a-z]+:[a-z0-9]+$/u.test(element.handle)));
+  assert.ok(full.assets.every((asset) => /^asset:[a-z]+\d+$/u.test(asset.handle)));
+  assert.ok(full.elements.every((element) => !element.handle.includes(element.id)));
   assert.ok(!JSON.stringify(full.elements.map((element) => element.properties))
     .includes('asset-logo'));
   ok('elements and assets are exposed only behind logical handles');
@@ -736,12 +783,17 @@ function handleOfAsset(context, id) {
   ok('FALLBACK_ONLY still handles a direct command with no provider');
 
   // 39. FALLBACK semantic unsupported handled safely
+  // Workstream G, Part 21: the canned "I can still do direct edits - for
+  // example ..." menu is gone - it was shown even to "change the on screen
+  // hook". What reaches the fallback now genuinely was not understood, so it
+  // proposes nothing and asks ONE question naming this project's own objects.
   const unsupported = fallbackUnsupported(contextFixture());
-  assert.equal(unsupported.intent, 'UNSUPPORTED');
+  assert.equal(unsupported.intent, 'NEEDS_CLARIFICATION');
   assert.equal(unsupported.commands.length, 0);
   assert.equal(unsupported.needsClarification, true);
-  assert.match(unsupported.clarificationQuestion, /remove the first 3 seconds/u);
-  ok('an unparseable request in FALLBACK_ONLY proposes nothing and explains what works');
+  assert.match(unsupported.clarificationQuestion, /the logo, the music/u);
+  assert.doesNotMatch(unsupported.clarificationQuestion, /I can still do direct edits/u);
+  ok('an unparseable request proposes nothing and asks one question about this project');
 
   assert.equal(planDeterministicChat('', contextFixture()), null);
   assert.equal(planDeterministicChat('what do you think of my video?', contextFixture()), null);
@@ -792,7 +844,9 @@ function handleOfAsset(context, id) {
   const canonical = fs.readFileSync(path.join(directory, '..', 'edit-mode.service.ts'), 'utf8');
   assert.ok(/MANUAL_ACTIONS[\s\S]{0,200}APPLY_ASSISTANT_EDIT/u.test(canonical));
   ok('APPLY_ASSISTANT_EDIT is an undoable user-level action');
-  assert.ok(canonical.includes("actor: 'ASSISTANT'"));
+  // Step 5 threads an execution actor through; AI turns still record ASSISTANT
+  // (template runs record TEMPLATE).
+  assert.ok(canonical.includes("actor: actor === 'TEMPLATE_ACTION' ? 'TEMPLATE' : 'ASSISTANT'"));
   ok('an applied chat turn is recorded with the ASSISTANT actor');
 }
 

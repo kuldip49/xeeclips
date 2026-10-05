@@ -7,10 +7,15 @@
 // editor and the preset planner use.
 //
 // Targets are LOGICAL handles, not database ids. The model is never asked to
-// invent a UUID: it says "the selected element" or "the logo" or "the text I
-// just added", and the backend resolver turns that into a real EditElement id
-// against the live project. An unresolvable handle is a rejected command, not
-// a guess.
+// invent a UUID: it says "text:hook" or "logo:main" or "the selected element",
+// and the backend resolver turns that into a real EditElement id against the
+// live project. An unresolvable handle is a rejected command, not a guess.
+//
+// Workstream G widened the vocabulary from the Phase 3 overlay set to every
+// manual primitive Workstreams B-F built (transform, text, captions, colour,
+// audio, zoom), and REMOVED `SET_HOOK`: it wrote `settings.hookText`, which
+// nothing renders, so "change the hook" used to be accepted and then change
+// nothing on screen. The hook is a TEXT element and is edited as one.
 
 import { BadRequestException } from '@nestjs/common';
 import type { StrictJsonSchema } from '../../processing/llm-provider.service';
@@ -23,24 +28,49 @@ import {
 export const CHAT_ELEMENT_ACTIONS = [
   // Video timeline
   'TRIM_ELEMENT', 'SPLIT_ELEMENT', 'DELETE_ELEMENT', 'REORDER_ELEMENT',
+  // Video transform (Workstream B)
+  'SET_VIDEO_CROP', 'SET_VIDEO_ROTATION', 'SET_VIDEO_FLIP', 'SET_VIDEO_SCALE',
+  'SET_VIDEO_POSITION', 'SET_SPEED',
   // Overlays
   'ADD_IMAGE', 'ADD_LOGO', 'ADD_TEXT', 'ADD_AUDIO', 'MOVE_ELEMENT', 'RESIZE_ELEMENT',
   'SET_ELEMENT_TIMING', 'SET_ELEMENT_OPACITY', 'SET_ELEMENT_Z_INDEX', 'UPDATE_TEXT',
-  'DUPLICATE_ELEMENT', 'REMOVE_ELEMENT',
-  // Audio
-  'SET_AUDIO_VOLUME', 'SET_AUDIO_MUTED', 'SET_AUDIO_FADE'
+  'DUPLICATE_ELEMENT', 'REMOVE_ELEMENT', 'SET_ELEMENT_VISIBLE', 'SET_ELEMENT_LOCKED',
+  // Text (Workstream C)
+  'SET_TEXT_CONTENT', 'SET_TEXT_FONT', 'SET_TEXT_SIZE', 'SET_TEXT_WEIGHT', 'SET_TEXT_COLOR',
+  'SET_TEXT_ALIGNMENT', 'SET_TEXT_STROKE', 'SET_TEXT_SHADOW', 'SET_TEXT_BACKGROUND',
+  'SET_TEXT_SPACING', 'SET_TEXT_STYLE_PRESET', 'SET_TEXT_CASE',
+  // Captions (Workstream C)
+  'GENERATE_CAPTIONS', 'REMOVE_CAPTIONS', 'SET_CAPTIONS_VISIBLE', 'SET_CAPTION_TEXT',
+  'SPLIT_CAPTION', 'MERGE_CAPTION', 'SET_CAPTION_STYLE', 'SET_CAPTION_ACTIVE_WORD',
+  'APPLY_CAPTION_STYLE_TO_ALL',
+  // Colour (Workstream D)
+  'SET_VIDEO_EXPOSURE', 'SET_VIDEO_BRIGHTNESS', 'SET_VIDEO_CONTRAST', 'SET_VIDEO_HIGHLIGHTS',
+  'SET_VIDEO_SHADOWS', 'SET_VIDEO_SATURATION', 'SET_VIDEO_TEMPERATURE', 'SET_VIDEO_TINT',
+  'SET_VIDEO_SHARPNESS', 'SET_VIDEO_FADE', 'SET_VIDEO_VIGNETTE', 'RESET_VIDEO_ADJUSTMENTS',
+  'APPLY_COLOR_FILTER',
+  // Audio (Workstream D)
+  'SET_AUDIO_VOLUME', 'SET_AUDIO_MUTED', 'SET_AUDIO_FADE', 'SET_AUDIO_TRIM', 'SET_AUDIO_DUCKING',
+  'SET_SOURCE_AUDIO_VOLUME', 'SET_SOURCE_AUDIO_MUTED',
+  // Zoom (Workstream G)
+  'ADD_ZOOM', 'SET_ZOOM_SCALE', 'REMOVE_ZOOM'
 ] as const;
 export type ChatElementAction = typeof CHAT_ELEMENT_ACTIONS[number];
 
-/** Project style actions. Each sets typed fields of the settings style block. */
+/** Project style actions. Each sets typed fields of the settings style block.
+ *  SET_HOOK is deliberately absent - see the file header. */
 export const CHAT_SETTINGS_ACTIONS = ['SET_PROJECT_STYLE', 'SET_ASPECT_RATIO',
-  'SET_SUBTITLE_POLICY', 'SET_AUTO_REFRAME', 'SET_AUTO_ZOOM', 'SET_COLOR_GRADE',
-  'SET_HOOK'] as const;
+  'SET_SUBTITLE_POLICY', 'SET_AUTO_REFRAME', 'SET_AUTO_ZOOM', 'SET_COLOR_GRADE'] as const;
 export type ChatSettingsAction = typeof CHAT_SETTINGS_ACTIONS[number];
 
 /** Actions that remove or shorten material. Held to a higher grounding bar. */
 export const DESTRUCTIVE_CHAT_ACTIONS = new Set<ChatElementAction>([
-  'TRIM_ELEMENT', 'DELETE_ELEMENT', 'REMOVE_ELEMENT', 'SPLIT_ELEMENT'
+  'TRIM_ELEMENT', 'DELETE_ELEMENT', 'REMOVE_ELEMENT', 'SPLIT_ELEMENT', 'REMOVE_CAPTIONS'
+]);
+
+/** Actions that act on a whole track and need no target at all. */
+export const TARGETLESS_CHAT_ACTIONS = new Set<ChatElementAction>([
+  'GENERATE_CAPTIONS', 'REMOVE_CAPTIONS', 'SET_CAPTIONS_VISIBLE', 'SET_SOURCE_AUDIO_VOLUME',
+  'SET_SOURCE_AUDIO_MUTED', 'ADD_ZOOM'
 ]);
 
 /**
@@ -49,15 +79,18 @@ export const DESTRUCTIVE_CHAT_ACTIONS = new Set<ChatElementAction>([
  * SELECTED   - whatever the user has selected in the editor right now.
  * LAST       - the element the previous chat turn created or changed.
  * REF        - an element created earlier in THIS plan, by planner-local handle.
- * ROLE       - the single element playing a role ("the logo", "the music").
+ * ROLE       - the single element playing a role ("the logo", "the hook").
  * AT_TIME    - the video segment covering a timeline second.
- * ELEMENT    - an element handle taken from the context the backend supplied.
+ * ELEMENT    - an opaque handle taken from the context the backend supplied,
+ *              including the whole-track handles captions:all / video:all /
+ *              audio:source.
  */
 export const CHAT_TARGET_KINDS = ['SELECTED', 'LAST', 'REF', 'ROLE', 'AT_TIME', 'ELEMENT'] as const;
 export type ChatTargetKind = typeof CHAT_TARGET_KINDS[number];
 
-/** Roles a ROLE target may name. These map to element type + properties, not ids. */
-export const CHAT_TARGET_ROLES = ['LOGO', 'IMAGE', 'TEXT', 'MUSIC', 'SUBTITLE', 'VIDEO'] as const;
+/** Roles a ROLE target may name. These map to element type + metadata, not ids. */
+export const CHAT_TARGET_ROLES = ['LOGO', 'IMAGE', 'TEXT', 'MUSIC', 'SUBTITLE', 'VIDEO',
+  'HOOK', 'CTA', 'TITLE', 'LOWER_THIRD', 'ZOOM'] as const;
 export type ChatTargetRole = typeof CHAT_TARGET_ROLES[number];
 
 export type ChatTarget = {
@@ -68,7 +101,7 @@ export type ChatTarget = {
   role?: ChatTargetRole;
   /** AT_TIME: seconds on the edited timeline. */
   atSec?: number;
-  /** ELEMENT: an `elementHandle` from the supplied context, never a raw UUID. */
+  /** ELEMENT: a handle from the supplied context, never a raw UUID. */
   handle?: string;
 };
 
@@ -78,7 +111,7 @@ export type ChatElementCommand = {
   target?: ChatTarget;
   /** Planner-local handle for an element this command creates. */
   ref?: string;
-  /** An `assetHandle` from the supplied asset catalogue, for ADD_IMAGE/LOGO/AUDIO. */
+  /** An asset handle from the supplied asset catalogue, for ADD_IMAGE/LOGO/AUDIO. */
   assetHandle?: string;
   parameters: Record<string, unknown>;
   reason: string;
@@ -132,6 +165,10 @@ export const CHAT_SAFE_CONFIDENCE = 0.6;
 /** Destructive commands need this much before they may be proposed at all. */
 export const CHAT_DESTRUCTIVE_CONFIDENCE = 0.75;
 
+/** Hard cap on a model plan. Part 19: a normal turn is a few direct intents,
+ *  and a whole-project brief is a different feature. */
+export const CHAT_MAX_MODEL_COMMANDS = 8;
+
 /**
  * The bar a command must clear, given how much damage it can do.
  *
@@ -156,18 +193,19 @@ const asRecord = (value: unknown): Record<string, unknown> =>
 const boundedString = (value: unknown, limit: number) =>
   typeof value === 'string' ? value.slice(0, limit) : '';
 
-const HANDLE_PATTERN = /^[a-z0-9_-]{1,64}$/iu;
+/** Opaque handles: "text:hook", "caption:42", "asset:logo1". Never a UUID. */
+const HANDLE_PATTERN = /^[a-z][a-z0-9_]{0,31}(?::[a-z0-9_]{1,32})?$/u;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-/iu;
 
 const SETTINGS_FIELDS: Record<ChatSettingsAction, readonly (keyof EditProjectStyle)[]> = {
   SET_PROJECT_STYLE: ['aspectRatio', 'subtitlePolicy', 'zoomPolicy', 'reframePolicy',
-    'gradingPolicy', 'hookPolicy', 'textPolicy', 'overlayPolicy', 'musicPolicy',
+    'gradingPolicy', 'textPolicy', 'overlayPolicy', 'musicPolicy',
     'informationRegionPolicy', 'pacing'],
   SET_ASPECT_RATIO: ['aspectRatio'],
   SET_SUBTITLE_POLICY: ['subtitlePolicy'],
   SET_AUTO_REFRAME: ['reframePolicy'],
   SET_AUTO_ZOOM: ['zoomPolicy'],
-  SET_COLOR_GRADE: ['gradingPolicy'],
-  SET_HOOK: ['hookText', 'hookPolicy']
+  SET_COLOR_GRADE: ['gradingPolicy']
 };
 
 const SETTINGS_ENUMS: Partial<Record<keyof EditProjectStyle, readonly string[]>> = {
@@ -175,12 +213,58 @@ const SETTINGS_ENUMS: Partial<Record<keyof EditProjectStyle, readonly string[]>>
   zoomPolicy: ZOOM_POLICIES, reframePolicy: REFRAME_POLICIES, gradingPolicy: GRADING_POLICIES
 };
 
-/** Parameter keys a chat command may carry. Anything else is dropped, so a
- * model cannot smuggle a field the manual editor would never accept. */
-const ALLOWED_PARAMETERS = new Set(['trimStart', 'trimEnd', 'playheadSec', 'toPosition',
-  'startTime', 'duration', 'x', 'y', 'width', 'height', 'opacity', 'zIndex', 'content',
-  'fontSize', 'fontWeight', 'fontFamily', 'textAlign', 'color', 'backgroundColor',
-  'volume', 'muted', 'fadeInSec', 'fadeOutSec']);
+/**
+ * Parameter keys a chat command may carry, by value type. Anything else is
+ * dropped, so a model cannot smuggle a field the manual editor would never
+ * accept. The VALUES are bounds-checked by the canonical layer, which is the
+ * same code the inspector reaches - this list only closes the vocabulary.
+ */
+export const CHAT_NUMBER_PARAMETERS = ['trimStart', 'trimEnd', 'playheadSec', 'toPosition',
+  'startTime', 'duration', 'x', 'y', 'width', 'height', 'opacity', 'zIndex', 'fontSize',
+  'fontWeight', 'volume', 'fadeInSec', 'fadeOutSec', 'rotation', 'scale', 'speed',
+  'cropLeft', 'cropRight', 'cropTop', 'cropBottom', 'strokeWidth', 'shadowOpacity',
+  'shadowBlur', 'backgroundOpacity', 'backgroundPadding', 'letterSpacing', 'lineSpacing',
+  'atSec', 'exposure', 'brightness', 'contrast', 'highlights', 'shadows', 'saturation',
+  'temperature', 'tint', 'sharpness', 'fade', 'vignette', 'strength'] as const;
+export const CHAT_STRING_PARAMETERS = ['content', 'fontFamily', 'textAlign', 'color',
+  'backgroundColor', 'strokeColor', 'shadowColor', 'activeWordColor', 'textStyleId',
+  'captionStyleId', 'direction', 'filterId', 'duckStrength', 'triggerText',
+  'semanticRole'] as const;
+export const CHAT_BOOLEAN_PARAMETERS = ['muted', 'flipH', 'flipV', 'strokeEnabled',
+  'shadowEnabled', 'backgroundEnabled', 'uppercase', 'activeWordEnabled', 'visible',
+  'duckEnabled', 'applyBox', 'locked'] as const;
+const PARAMETER_TYPES = new Map<string, 'number' | 'string' | 'boolean'>([
+  ...CHAT_NUMBER_PARAMETERS.map((key) => [key, 'number'] as const),
+  ...CHAT_STRING_PARAMETERS.map((key) => [key, 'string'] as const),
+  ...CHAT_BOOLEAN_PARAMETERS.map((key) => [key, 'boolean'] as const)
+]);
+/** Style fields a SETTINGS command may carry in the model's parameter list. */
+const STYLE_PARAMETERS = ['aspectRatio', 'subtitlePolicy', 'zoomPolicy', 'reframePolicy',
+  'gradingPolicy', 'textPolicy', 'overlayPolicy', 'musicPolicy', 'informationRegionPolicy',
+  'pacing'] as const;
+
+/** Text roles a created TEXT element may carry (stored as presetRole). */
+export const CHAT_TEXT_ROLES = ['HOOK', 'CTA'] as const;
+
+/**
+ * Parameters arrive either as a plain object (the deterministic planner, tests)
+ * or as the model's closed list of {name, number, text, flag} entries. Both end
+ * up as the same typed object.
+ */
+function readParameters(raw: unknown): Record<string, unknown> {
+  if (!Array.isArray(raw)) return asRecord(raw);
+  const out: Record<string, unknown> = {};
+  for (const item of raw.slice(0, 24)) {
+    const entry = asRecord(item);
+    const name = String(entry.name ?? '');
+    const type = PARAMETER_TYPES.get(name) ??
+      ((STYLE_PARAMETERS as readonly string[]).includes(name) ? 'string' : undefined);
+    if (!type) continue;
+    const value = type === 'number' ? entry.number : type === 'string' ? entry.text : entry.flag;
+    if (value !== null && value !== undefined) out[name] = value;
+  }
+  return out;
+}
 
 const validateTarget = (value: unknown): ChatTarget | undefined => {
   if (value === undefined || value === null) return undefined;
@@ -207,10 +291,16 @@ const validateTarget = (value: unknown): ChatTarget | undefined => {
     target.atSec = atSec;
   }
   if (kind === 'ELEMENT') {
-    if (!HANDLE_PATTERN.test(String(record.handle ?? ''))) {
-      reject('ELEMENT target needs an element handle from the supplied context');
+    const handle = String(record.handle ?? '');
+    // A raw database id is refused by name, not just by pattern: it is the one
+    // thing the model must never be able to address directly.
+    if (UUID_PATTERN.test(handle)) {
+      reject('Elements are addressed by context handle, never by database id', 'RAW_ID_REJECTED');
     }
-    target.handle = String(record.handle);
+    if (!HANDLE_PATTERN.test(handle)) {
+      reject('ELEMENT target needs an element handle from the supplied context', 'UNKNOWN_HANDLE');
+    }
+    target.handle = handle;
   }
   return target;
 };
@@ -220,17 +310,27 @@ const validateElementCommand = (record: Record<string, unknown>): ChatElementCom
   if (!(CHAT_ELEMENT_ACTIONS as readonly string[]).includes(action)) {
     reject(`Unsupported command "${record.action}"`, 'UNSUPPORTED_COMMAND');
   }
-  const raw = asRecord(record.parameters);
+  const raw = readParameters(record.parameters);
   const parameters: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(raw)) {
-    if (!ALLOWED_PARAMETERS.has(key)) continue;
-    // A strict-schema response sends every parameter key, with null for the
-    // ones it is not setting. Null means "not set", exactly like absent.
+    const type = PARAMETER_TYPES.get(key);
+    if (!type) continue;
+    // A strict-schema response sends null for keys it is not setting. Null
+    // means "not set", exactly like absent.
     if (value === null || value === undefined) continue;
-    if (typeof value === 'number' && !Number.isFinite(value)) {
-      reject(`Parameter "${key}" must be a finite number`);
+    if (type === 'number') {
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        reject(`Parameter "${key}" must be a finite number`);
+      }
+    } else if (type === 'boolean') {
+      if (typeof value !== 'boolean') reject(`Parameter "${key}" must be true or false`);
+    } else {
+      if (typeof value !== 'string') reject(`Parameter "${key}" must be text`);
+      if (key === 'semanticRole' && !(CHAT_TEXT_ROLES as readonly string[]).includes(value as string)) {
+        reject('semanticRole must be HOOK or CTA');
+      }
     }
-    parameters[key] = value;
+    parameters[key] = typeof value === 'string' ? value.slice(0, 2000) : value;
   }
   const command: ChatElementCommand = { kind: 'ELEMENT', action, parameters,
     reason: boundedString(record.reason, 300) };
@@ -244,12 +344,13 @@ const validateElementCommand = (record: Record<string, unknown>): ChatElementCom
     if (!HANDLE_PATTERN.test(String(record.assetHandle))) reject('assetHandle is invalid');
     command.assetHandle = String(record.assetHandle);
   }
-  // Creating commands need an asset (except text); mutating commands need a target.
+  // Creating commands need an asset (except text); mutating commands need a
+  // target, except the ones that act on a whole track.
   const creates = action.startsWith('ADD_');
-  if (creates && action !== 'ADD_TEXT' && !command.assetHandle) {
+  if (creates && action !== 'ADD_TEXT' && action !== 'ADD_ZOOM' && !command.assetHandle) {
     reject(`${action} needs an uploaded asset`, 'MISSING_ASSET');
   }
-  if (!creates && !command.target) {
+  if (!creates && !TARGETLESS_CHAT_ACTIONS.has(action) && !command.target) {
     reject(`${action} needs a target element`, 'MISSING_TARGET');
   }
   return command;
@@ -260,17 +361,11 @@ const validateSettingsCommand = (record: Record<string, unknown>): ChatSettingsC
   if (!(CHAT_SETTINGS_ACTIONS as readonly string[]).includes(action)) {
     reject(`Unsupported command "${record.action}"`, 'UNSUPPORTED_COMMAND');
   }
-  const raw = asRecord(record.parameters);
+  const raw = readParameters(record.parameters);
   const parameters: Partial<EditProjectStyle> = {};
   for (const field of SETTINGS_FIELDS[action]) {
     const value = raw[field];
-    if (value === undefined) continue;
-    if (value === null && field !== 'hookText') continue;
-    if (field === 'hookText') {
-      if (value !== null && typeof value !== 'string') reject('hookText must be a string or null');
-      parameters.hookText = value === null ? null : String(value).slice(0, 200);
-      continue;
-    }
+    if (value === undefined || value === null) continue;
     const options = SETTINGS_ENUMS[field];
     if (options && !options.includes(String(value))) {
       reject(`${String(field)} must be one of ${options.join(', ')}`);
@@ -307,10 +402,11 @@ const validateGrounding = (value: unknown): ChatGrounding[] => {
  * Validates raw planner output into a ChatIntent, or throws.
  *
  * This is the only door into the chat command path. A local model that emits
- * prose, a shell command, an unknown action or a malformed target fails here,
- * before anything is resolved and long before anything is written.
+ * prose, a shell command, an unknown action, a raw id or a malformed target
+ * fails here, before anything is resolved and long before anything is written.
  */
-export function validateChatIntent(value: unknown): ChatIntent {
+export function validateChatIntent(value: unknown, options: { maxCommands?: number } = {}):
+  ChatIntent {
   const record = asRecord(value);
   if (!Object.keys(record).length) {
     reject('The planner returned no usable output', 'MALFORMED_PLAN');
@@ -319,8 +415,9 @@ export function validateChatIntent(value: unknown): ChatIntent {
   const intent = declared === 'NEEDS_CLARIFICATION' || declared === 'UNSUPPORTED'
     ? declared as ChatIntent['intent'] : 'EDIT_PROJECT';
   const rawCommands = Array.isArray(record.commands) ? record.commands : [];
-  if (rawCommands.length > 12) {
-    reject('A single chat turn may plan at most 12 commands', 'PLAN_TOO_LARGE');
+  const maxCommands = options.maxCommands ?? 12;
+  if (rawCommands.length > maxCommands) {
+    reject(`A single chat turn may plan at most ${maxCommands} commands`, 'PLAN_TOO_LARGE');
   }
   const commands = rawCommands.map((item) => {
     const entry = asRecord(item);
@@ -360,66 +457,21 @@ export function validateChatIntent(value: unknown): ChatIntent {
 }
 
 /**
- * The strict schema the ONLINE/OFFLINE structured-generation route enforces.
+ * The strict schema the ONLINE structured-generation route enforces.
  *
- * Shaped for OpenAI-style STRICT structured outputs, which are stricter than
- * ordinary JSON Schema in two ways that matter here: every object must set
- * `additionalProperties: false`, and every object's `required` must list every
- * one of its properties. An optional field is therefore expressed as a
- * NULLABLE required field, not as an absent one.
+ * Shaped for OpenAI-style STRICT structured outputs: every object sets
+ * `additionalProperties: false` and lists every property as required, so an
+ * optional field is a NULLABLE required field. The Phase 7 soak is what forced
+ * that - the provider rejected the Phase 6 shape with HTTP 400.
  *
- * The Phase 7 provider soak is what forced this: the Phase 6 shape left `ref`
- * out of the target's `required` and declared `parameters` as an open object,
- * and the provider rejected every request with HTTP 400 before the model ever
- * saw it. `validateChatIntent` treats null and absent identically, so both
- * shapes validate the same way.
- *
- * Declaring the parameter keys explicitly is a bonus: the model is now held to
- * the same allowlist the validator enforces, rather than being free to invent a
- * field that would be silently dropped afterwards.
+ * Workstream G changes one thing on purpose. Parameters are no longer an object
+ * that repeats all ~70 keys on every command - that grew each command to
+ * hundreds of tokens and was already truncating at Phase 7 sizes. They are a
+ * short list of {name, number, text, flag} entries whose `name` is a closed
+ * enum. It is still strict, still closed (an unknown name cannot be emitted),
+ * and it only carries the parameters a command actually sets.
  */
-const NUMBER_PARAMETERS = ['trimStart', 'trimEnd', 'playheadSec', 'toPosition', 'startTime',
-  'duration', 'x', 'y', 'width', 'height', 'opacity', 'zIndex', 'fontSize', 'fontWeight',
-  'volume', 'fadeInSec', 'fadeOutSec'] as const;
-const STRING_PARAMETERS = ['content', 'fontFamily', 'textAlign', 'color',
-  'backgroundColor'] as const;
-const BOOLEAN_PARAMETERS = ['muted'] as const;
-// ELEMENT and SETTINGS commands share one `parameters` object, so the style
-// fields have to be declared here too - otherwise a strict response has no
-// legal way to express "set the aspect ratio" and every SETTINGS command comes
-// back empty. Each is enumerated, so a policy value the editor does not
-// support cannot be returned at all.
-const STYLE_PARAMETERS = ['aspectRatio', 'subtitlePolicy', 'zoomPolicy', 'reframePolicy',
-  'gradingPolicy', 'hookPolicy', 'textPolicy', 'overlayPolicy', 'musicPolicy',
-  'informationRegionPolicy', 'pacing', 'hookText'] as const;
-
 const nullable = (type: string) => ({ type: [type, 'null'] });
-
-const nullableEnum = (values: readonly string[]) =>
-  ({ type: ['string', 'null'], enum: [...values, null] as unknown as string[] });
-
-const PARAMETERS_SCHEMA = {
-  type: 'object', additionalProperties: false,
-  required: [...NUMBER_PARAMETERS, ...STRING_PARAMETERS, ...BOOLEAN_PARAMETERS,
-    ...STYLE_PARAMETERS],
-  properties: {
-    ...Object.fromEntries(NUMBER_PARAMETERS.map((key) => [key, nullable('number')])),
-    ...Object.fromEntries(STRING_PARAMETERS.map((key) => [key, nullable('string')])),
-    ...Object.fromEntries(BOOLEAN_PARAMETERS.map((key) => [key, nullable('boolean')])),
-    aspectRatio: nullableEnum(EDIT_ASPECT_RATIOS),
-    subtitlePolicy: nullableEnum(SUBTITLE_POLICIES),
-    zoomPolicy: nullableEnum(ZOOM_POLICIES),
-    reframePolicy: nullableEnum(REFRAME_POLICIES),
-    gradingPolicy: nullableEnum(GRADING_POLICIES),
-    hookPolicy: nullable('string'),
-    textPolicy: nullable('string'),
-    overlayPolicy: nullable('string'),
-    musicPolicy: nullable('string'),
-    informationRegionPolicy: nullable('string'),
-    pacing: nullable('string'),
-    hookText: nullable('string')
-  }
-};
 
 export const CHAT_INTENT_SCHEMA: StrictJsonSchema = {
   type: 'object', additionalProperties: false,
@@ -429,7 +481,7 @@ export const CHAT_INTENT_SCHEMA: StrictJsonSchema = {
     intent: { type: 'string', enum: ['EDIT_PROJECT', 'NEEDS_CLARIFICATION', 'UNSUPPORTED'] },
     summary: { type: 'string' },
     commands: {
-      type: 'array', maxItems: 12,
+      type: 'array', maxItems: CHAT_MAX_MODEL_COMMANDS,
       items: {
         type: 'object', additionalProperties: false,
         required: ['action', 'parameters', 'reason', 'ref', 'assetHandle', 'target'],
@@ -451,7 +503,21 @@ export const CHAT_INTENT_SCHEMA: StrictJsonSchema = {
               handle: nullable('string')
             }
           },
-          parameters: PARAMETERS_SCHEMA
+          parameters: {
+            type: 'array', maxItems: 16,
+            items: {
+              type: 'object', additionalProperties: false,
+              required: ['name', 'number', 'text', 'flag'],
+              properties: {
+                name: { type: 'string', enum: [...CHAT_NUMBER_PARAMETERS,
+                  ...CHAT_STRING_PARAMETERS, ...CHAT_BOOLEAN_PARAMETERS,
+                  ...STYLE_PARAMETERS] as unknown as string[] },
+                number: nullable('number'),
+                text: nullable('string'),
+                flag: nullable('boolean')
+              }
+            }
+          }
         }
       }
     },
@@ -472,5 +538,19 @@ export const CHAT_INTENT_SCHEMA: StrictJsonSchema = {
     warnings: { type: 'array', maxItems: 8, items: { type: 'string' } },
     needsClarification: { type: 'boolean' },
     clarificationQuestion: { type: 'string' }
+  }
+};
+
+/** The strict schema for one creative hook request. */
+export const CHAT_HOOK_SCHEMA: StrictJsonSchema = {
+  type: 'object', additionalProperties: false, required: ['candidates'],
+  properties: {
+    candidates: {
+      type: 'array', maxItems: 5,
+      items: {
+        type: 'object', additionalProperties: false, required: ['text'],
+        properties: { text: { type: 'string' } }
+      }
+    }
   }
 };

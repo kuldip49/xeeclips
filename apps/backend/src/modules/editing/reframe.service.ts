@@ -81,7 +81,7 @@ export class ReframeService {
     sourceHeight = OUTPUT_DIMENSIONS[aspectRatio].height,
     speakerChangeTimes: number[] = [], fps = 30, viewport?: Rect,
     editorialOverride?: boolean, options: { shots?: Shot[]; responsive?: boolean;
-      structuralRepair?: boolean } = {}) {
+      structuralRepair?: boolean; speakerSafe?: boolean } = {}) {
     const shots = options.shots ?? [];
     // Repair mode: follow a new subject after one sample instead of two.
     const confirmations = options.responsive ? 1 : CAMERA_TUNING.speakerSwitchConfirmations;
@@ -131,7 +131,7 @@ export class ReframeService {
     const keys: CameraKey[] = [{ t: 0, x: .5, y: .5, duration: 0 }];
     const acceptedSubjects: CropCenter[] = [];
     let active: VisualTrack | null = null;
-    let pending: { x: number; count: number; trackId?: string } | null = null;
+    let pending: { x: number; count: number; firstSeen: number; trackId?: string } | null = null;
     let speakerSwitchCount = 0;
     const speakerSegments: Array<{ startSec: number; endSec: number;
       targetFace: { x: number; y: number; w: number; h: number };
@@ -159,7 +159,12 @@ export class ReframeService {
         if (shotChanged) { active = null; pending = null; }
       }
       const pairShot = shot?.shotClass === 'TWO_PERSON';
-      if (pairShot && candidates.length >= 2) {
+      const mouthRank = [...candidates].sort((a, b) =>
+        (b.mouthActivity ?? 0) - (a.mouthActivity ?? 0));
+      const clearActiveSpeaker = options.speakerSafe && mouthRank.length >= 2 &&
+        (mouthRank[0].mouthActivity ?? 0) >= .18 &&
+        (mouthRank[0].mouthActivity ?? 0) - (mouthRank[1].mouthActivity ?? 0) >= .12;
+      if (pairShot && candidates.length >= 2 && !clearActiveSpeaker) {
         const pair = [...candidates].sort((a, b) => area(b) - area(a)).slice(0, 2);
         const left = Math.min(...pair.map((face) => face.x));
         const right = Math.max(...pair.map((face) => face.x + face.w));
@@ -189,8 +194,14 @@ export class ReframeService {
       const candidateScore = (item: VisualTrack) => {
         const continuity = currentActive && ((item.trackId && item.trackId === currentActive.trackId) ||
           Math.abs(center(item).x - center(currentActive).x) < .08) ? 1 : 0;
-        return (item.mouthActivity ?? 0) * .48 + continuity * (speakerSignal == null ? .28 : .04) +
-          (item.confidence ?? .5) * .14 + area(item) / maxArea * .1;
+        const itemCenter = center(item);
+        const edgeClearance = Math.min(item.x, 1 - item.x - item.w,
+          item.y, 1 - item.y - item.h);
+        const headroomQuality = item.y >= .02 && item.y <= .45 ? 1 : 0;
+        const composition = 1 - Math.min(1, Math.abs(itemCenter.x - .5) * 1.5);
+        return (item.mouthActivity ?? 0) * .44 + continuity * (speakerSignal == null ? .25 : .04) +
+          (item.confidence ?? .5) * .12 + area(item) / maxArea * .08 +
+          clamp(edgeClearance / .12, 0, 1) * .05 + headroomQuality * .03 + composition * .03;
       };
       const ranked = [...candidates].sort((a, b) => candidateScore(b) - candidateScore(a));
       const alternative = speakerSignal != null && currentActive ? ranked.find((item) =>
@@ -202,7 +213,8 @@ export class ReframeService {
         if (pending && (candidate.trackId ? pending.trackId === candidate.trackId :
           Math.abs(pending.x - subject.x) < Math.max(.1, cropWidth * .35)))
           pending.count++;
-        else pending = { x: subject.x, count: 1, trackId: candidate.trackId };
+        else pending = { x: subject.x, count: 1, firstSeen: sample.t,
+          trackId: candidate.trackId };
         if (pending.count < confirmations) continue;
       }
       const distinct = active && (candidate.trackId && active.trackId
@@ -212,8 +224,10 @@ export class ReframeService {
         if (pending && (candidate.trackId ? pending.trackId === candidate.trackId :
           Math.abs(pending.x - subject.x) < Math.max(.1, cropWidth * .35)))
           pending.count++;
-        else pending = { x: subject.x, count: 1, trackId: candidate.trackId };
-        if (pending.count < confirmations && speakerSignal == null) continue;
+        else pending = { x: subject.x, count: 1, firstSeen: sample.t,
+          trackId: candidate.trackId };
+        if ((pending.count < confirmations || (options.speakerSafe &&
+          sample.t - pending.firstSeen < .6)) && speakerSignal == null) continue;
         if (shots.length && speakerSignal == null &&
           sample.t - lastSwitchAt < minSwitchHold) continue;
         lastSwitchAt = sample.t;
@@ -241,7 +255,8 @@ export class ReframeService {
       const currentY = coordinateAt(keys, sample.t, 'y');
       let nextX = currentX;
       let nextY = currentY;
-      const safeHalf = cropWidth * CAMERA_TUNING.subjectSafeWidth / 2;
+      const safeWidth = options.speakerSafe ? .8 : CAMERA_TUNING.subjectSafeWidth;
+      const safeHalf = cropWidth * safeWidth / 2;
       const excess = Math.abs(subject.x - currentX) + candidate.w / 2 - safeHalf;
       if (keys.length === 1 && rawCropCenters.length === 1 && area(candidate) >= .015)
         nextX = subject.x;
@@ -251,12 +266,29 @@ export class ReframeService {
         nextX = currentX + Math.sign(subject.x - currentX) *
           (excess + cropWidth * .04);
       nextX = clamp(nextX, cropWidth / 2, 1 - cropWidth / 2);
+      if (options.speakerSafe && sample.faces.length) {
+        // Keep the complete face inside the central 10%-90% crop band. This
+        // deliberately permits letterbox/card breathing room instead of using
+        // the microphone or body to fill every pixel.
+        nextX = clamp(nextX, candidate.x + candidate.w - cropWidth * .4,
+          candidate.x + cropWidth * .4);
+        nextX = clamp(nextX, cropWidth / 2, 1 - cropWidth / 2);
+      }
       if (cropHeight < .99) {
         const eyeY = candidate.y + candidate.h * (sample.faces.length ? .35 : .28);
         const top = currentY - cropHeight / 2;
+        const minHeadroom = options.speakerSafe ? .08 : CAMERA_TUNING.minHeadroom;
+        const bottomSafe = options.speakerSafe ? .92 : .93;
         if (keys.length === 1 || shotChanged || candidate.y < top + cropHeight *
-          CAMERA_TUNING.minHeadroom || candidate.y + candidate.h > top + cropHeight * .93)
-          nextY = clamp(eyeY + cropHeight * .16, cropHeight / 2, 1 - cropHeight / 2);
+          minHeadroom || candidate.y + candidate.h > top + cropHeight * bottomSafe) {
+          nextY = eyeY + cropHeight * (options.speakerSafe ? .15 : .16);
+          if (options.speakerSafe && sample.faces.length) {
+            const minCenter = candidate.y + candidate.h - cropHeight * .42;
+            const maxCenter = candidate.y + cropHeight * .42;
+            nextY = clamp(nextY, minCenter, maxCenter);
+          }
+          nextY = clamp(nextY, cropHeight / 2, 1 - cropHeight / 2);
+        }
       }
       if (keys.length === 1 && sample.t <= .75 && area(candidate) >= .015) {
         keys[0].x = nextX;
@@ -325,10 +357,16 @@ export class ReframeService {
     const centerX = coordinateExpression(keys, 'x');
     const centerY = coordinateExpression(keys, 'y');
     const faceSafetyViolations = speakerSegments.filter((segment) => {
-      const cropX = coordinateAt(keys, segment.startSec, 'x');
+      const settlingMove = cameraMoves.find((move) =>
+        Math.abs(move.t - segment.startSec) <= .08);
+      const safeAt = segment.startSec + (settlingMove?.durationSec ?? 0);
+      const cropX = coordinateAt(keys, safeAt, 'x');
       const face = segment.targetFace;
+      const cropY = coordinateAt(keys, safeAt, 'y');
       return face.x < cropX - cropWidth / 2 - .01 ||
-        face.x + face.w > cropX + cropWidth / 2 + .01;
+        face.x + face.w > cropX + cropWidth / 2 + .01 ||
+        face.y < cropY - cropHeight / 2 - .01 ||
+        face.y + face.h > cropY + cropHeight / 2 + .01;
     }).length;
     const x = `max(0\\,min(iw-${output.width}\\,iw*(${centerX})-${output.width}/2))`;
     const y = `max(0\\,min(ih-${renderHeight}\\,ih*(${centerY})-${renderHeight}/2))`;

@@ -3,7 +3,19 @@ const { execFileSync, spawnSync } = require('node:child_process');
 const { copyFileSync, mkdtempSync, rmSync, statSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const { exportClipFile, ClipExportService } = require('../dist/modules/videos/clip-export.service');
+const { exportClipFile, ClipExportService, renderedClipObjectKey } =
+  require('../dist/modules/videos/clip-export.service');
+
+const range = '2.000:17.000';
+const key = (variant) => renderedClipObjectKey('proj', 'vid', range, variant);
+assert.equal(key('EDITED_CLIPS:TIKTOK:AUTOMATIC_2'),
+  key('EDITED_CLIPS:TIKTOK:AUTOMATIC_2'), 'retry keeps the canonical key');
+assert.notEqual(key('EDITED_CLIPS:TIKTOK:AUTOMATIC_1'),
+  key('EDITED_CLIPS:TIKTOK:AUTOMATIC_2'), 'templates cannot share a storage key');
+assert.notEqual(key('NORMAL_CLIPS:TIKTOK:AUTOMATIC_2'),
+  key('EDITED_CLIPS:TIKTOK:AUTOMATIC_2'), 'render modes cannot share a storage key');
+assert.notEqual(renderedClipObjectKey('proj', 'vid', '3.000:18.000',
+  'EDITED_CLIPS:TIKTOK:AUTOMATIC_2'), key('EDITED_CLIPS:TIKTOK:AUTOMATIC_2'));
 
 /** Normal and AI Edited variants coexist; an existing valid variant is never rendered again. */
 async function testOutputVariants(source, directory) {

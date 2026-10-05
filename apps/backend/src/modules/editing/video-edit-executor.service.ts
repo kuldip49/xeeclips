@@ -39,6 +39,11 @@ import type { BoundaryDecision } from './edit-boundaries';
 import { hookMetaLanguageFree } from './editing-plan-validator';
 
 const execFileAsync = promisify(execFile);
+export function editRenderTimeoutMs() {
+  const configured = Number(process.env.EDIT_RENDER_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ?
+    Math.max(60_000, Math.floor(configured)) : 20 * 60_000;
+}
 export function ffmpegThreadsPerRender() {
   const raw = process.env.FFMPEG_THREADS_PER_RENDER;
   const configured = Number(raw);
@@ -324,9 +329,24 @@ export type ExecuteContext = {
   seed?: string;
   maxAttempts?: number;
   qa?: boolean;
+  // Cheap encode for media that is only ever a temporary preview (Automatic 2's base,
+  // replaced by its canonical EditMode export). Never set for a deliverable render.
+  previewEncode?: boolean;
   musicDirectory?: string;
   avoidMusicTrackIds?: string[];
   sfxDirectory?: string;
+  /** No sound effects for this render whatever the deployment policy (the Raw look). */
+  sfxDisabled?: boolean;
+  /** Keep the source colour exactly: no grade preset is chosen or applied (the Raw look). */
+  gradeDisabled?: boolean;
+  /**
+   * Last-resort renders that complete a requested clip count: a failed final pixel QA is
+   * recorded as DEGRADED (with the failed checks) instead of rejecting the clip. Pre-render
+   * rejections (unusable start context, broken structure) still reject.
+   */
+  acceptDegradedQuality?: boolean;
+  /** Force the surround of a framed (editorial) layout, e.g. plain DARK_NEUTRAL for Raw. */
+  backgroundMode?: BackgroundMode;
   candidateId?: string;
   rank?: number;
 };
@@ -537,7 +557,9 @@ export class VideoEditExecutorService {
     }
     const sourceStats = await sampleImageStats(inputPath).catch(() => ({ brightness: .5, contrast: .2,
       saturation: .3, highlightClipping: 0 }));
-    const gradePreset = resolveGradePreset(plan.gradePreset, sourceStats);
+    // resolveGradePreset reads NO_CHANGE as "no preference" for the automatic edit, so a render
+    // that must keep the source colour says so explicitly.
+    const gradePreset = context.gradeDisabled ? 'NO_CHANGE' as const : resolveGradePreset(plan.gradePreset, sourceStats);
     const gradePrediction = predictGradeStrength(gradePreset, sourceStats);
     const policy = musicPolicy();
     const requestedMood: MusicMood = plan.musicMood ?? 'CLEAN_NEUTRAL';
@@ -588,7 +610,8 @@ export class VideoEditExecutorService {
         this.logger.warn(`Word onset refinement skipped: ${error instanceof Error ? error.message : error}`);
       }
     }
-    const options: RenderOptions = { ...DEFAULT_RENDER_OPTIONS, fitShots: [],
+    const options: RenderOptions = { ...DEFAULT_RENDER_OPTIONS, sfxDisabled: context.sfxDisabled === true,
+      ...(context.backgroundMode ? { backgroundMode: context.backgroundMode } : {}), fitShots: [],
       gradeStrength: gradePrediction.strength };
     const repairs: RepairLog[] = [];
     const attempts: Array<Record<string, unknown>> = [];
@@ -693,7 +716,7 @@ export class VideoEditExecutorService {
         options.useDefaultPalette || options.singlePalette || !sourceFrames.length ?
           [{ start: 0, end: finalDuration, palette, shotIndexes: baseShots.map((_, index) => index) }] :
           buildPaletteSegments(baseShots, sourceFrames, inputOffset,
-            bgMode === 'SOURCE_MATCH_SOLID' ? bgMode : 'SOURCE_MATCH_GRADIENT', finalDuration);
+            bgMode === 'SOURCE_MATCH_SOLID' || bgMode === 'DARK_NEUTRAL' ? bgMode : 'SOURCE_MATCH_GRADIENT', finalDuration);
       const track = !musicApplicable || options.musicDisabled ? null : options.musicUseInline ?
         INLINE_FALLBACK_TRACK :
         selectMusicTrack(musicTracks, mood, context.seed ?? `${plan.clipStartSec}`, options.musicAttempt,
@@ -704,7 +727,8 @@ export class VideoEditExecutorService {
           inputOffset, timeline, mapper, analysis, shots, camera, zoomPlan, palette, paletteSegments, bgMode,
           editorial, layout, viewport,
           template, width, height, fps, hasAudio, gradePreset, sourceStats, track, mood, musicContext, loop,
-          avoidMusicTrackIds, options, qaEnabled, finalDuration, sourceWidth: sourceVideo.width,
+          avoidMusicTrackIds, options, qaEnabled, previewEncode: context.previewEncode === true,
+          finalDuration, sourceWidth: sourceVideo.width,
           sourceHeight: sourceVideo.height,
           sfx: { assets: sfxLibrary.assets, problems: sfxLibrary.problems,
             enabled: sfxSettings.enabled && hasAudio, allowGenerated: sfxSettings.allowGenerated,
@@ -796,7 +820,13 @@ export class VideoEditExecutorService {
       repairMs: attempts.reduce((sum, item, index) => sum + Number(item.overlayRepairMs ?? 0) +
         (index ? Number(item.baseRenderMs ?? 0) + Number(item.qualityCheckMs ?? 0) : 0), 0) };
     this.logger.log(JSON.stringify({ event: 'edited_clip_quality_gate', ...report }));
-    if (gate.status === 'FAILED')
+    if (gate.status === 'FAILED' && context.acceptDegradedQuality) {
+      this.logger.warn(JSON.stringify({ event: 'edited_clip_quality_accepted_as_last_resort',
+        candidateId: context.candidateId, failedChecks: gate.failedChecks }));
+      Object.assign(report, { status: 'DEGRADED', acceptedAsLastResort: true,
+        lastResortFailedChecks: gate.failedChecks,
+        degradedChecks: [...gate.degradedChecks, ...gate.failedChecks], failedChecks: [] });
+    } else if (gate.status === 'FAILED')
       throw new EditQualityError(`Edited clip failed quality gate: ${gate.failedChecks.join(', ')}`,
         { ...report, checkDetails: result.checks.filter((item) => item.passed === false),
           measurements: result.measurements });
@@ -1009,7 +1039,8 @@ export class VideoEditExecutorService {
     avoidMusicTrackIds: Set<string>;
     sfx: { assets: SfxAsset[]; problems: string[]; enabled: boolean; allowGenerated: boolean;
       seed: string };
-    qaEnabled: boolean; finalDuration: number; sourceWidth: number; sourceHeight: number;
+    qaEnabled: boolean; previewEncode?: boolean; finalDuration: number; sourceWidth: number;
+    sourceHeight: number;
   }) {
     const renderStarted = Date.now();
     const { plan, words, timeline, mapper, camera, shots, width, height, fps, options, editorial,
@@ -1216,12 +1247,16 @@ export class VideoEditExecutorService {
       `x='(iw-iw/zoom)*(${anchorX})':y='(ih-ih/zoom)*(${anchorY})':` +
       `d=1:s=${width}x${renderHeight}:fps=${fps}[vfill]`);
     // One fitted layer: the source (optionally pre-cropped to `crop`) scaled to
-    // fit the viewport, centred over a blurred fill of itself.
+    // fit the viewport, centred over a blurred fill of itself - or, with a plain
+    // DARK_NEUTRAL surround (the Raw look), over the same flat dark colour.
+    const plainFill = bgMode === 'DARK_NEUTRAL';
     const fittedLayer = (source: string, out: string, crop?: string) => {
       const pre = crop ? `crop=${crop},` : '';
       graph.push(`[${source}]${pre}split=2[${out}a][${out}b]`);
       graph.push(`[${out}a]scale=${width}:${renderHeight}:force_original_aspect_ratio=increase,` +
-        `crop=${width}:${renderHeight},boxblur=luma_radius=28:luma_power=2,eq=brightness=-0.1:saturation=0.75[${out}bg]`);
+        `crop=${width}:${renderHeight},` + (plainFill
+        ? `drawbox=x=0:y=0:w=iw:h=ih:color=0x15171C@1:t=fill[${out}bg]`
+        : `boxblur=luma_radius=28:luma_power=2,eq=brightness=-0.1:saturation=0.75[${out}bg]`));
       graph.push(`[${out}b]scale=${width}:${renderHeight}:force_original_aspect_ratio=decrease,setsar=1[${out}fg]`);
       graph.push(`[${out}bg][${out}fg]overlay=(W-w)/2:(H-h)/2[${out}]`);
     };
@@ -1250,7 +1285,7 @@ export class VideoEditExecutorService {
     if (editorial && input.palette && input.paletteSegments.length) {
       // Scene palettes cross-fade into each other; the ambient mode lays them over
       // the blurred running footage, the source-match modes show them directly.
-      const tintMode: BackgroundMode = bgMode === 'SOURCE_MATCH_SOLID' ? bgMode : 'SOURCE_MATCH_GRADIENT';
+      const tintMode: BackgroundMode = bgMode === 'SOURCE_MATCH_SOLID' || bgMode === 'DARK_NEUTRAL' ? bgMode : 'SOURCE_MATCH_GRADIENT';
       paletteTrack = paletteTrackFilter(input.paletteSegments.map((segment) => ({ start: segment.start,
         colors: backgroundColors(segment.palette, tintMode, options.headerDarken) })),
       input.finalDuration, fps, 'tintraw');
@@ -1372,7 +1407,8 @@ export class VideoEditExecutorService {
       '-map', '[vout]', ...(input.hasAudio ? ['-map', '[aout]'] : []),
       '-t', input.finalDuration.toFixed(3),
       '-c:v', 'libx264', '-threads', String(renderThreads),
-      '-preset', process.env.EDIT_RENDER_PRESET || 'veryfast', '-crf', '20',
+      ...(input.previewEncode ? ['-preset', 'ultrafast', '-crf', '26']
+        : ['-preset', process.env.EDIT_RENDER_PRESET || 'veryfast', '-crf', '20']),
       '-pix_fmt', 'yuv420p', '-r', String(fps),
       ...(input.hasAudio ? ['-c:a', 'aac', '-b:a', '160k'] : []),
       '-movflags', '+faststart', input.outputPath,
@@ -1384,7 +1420,8 @@ export class VideoEditExecutorService {
       ...(sfxOn ? ['-map', '[sfxqaout]', '-c:a', 'pcm_s16le', sfxQa] : [])];
     const baseRenderStarted = Date.now();
     try {
-      await execFileAsync('ffmpeg', args, { cwd: directory, maxBuffer: 20 * 1024 * 1024 });
+      await execFileAsync('ffmpeg', args, { cwd: directory, maxBuffer: 20 * 1024 * 1024,
+        timeout: editRenderTimeoutMs(), killSignal: 'SIGKILL' });
     } catch (error) {
       const failedRenderMs = Date.now() - baseRenderStarted;
       throw new EditQualityError('Edited clip FFmpeg render failed', {
@@ -1470,8 +1507,8 @@ export class VideoEditExecutorService {
       backgroundSegments: paletteTrack ? input.paletteSegments.map((segment) => ({
         start: round(segment.start), end: round(segment.end), shotIndexes: segment.shotIndexes,
         dominant: segment.palette.dominant, temperature: segment.palette.temperature,
-        colors: backgroundColors(segment.palette, bgMode === 'SOURCE_MATCH_SOLID' ? bgMode :
-          'SOURCE_MATCH_GRADIENT', options.headerDarken) })) : [],
+        colors: backgroundColors(segment.palette, bgMode === 'SOURCE_MATCH_SOLID' || bgMode === 'DARK_NEUTRAL'
+          ? bgMode : 'SOURCE_MATCH_GRADIENT', options.headerDarken) })) : [],
       backgroundTransitions: paletteTrack?.boundaries.map((bound) => round(bound)) ?? [],
       backgroundTransitionMs: paletteTrack ? Math.round(paletteTrack.fadeSec * 1000) : null,
       grading: { selectedPreset: input.gradePreset, requestedPreset: plan.gradePreset ?? 'CLEAN_SOCIAL',

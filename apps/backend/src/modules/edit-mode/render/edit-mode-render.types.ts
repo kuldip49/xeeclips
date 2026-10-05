@@ -9,8 +9,14 @@
 import type { AnalysisFrame } from '../../editing/edit-analysis';
 import type { InformationRegion } from '../../editing/information-region';
 import type { Shot } from '../../editing/shot-classifier';
+import type { ColorAdjustments } from '../edit-mode-color';
+import type { SpeechWindow } from '../edit-mode-audio';
+import type { CropInsets } from '../edit-mode-transform';
+import type { ActiveWordStyle, CaptionWord, TextBackground, TextRun, TextShadow,
+  TextStroke } from '../edit-mode-text';
 import type { EditAspectRatio, EditPresetId, GradingPolicy, ReframePolicy,
   SubtitlePolicy, ZoomPolicy } from '../presets/edit-preset-policy';
+import type { ResolvedVisualLayout } from '../styles/resolved-visual-layout';
 
 /** Typed failure codes surfaced to the UI. */
 export const EDIT_EXPORT_ERROR_CODES = ['SOURCE_MISSING', 'ASSET_MISSING', 'INVALID_TIMELINE',
@@ -47,14 +53,39 @@ export type RenderCanvas = {
   aspectRatio: EditAspectRatio;
   /** Source shape the plan was built against. */
   sourceWidth: number; sourceHeight: number;
+  /** Step 10: what shows behind a FIT (letterboxed) frame. Default BLUR. */
+  fitBackground?: 'BLUR' | 'BLACK' | 'WHITE';
+  /** Exact geometry resolved before the canonical style mutation. */
+  visualLayout?: ResolvedVisualLayout | null;
 };
 
 /** One kept source range and where it lands on the exported timeline. Splits,
- * trims, deletions and reorders all reduce to an ordered list of these. */
+ * trims, deletions and reorders all reduce to an ordered list of these, and the
+ * manual transform of the element that produced it travels with it: crop and
+ * rotation are per-segment, because a split can give two halves different ones. */
 export type RenderVideoSegment = {
   elementId: string;
   sourceStart: number; sourceEnd: number;
   timelineStart: number; timelineEnd: number;
+  /** Playback rate. (timelineEnd - timelineStart) is the source range over this. */
+  speed: number;
+  /** Normalized source-region insets; four zeroes when uncropped. */
+  crop: CropInsets;
+  /** Degrees, positive clockwise. */
+  rotation: number;
+  flipH: boolean; flipV: boolean;
+  /** Canvas transform applied after crop/flip/rotate, before fitting. */
+  scale: number;
+  offsetX: number; offsetY: number;
+  /** Manual colour, applied BEFORE the geometry above (see
+   * edit-mode-color-filter.ts for why). Neutral on an ungraded segment. */
+  color: ColorAdjustments;
+  /** The source video's own audio for this segment. A gain, so 1 is "as
+   * recorded" and 2 is twice that. */
+  sourceVolume: number;
+  sourceMuted: boolean;
+  /** Step 5 per-segment framing override; null = the reframe policy decides. */
+  frameLayout?: 'FIT' | 'FILL' | null;
 };
 
 export type RenderVisualOverlay = {
@@ -66,12 +97,18 @@ export type RenderVisualOverlay = {
   startSec: number; endSec: number;
   opacity: number; zIndex: number;
   preserveAspectRatio: boolean;
+  /** Manual transform, applied to the overlay image before it is composited.
+   * The preview draws the same three, so what is placed is what is exported. */
+  crop: CropInsets;
+  rotation: number;
+  flipH: boolean; flipV: boolean;
 };
 
 export type RenderTextOverlay = {
   elementId: string;
   kind: 'TEXT' | 'SUBTITLE';
-  /** Exact stored wording. Never regenerated, never rewritten. */
+  /** Exact stored wording, uppercased only when the style asks for it. Never
+   * regenerated, never rewritten. */
   content: string;
   lines: string[];
   startSec: number; endSec: number;
@@ -82,6 +119,24 @@ export type RenderTextOverlay = {
   color: string; backgroundColor: string;
   opacity: number; zIndex: number;
   presetRole: string | null;
+  // --- Workstream C: professional text styling ------------------------------
+  // Every size below is already resolved to CANVAS PIXELS, so the ASS builder
+  // never has to know about the 600-wide design-unit convention.
+  stroke: TextStroke;
+  shadow: TextShadow;
+  background: TextBackground;
+  /** Letter spacing in canvas pixels; line spacing as a line-height multiplier. */
+  letterSpacing: number;
+  lineSpacing: number;
+  /** Degrees, positive clockwise, matching the preview's CSS rotation. */
+  rotation: number;
+  uppercase: boolean;
+  activeWord: ActiveWordStyle;
+  /** Persisted static semantic emphasis, used by editorial hooks. */
+  textRuns: TextRun[];
+  /** Word timings in TIMELINE seconds. Empty when the caption has none, which is
+   * what makes the active-word highlight impossible to fake. */
+  words: CaptionWord[];
 };
 
 export type RenderAudioTrack = {
@@ -91,9 +146,11 @@ export type RenderAudioTrack = {
   kind: 'SOURCE' | 'MUSIC';
   startSec: number; endSec: number;
   trimStart: number; trimEnd: number;
+  /** A gain: 1 is the uploaded file's own level, 2 is twice that. */
   volume: number; muted: boolean;
   fadeInSec: number; fadeOutSec: number;
-  /** Preserved from Phase 3; ducking itself is deferred (see docs). */
+  /** Speech ducking. `duckUnderSpeech` is opt-in PER TRACK, so a second music
+   * bed or a sound effect the user did not configure is never touched. */
   duckUnderSpeech: boolean; duckLevel: number; attackMs: number; releaseMs: number;
 };
 
@@ -116,6 +173,8 @@ export type RenderZoomEvent = {
   intensity: Exclude<ZoomPolicy, 'OFF'>;
   triggerText: string;
   reason: string;
+  /** Active face selected by the camera at the semantic phrase midpoint. */
+  focusTrackId?: string | null;
   /** Frame numbers on the exported timeline, for the zoompan envelope. */
   startFrame: number; peakStartFrame: number; peakEndFrame: number; endFrame: number;
   /** Set when the requested scale had to be reduced to stay subject/information safe. */
@@ -164,6 +223,12 @@ export type RenderPlan = {
   };
   /** True when the source has a decodable audio stream. */
   hasSourceAudio: boolean;
+  /** Speech passages on the EXPORTED timeline, derived from the cached
+   * transcript's word timings. Empty when the source has none. */
+  speechWindows: SpeechWindow[];
+  /** False when the cached transcript has no word timings, in which case
+   * ducking is refused rather than approximated. */
+  duckingAvailable: boolean;
   /** Set when subtitles were generated at render time from the cached transcript
    * because Phase 4 stored only the policy (element count exceeded the cap). */
   subtitlesFromTranscript: boolean;
@@ -183,6 +248,14 @@ export type RenderEvidence = {
   informationFitExpression: string;
   cameraFilter: string;
   renderHeight: number;
+  speakerSegments: Array<{ startSec: number; endSec: number;
+    targetFace: { x: number; y: number; w: number; h: number };
+    confidence: number; trackId: string | null }>;
+  speakerSwitchCount: number;
+  faceSafetyViolations: number;
+  cameraMoves: Array<{ t: number; durationSec: number; distance: number; snapped: boolean }>;
+  /** Automatic 2 speaker punch-ins folded into `cropAt` and the camera filter. */
+  punches: Array<{ startSec: number; endSec: number; scale: number; framing: 'CLOSE' | 'MEDIUM' }>;
 };
 
 export const QA_RESULTS = ['PASS', 'DEGRADED_ACCEPTABLE', 'REPAIR_REQUIRED', 'REJECT'] as const;

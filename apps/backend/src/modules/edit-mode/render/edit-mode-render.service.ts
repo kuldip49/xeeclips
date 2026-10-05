@@ -25,7 +25,9 @@ import { join } from 'path';
 import { promisify } from 'util';
 import { sampleImageStats, type ImageStats } from '../../editing/color-grade';
 import { PrismaService } from '../../database/prisma.service';
+import { editAssetStorageLocation } from '../edit-asset-storage';
 import { probeMedia } from '../../processing/media-probe';
+import { normalizeProbedSourceTrims } from './edit-mode-source-trim';
 import { StorageService } from '../../storage/storage.service';
 import { buildEditModeAss } from './edit-mode-ass';
 import { buildFfmpegArgs } from './edit-mode-filtergraph';
@@ -208,7 +210,8 @@ export class EditModeRenderService {
 
     // --- Resolve media once and reuse it for every attempt ------------------
     const sourcePath = join(directory, 'source.mp4');
-    await this.download(source.bucket, source.objectKey, sourcePath, 'SOURCE_MISSING');
+    const sourceLocation = editAssetStorageLocation(source);
+    await this.download(sourceLocation.bucket, sourceLocation.objectKey, sourcePath, 'SOURCE_MISSING');
     const sourceProbe = await probeMedia(sourcePath).catch(() => {
       throw new EditExportError('UNSUPPORTED_MEDIA',
         'The source video could not be read as a valid media file.');
@@ -218,13 +221,22 @@ export class EditModeRenderService {
     }
 
     const planAssets: PlanAsset[] = project.assets.map((asset) => ({
-      id: asset.id, role: asset.role, mimeType: asset.mimeType, duration: asset.duration,
+      id: asset.id, role: asset.role, mimeType: asset.mimeType,
+      duration: asset.id === source.id && (sourceProbe.videoDurationSec ?? sourceProbe.durationSec) != null
+        ? sourceProbe.videoDurationSec ?? sourceProbe.durationSec : asset.duration,
       width: asset.width, height: asset.height, fps: asset.fps, metadata: asset.metadata,
       transcript: asset.transcript, analysis: asset.analysis }));
-    const planElements: PlanElement[] = project.elements.map((element) => ({
+    const rawPlanElements: PlanElement[] = project.elements.map((element) => ({
       id: element.id, assetId: element.assetId, type: element.type, track: element.track,
       position: element.position, startTime: element.startTime, duration: element.duration,
       trimStart: element.trimStart, trimEnd: element.trimEnd, properties: element.properties }));
+    const normalizedSource = normalizeProbedSourceTrims(rawPlanElements, source.id,
+      sourceProbe.videoDurationSec ?? sourceProbe.durationSec ?? Number.NaN);
+    const planElements = normalizedSource.elements;
+    if (normalizedSource.corrections.length) this.logger.warn(JSON.stringify({
+      event: 'edit_mode_source_trim_clamped', editProjectId: id,
+      probedDurationSec: sourceProbe.videoDurationSec ?? sourceProbe.durationSec,
+      corrections: normalizedSource.corrections }));
 
     let imageStats: ImageStats | null = null;
     try { imageStats = await sampleImageStats(sourcePath); }
@@ -246,7 +258,8 @@ export class EditModeRenderService {
       const extension = element.type === 'IMAGE'
         ? IMAGE_EXTENSIONS[asset.mimeType] ?? '.png' : '.bin';
       const path = join(directory, `asset-${element.id}${extension}`);
-      await this.download(asset.bucket, asset.objectKey, path, 'ASSET_MISSING');
+      const location = editAssetStorageLocation(asset);
+      await this.download(location.bucket, location.objectKey, path, 'ASSET_MISSING');
       target[element.id] = path;
     }
 
@@ -260,6 +273,7 @@ export class EditModeRenderService {
     let plan: RenderPlan | null = null;
     let qa: QaReport | null = null;
     let outputPath = '';
+    let cameraTelemetry: Record<string, unknown> | null = null;
     const renderStarted = Date.now();
 
     while (attempt < MAX_RENDER_ATTEMPTS) {
@@ -274,6 +288,19 @@ export class EditModeRenderService {
       });
       plan = built.plan;
       validateRenderPlan(plan, { assets: planAssets, sourceProbe });
+      cameraTelemetry = {
+        framesWithFaces: built.evidence.frames.filter((frame) => frame.faces.length > 0).length,
+        sampledFrames: built.evidence.frames.length,
+        speakerSwitchCount: built.evidence.speakerSwitchCount,
+        speakerSegments: built.evidence.speakerSegments.slice(0, 40),
+        faceSafetyViolations: built.evidence.faceSafetyViolations,
+        cameraMoves: built.evidence.cameraMoves.length,
+        punches: built.evidence.punches.slice(0, 30).map((punch) => ({ start: punch.startSec,
+          end: punch.endSec, scale: punch.scale, framing: punch.framing })),
+        shots: built.evidence.shots.slice(0, 40).map((shot) => ({ start: shot.start, end: shot.end,
+          shotClass: shot.shotClass, layout: shot.layout, informationMode: shot.informationMode,
+          zoomAllowed: shot.zoomAllowed, faceCount: shot.faceCount }))
+      };
 
       const textOverlays = [...plan.textOverlays, ...plan.subtitles];
       const assFileName = textOverlays.length ? 'edit-mode.ass' : null;
@@ -284,6 +311,10 @@ export class EditModeRenderService {
           plan.warnings.push(`Text element ${elementId} needed more lines than its box holds; ` +
             'it renders slightly outside the box you drew.');
         }
+        // Where a browser CSS effect has no exact ASS equivalent the builder
+        // chooses a documented closest match and says so, rather than letting
+        // the export quietly differ from the preview.
+        for (const note of ass.parityNotes) plan.warnings.push(note);
       }
 
       outputPath = join(directory, `export-${attempt}.mp4`);
@@ -368,6 +399,9 @@ export class EditModeRenderService {
         checks: qa.checks.map((check) => ({ id: check.id, result: check.result,
           detail: check.detail.slice(0, 240) })), measured: qa.measured },
       policies: plan.policies,
+      // Camera evidence of the rendered plan, so speaker switching and face safety are
+      // checkable on the stored export rather than only in a dry-run harness.
+      camera: cameraTelemetry,
       zoom: { rendered: plan.zoomEvents.length, rejected: plan.zoomRejections.length,
         reduced: plan.zoomEvents.filter((event) => event.reducedFromScale != null).length },
       grading: { policy: plan.grading.policy, preset: plan.grading.preset,

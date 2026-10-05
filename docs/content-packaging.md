@@ -25,9 +25,8 @@ one-full-render path. Normal clips do not enter this flow.
    `GeneratedClip.contentPackaging`.
 
 ONLINE semantic generation is accepted only from the existing GPT-5.6 Luna route;
-invalid or failed output uses the deterministic fallback and never falls through to
-Ollama. OFFLINE may use the local route before deterministic fallback.
-`FALLBACK_ONLY` is deterministic.
+invalid or failed output uses the deterministic fallback. There is no local LLM
+route: an old `OFFLINE` job is normalised to `FALLBACK_ONLY`, which is deterministic.
 
 ## Grounding and ranking
 

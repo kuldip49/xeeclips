@@ -2,7 +2,7 @@ require('reflect-metadata');
 const assert = require('node:assert/strict');
 const { LlmProviderError, LlmProviderService } =
   require('../dist/modules/processing/llm-provider.service');
-const { LlmRouterService, effectiveLocalTimeoutMs } =
+const { LlmRouterService } =
   require('../dist/modules/processing/llm-router.service');
 const { createPerformanceTelemetry, performanceContext, countLlmRequest } =
   require('../dist/modules/processing/performance-telemetry');
@@ -59,33 +59,29 @@ const repairedHooks = [
 ];
 
 async function testTimeoutsAndFallback() {
-  process.env.LOCAL_LLM_TIMEOUT_MS = '60000';
-  for (const key of ENV_KEYS.filter(key => key.startsWith('LOCAL_LLM_') &&
-    key.endsWith('_UNDERSTANDING_TIMEOUT_MS') || key.includes('CREATIVE_GENERATION_TIMEOUT') ||
-    key.includes('CRITIC_TIMEOUT') || key.includes('COMPONENT_REPAIR_TIMEOUT'))) delete process.env[key];
-  const expected = { multimodalUnderstanding: 20000, wholeVideoUnderstanding: 30000,
-    clipUnderstanding: 45000, creativeGeneration: 45000, critic: 35000,
-    componentRepair: 30000 };
-  for (const [role, timeout] of Object.entries(expected))
-    assert.equal(effectiveLocalTimeoutMs(role), timeout);
-  process.env.LOCAL_LLM_CREATIVE_GENERATION_TIMEOUT_MS = '45000';
-  assert.equal(effectiveLocalTimeoutMs('creativeGeneration', 20000), 20000,
-    'the role setting must never exceed the global local ceiling');
-
+  // Step 6: there is no local production LLM. A legacy OFFLINE job, even with the
+  // old LOCAL_LLM_ENABLED flag still set in someone's environment, makes ZERO model
+  // calls and gets the deterministic fallback.
   delete process.env.NVIDIA_API_KEY; delete process.env.GOOGLE_API_KEY;
   delete process.env.LLM_PROVIDER; delete process.env.LLM_API_KEY; delete process.env.LLM_MODEL;
   process.env.LOCAL_LLM_ENABLED = 'true';
   let calls = 0;
-  const router = new LlmRouterService({ isConfigured: config => config.apiStyle === 'ollama',
-    async generateStructuredWithConfig(config) { calls++;
-      assert.equal(config.maxRetries, 0); assert.equal(config.timeoutMs, 30000);
-      throw new LlmProviderError('LOCAL_TIMEOUT_FAILURE', 'synthetic timeout'); } });
+  const router = new LlmRouterService({ isConfigured: () => true,
+    async generateStructuredWithConfig() { calls++;
+      throw new LlmProviderError('TIMEOUT_FAILURE', 'synthetic timeout'); } });
+  for (const role of ['clipUnderstanding', 'creativeGeneration', 'critic', 'componentRepair',
+    'wholeVideoUnderstanding', 'editingPlan']) {
+    assert.deepEqual(router.routesFor(role, 'OFFLINE'), [], `OFFLINE has no ${role} route`);
+  }
   const fallback = await performanceContext.run(createPerformanceTelemetry('OFFLINE'), () =>
     new VideoUnderstandingService(router).analyzeWithFallback([
       { position: 0, startTime: 0, endTime: 10, text: 'Grounded transcript fallback remains available.' }
     ], 'en'));
-  assert.equal(calls, 0, 'OFFLINE whole-video analysis must bypass Ollama');
+  assert.equal(calls, 0, 'legacy OFFLINE must never reach any model');
   assert.equal(fallback.mainTopic, 'Grounded transcript fallback remains available.');
+  assert.equal(createPerformanceTelemetry('OFFLINE').effectiveAiMode, 'FALLBACK_ONLY',
+    'legacy OFFLINE is normalized to FALLBACK_ONLY');
+  process.env.LOCAL_LLM_ENABLED = 'false';
 }
 
 async function testNvidiaExtraction() {
@@ -230,7 +226,7 @@ async function testTelemetryAndPromptSizes() {
     multimodalSignals: [], supportedFacts: [], importantMoments: [] };
   let clipRequest;
   await new ClipIntelligenceService({ async generate(input) { clipRequest = input.request;
-    throw new LlmProviderError('LOCAL_TIMEOUT_FAILURE', 'synthetic'); } })
+    throw new LlmProviderError('TIMEOUT_FAILURE', 'synthetic'); } })
     .understand([candidate()], [evidence]);
   const clipBefore = clipRequest.systemPrompt.length + clipRequest.userPrompt.length;
   const clipAfter = clipRequest.local.systemPrompt.length + clipRequest.local.userPrompt.length;
@@ -238,7 +234,7 @@ async function testTelemetryAndPromptSizes() {
 
   let multimodalRequest;
   await new ClipIntelligenceService({ async generate(input) { multimodalRequest = input.request;
-    throw new LlmProviderError('LOCAL_TIMEOUT_FAILURE', 'synthetic'); } })
+    throw new LlmProviderError('TIMEOUT_FAILURE', 'synthetic'); } })
     .analyzeMultimodal('video', evidence.visualSignals, [{ mimeType: 'image/jpeg', data: 'raw-video' }]);
   const multimodalBefore = multimodalRequest.systemPrompt.length + multimodalRequest.userPrompt.length;
   const multimodalAfter = multimodalRequest.local.systemPrompt.length +
@@ -256,7 +252,7 @@ async function main() {
     await testLocalRepair();
     await testCircuitConcurrency();
     const promptSizes = await testTelemetryAndPromptSizes();
-    console.log(JSON.stringify({ roleLocalTimeouts: true, immediateTimeoutFallback: true,
+    console.log(JSON.stringify({ noLocalLlmRoute: true, offlineNormalizedToFallback: true,
       nvidiaSafeJsonExtraction: true, invalidNvidiaStillMalformed: true,
       qwenValidatorPrompt: true, componentOnlyRepair: true, validComponentsPreserved: true,
       noRecursiveRepair: true, circuitOpenSkipsNew: true, inFlightSafe: true,

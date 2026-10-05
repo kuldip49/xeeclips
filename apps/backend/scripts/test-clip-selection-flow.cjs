@@ -24,6 +24,7 @@ const {
   aiEditedRenderConcurrency,
   ClipSelectionService
 } = require('../dist/modules/videos/clip-selection.service');
+const { ClipInfrastructureError } = require('../dist/modules/videos/clip-export.service');
 const { MediaProcessingError, isRetryableErrorCode } = require('../dist/modules/processing/media-probe');
 const { forceLandscapeEditorialFrame } = require('../dist/modules/videos/clip-export.service');
 const { fallbackEditPlan } = require('../dist/modules/editing/edit-plan');
@@ -46,9 +47,9 @@ function candidate(id, score, index, overrides = {}) {
 
 function testDurationMatrix() {
   const matrix = [
-    [minutes(5), 6], [minutes(10), 6], [minutes(10) + 1, 8], [minutes(12), 8],
-    [minutes(14) + 59, 8], [minutes(15), 12], [minutes(30), 12], [minutes(60), 12],
-    [minutes(60) + 1, 20], [minutes(90), 20], [minutes(120), 20]
+    [minutes(2), 8], [minutes(5), 8], [minutes(10), 8], [minutes(10) + 1, 8], [minutes(12), 8],
+    [minutes(14) + 59, 8], [minutes(15), 20], [minutes(30), 20], [minutes(60), 20],
+    [minutes(60) + 1, 30], [minutes(90), 30], [minutes(120), 30]
   ];
   for (const [duration, expected] of matrix)
     assert.equal(maxClipCountForDuration(duration), expected, `max clips for ${duration}s`);
@@ -62,7 +63,7 @@ function testDurationMatrix() {
   assert.equal(isRetryableErrorCode('VIDEO_TOO_LONG'), false);
   assert.match(tooLong.message, /longer than the 2-hour limit/);
 
-  assert.deepEqual([6, 8, 12, 20].map(defaultClipCountForMax), [3, 4, 6, 8]);
+  assert.deepEqual([8, 20, 30].map(defaultClipCountForMax), [4, 8, 8]);
 }
 
 function testCountValidation() {
@@ -72,7 +73,7 @@ function testCountValidation() {
   assert.throws(() => validateRequestedClipCount('abc', 12), /at least 1/);
   assert.throws(() => validateRequestedClipCount(13, 12), /at most 12 clips/);
   assert.equal(validateRequestedClipCount(20, 20), 20);
-  assert.equal(validateRequestedClipCount('4', 6), 4);
+  assert.equal(validateRequestedClipCount('4', 8), 4);
 
   assert.equal(parseTargetPlatform('TIKTOK'), 'TIKTOK');
   assert.equal(parseTargetPlatform('youtube_shorts'), 'YOUTUBE_SHORTS');
@@ -176,9 +177,11 @@ function testCleanCardsAndAiMode() {
 
   const normal = toClipCard({ ...clipBase, processingType: 'NORMAL_CLIPS', aspectRatio: '9:16',
     editTelemetry: null }, 'ONLINE', 1);
-  assert.deepEqual(Object.keys(normal).sort(), ['aiModeUsed', 'caption', 'durationSec', 'hashtags',
-    'height', 'hook', 'id', 'outputStyle', 'playbackUrl', 'posterUrl', 'position', 'synopsis',
-    'width'].sort());
+  // Step 2 made every generated clip editable: cards carry editProjectId/editUrl/isEditable.
+  assert.deepEqual(Object.keys(normal).sort(), ['aiModeUsed', 'caption', 'durationSec',
+    'editProjectId', 'editUrl', 'effectiveTemplate', 'generationJobId', 'hashtags', 'height', 'hook', 'id', 'isEditable',
+    'outputStyle', 'playbackUrl', 'posterUrl', 'position', 'requestedClipIndex', 'sourceRange',
+    'requestedTemplate', 'style', 'styleVariant', 'synopsis', 'templateId', 'width'].sort());
   // No rendered cover stored: the player falls back to its own first frame.
   assert.equal(normal.posterUrl, null);
   assert.equal(normal.hook, 'Why the plan failed overnight');
@@ -252,9 +255,17 @@ function fakeStore(job, { candidates = [], clips = [], sourceVideo = video } = {
       findUniqueOrThrow: async () => sourceVideo
     },
     clipCandidate: { findMany: async () => candidates },
-    generatedClip: { findMany: async ({ where }) => clips.filter((clip) =>
-      clip.videoId === where.videoId && where.candidateId.in.includes(clip.candidateId) &&
-      clip.variantKey === where.variantKey) },
+    generatedClip: {
+      // getResults() scopes by generationJobId + processingType + targetPlatform (real, stable
+      // columns), not by variantKey (a rendering-cache key whose format has changed over time).
+      findMany: async ({ where }) => clips.filter((clip) =>
+        clip.videoId === where.videoId && where.candidateId.in.includes(clip.candidateId) &&
+        clip.generationJobId === where.generationJobId &&
+        (where.processingType === undefined || clip.processingType === where.processingType) &&
+        (where.targetPlatform === undefined || (clip.targetPlatform ?? null) === where.targetPlatform))
+        .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0)),
+      updateMany: async () => ({ count: 1 })
+    },
     processingJob: {
       updateMany: async ({ where, data }) => {
         if (!matches(where)) return { count: 0 };
@@ -267,7 +278,8 @@ function fakeStore(job, { candidates = [], clips = [], sourceVideo = video } = {
       findUniqueOrThrow: async () => store.job,
       findMany: async ({ where }) =>
         where.clipRenderStatus.in.includes(store.job.clipRenderStatus) ? [store.job] : []
-    }
+    },
+    $transaction: async (operations) => Promise.all(operations)
   };
   return store;
 }
@@ -303,7 +315,10 @@ async function testCreateFlow() {
   // Rank is now forwarded so pre-render rejection cost can be attributed to the
   // exact selection position; the export format behavior is otherwise unchanged.
   assert.deepEqual(exported[0].options, { processingType: 'EDITED_CLIPS',
-    targetPlatform: 'YOUTUBE_SHORTS', aspectRatio: '9:16', rank: 1 });
+    targetPlatform: 'YOUTUBE_SHORTS', aspectRatio: '9:16', rank: 1,
+    generationJobId: 'job', generationRequestKey:
+      `job:${store.updates[0].clipRequestedAt.toISOString()}`,
+    templateId: 'AUTOMATIC_1', styleVariant: 'AUTOMATIC_1' });
   // Persisted lifecycle: QUEUED before dispatch, RENDERING when the worker starts, then COMPLETED.
   const statuses = store.updates.map((update) => update.clipRenderStatus).filter(Boolean);
   assert.deepEqual(statuses, ['QUEUED', 'RENDERING', 'COMPLETED']);
@@ -490,14 +505,42 @@ async function testStrictCountLongSourceMatrix() {
   }
 }
 
+async function testCanonicalTemplateCountMatrix() {
+  process.env.CLIP_SELECTION_SYNC = 'true';
+  try {
+    for (const templateId of ['AUTOMATIC_1', 'AUTOMATIC_2']) {
+      for (const requestedClipCount of [1, 2, 3, 4, 5, 6, 7, 8]) {
+        const usable = Array.from({ length: 24 }, (_, index) =>
+          candidate(`${templateId}-${requestedClipCount}-${index}`, 100 - index, index));
+        const store = fakeStore({ telemetry: {}, aiMode: 'OFFLINE' }, {
+          candidates: usable, sourceVideo: { ...video, duration: minutes(60) }
+        });
+        await new ClipSelectionService(store.prisma, { export: async () => ({ editTelemetry: {} }) })
+          .create('vid', { requestedClipCount, outputStyle: 'AI_EDITED', generation: {
+            templateId, look: templateId, components: {}, brief: '', referenceId: null
+          } });
+        assert.equal(store.job.selectedCandidateIds.length, requestedClipCount,
+          `${templateId} ${requestedClipCount}->${requestedClipCount}`);
+        assert.equal(store.job.generationSettings.requestedTemplate, templateId);
+        assert.equal(store.job.generationSettings.effectiveTemplate, templateId);
+        assert.equal(store.job.telemetry.clipSelection.requestedTemplate, templateId);
+        assert.equal(store.job.telemetry.clipSelection.deliveryStatus, 'COMPLETE');
+      }
+    }
+  } finally { delete process.env.CLIP_SELECTION_SYNC; }
+  assert.notEqual(clipVariantKey('EDITED_CLIPS', 'YOUTUBE_SHORTS', 'AUTOMATIC_1'),
+    clipVariantKey('EDITED_CLIPS', 'YOUTUBE_SHORTS', 'AUTOMATIC_2'),
+    'Automatic 1 and Automatic 2 never share a rendered variant');
+}
+
 async function testVariantResults() {
   // D) Normal and AI Edited renders of the same candidate coexist; results show the requested one.
-  const clip = (id, processingType, variantKey) => ({ ...clipBase, id, videoId: 'vid',
-    candidateId: 'cand', processingType, variantKey, aspectRatio: '9:16', editTelemetry: null,
-    candidate: { ...storedContent, generationMode: 'DETERMINISTIC_FALLBACK' } });
-  const clips = [clip('normal', 'NORMAL_CLIPS', 'NORMAL_CLIPS:YOUTUBE_SHORTS'),
-    clip('edited', 'EDITED_CLIPS', 'EDITED_CLIPS:YOUTUBE_SHORTS'),
-    clip('other-platform', 'NORMAL_CLIPS', 'NORMAL_CLIPS:TIKTOK')];
+  const clip = (id, processingType, targetPlatform) => ({ ...clipBase, id, videoId: 'vid',
+    candidateId: 'cand', processingType, targetPlatform, generationJobId: 'job', aspectRatio: '9:16',
+    editTelemetry: null, candidate: { ...storedContent, generationMode: 'DETERMINISTIC_FALLBACK' } });
+  const clips = [clip('normal', 'NORMAL_CLIPS', 'YOUTUBE_SHORTS'),
+    clip('edited', 'EDITED_CLIPS', 'YOUTUBE_SHORTS'),
+    clip('other-platform', 'NORMAL_CLIPS', 'TIKTOK')];
   const results = async (job) => new ClipSelectionService(fakeStore({ selectedCandidateIds: ['cand'],
     clipRenderStatus: 'COMPLETED', requestedClipCount: 1, ...job }, { clips }).prisma, {})
     .getResults('vid');
@@ -526,6 +569,19 @@ async function testIdempotentRequests() {
   assert.equal(same.clipRequest.status, 'COMPLETED');
   assert.equal(dispatcher.dispatched.length, 0);
   assert.equal(completed.updates.length, 0);
+
+  // Real bug (2026-10-03): pressing Create again with unchanged settings did nothing.
+  // An explicit regenerate re-runs the finished identical request as a NEW request.
+  const again = fakeStore({ clipRenderStatus: 'COMPLETED', outputStyle: 'NORMAL',
+    requestedClipCount: 2, selectedCandidateIds: ['a', 'b'], clipRequestedAt: ago(60_000) });
+  const againDispatcher = fakeDispatcher();
+  const regenerated = await new ClipSelectionService(again.prisma, {}, againDispatcher)
+    .create('vid', { requestedClipCount: 2, outputStyle: 'NORMAL', regenerate: true });
+  assert.equal(regenerated.clipRequest.status, 'QUEUED');
+  assert.equal(againDispatcher.dispatched.length, 1);
+  assert.equal(again.updates.length, 1, 'regenerate claims a new request');
+  assert.equal(parseClipCreationRequest({ requestedClipCount: 2, regenerate: true }).regenerate, true);
+  assert.equal(parseClipCreationRequest({ requestedClipCount: 2 }).regenerate, false);
 
   // The other style is a new request for the same moments.
   const queued = await service.create('vid', { requestedClipCount: 2, outputStyle: 'AI_EDITED' });
@@ -614,6 +670,27 @@ async function testStaleRenderRecovery() {
   assert.deepEqual(exported, ['r0', 'r1'], 'a completed request is not processed twice');
 }
 
+async function testInfrastructureFailureStopsSelection() {
+  const requestedAt = new Date();
+  const store = fakeStore({ outputStyle: 'AI_EDITED', requestedClipCount: 2,
+    maxClipCount: 8, clipRenderStatus: 'QUEUED', clipRequestedAt: requestedAt },
+  { candidates: [candidate('good0', 90, 0), candidate('good1', 80, 1)] });
+  let attempts = 0;
+  const exporter = { export: async () => {
+    attempts++;
+    throw new ClipInfrastructureError('PERSISTENCE_FAILED', 'unique object key');
+  } };
+  const service = new ClipSelectionService(store.prisma, exporter);
+  await assert.rejects(() => service.processRequest({ videoId: 'vid',
+    processingJobId: 'job', requestedAt: requestedAt.toISOString() }),
+  (error) => error instanceof ClipInfrastructureError &&
+    error.failureType === 'PERSISTENCE_FAILED');
+  assert.equal(attempts, 2, 'in-flight work settles without backfilling a persistence failure');
+  assert.equal(store.job.clipRenderStatus, 'RENDERING');
+  assert.equal(store.job.telemetry.clipSelection, undefined,
+    'infrastructure failure cannot become a content shortfall');
+}
+
 async function main() {
   testDurationMatrix();
   testCountValidation();
@@ -625,11 +702,13 @@ async function main() {
   await testCreateFlow();
   await testConcurrentRenderPool();
   await testStrictCountLongSourceMatrix();
+  await testCanonicalTemplateCountMatrix();
   await testPostRenderCandidateExpansion();
   await testExplicitDeliveryShortfall();
   await testVariantResults();
   await testIdempotentRequests();
   await testStaleRenderRecovery();
+  await testInfrastructureFailureStopsSelection();
   console.log(JSON.stringify({ clipSelectionFlow: true, jobLevelAiModeLabel: true,
     variantsCoexist: true, idempotentRequests: true, staleRenderRecovery: true }));
 }

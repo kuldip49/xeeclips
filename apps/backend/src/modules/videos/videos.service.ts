@@ -1,10 +1,18 @@
+import { ModuleRef } from '@nestjs/core';
+import { LlmRouterService } from '../processing/llm-router.service';
+import { interpretBrief, scoreCandidatesWithOpenAi } from '../edit-mode/styles/creative-brief';
+import { GenerationStylingService } from '../edit-mode/styles/generation-styling.service';
 import { BadRequestException, ConflictException, Injectable, NotFoundException,
-  OnApplicationBootstrap, Optional, UnprocessableEntityException } from "@nestjs/common";
-import { ProcessingStage } from '@prisma/client';
+  OnApplicationBootstrap, OnModuleDestroy, Optional, UnprocessableEntityException } from "@nestjs/common";
+import { Prisma, ProcessingStage } from '@prisma/client';
+import { QueueEvents } from 'bullmq';
+import IORedis from 'ioredis';
+import { VIDEO_PROCESSING_QUEUE } from '../processing/processing.constants';
 import { Logger } from '@nestjs/common';
 import { randomUUID } from "crypto";
 import { extname } from "path";
 import { PrismaService } from "../database/prisma.service";
+import { generatedClipEditLink } from '../edit-mode/generated-clip-edit-link';
 import { StorageService } from "../storage/storage.service";
 import { ProcessingQueueService } from "../processing/processing-queue.service";
 
@@ -20,7 +28,7 @@ import {
 import { ClipExportService } from './clip-export.service';
 import { ClipCreationRequest, ClipSelectionService } from './clip-selection.service';
 import { ClipRenderQueueService } from './clip-render-queue.service';
-import { isVideoTooLong, parseTargetPlatform, VIDEO_TOO_LONG_MESSAGE }
+import { isVideoTooLong, maxClipCountForDuration, parseTargetPlatform, VIDEO_TOO_LONG_MESSAGE }
   from '../processing/clip-selection-policy';
 import { normalizeAiProcessingMode } from '../processing/ai-processing-mode';
 import { parseProcessingType, parseOutputAspectRatio } from '../processing/processing-type';
@@ -46,6 +54,18 @@ async function probeUploadDuration(buffer: Buffer, originalName: string) {
   }
 }
 
+/** Same probe for an upload multer already wrote to disk (no copy, no buffer). */
+async function probeUploadPath(path: string) {
+  try {
+    const { stdout } = await execFileAsync('ffprobe', ['-v', 'error', '-show_entries',
+      'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path], { timeout: 30000 });
+    const duration = Number(stdout.trim());
+    return Number.isFinite(duration) ? duration : null;
+  } catch {
+    return null;
+  }
+}
+
 const serializeCandidate = <T extends {
   contentPotential: number;
   [key: string]: unknown;
@@ -58,15 +78,21 @@ const serializeGeneratedClip = (clip: {
   sizeBytes: bigint;
   id: string;
   candidate?: ({ contentPotential: number; [key: string]: unknown }) | null;
+  editProject?: { id: string } | null;
   [key: string]: unknown;
-}) => ({
-  ...clip,
+}) => {
+  const { editProject, ...data } = clip;
+  return ({
+  ...data,
+  ...generatedClipEditLink(editProject),
   candidate: clip.candidate ? serializeCandidate(clip.candidate) : clip.candidate,
   sizeBytes: Number(clip.sizeBytes),
   playbackUrl: `/generated-clips/${clip.id}/file`
-});
+  });
+};
 
 const serializeVideo = (video: {
+  id: string;
   sizeBytes: bigint;
   bitrate?: bigint | null;
   transcript?: { id: string } | null;
@@ -84,7 +110,7 @@ const serializeVideo = (video: {
 };
 
 @Injectable()
-export class VideosService implements OnApplicationBootstrap {
+export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(VideosService.name);
 
   constructor(
@@ -92,9 +118,33 @@ export class VideosService implements OnApplicationBootstrap {
     private readonly storage: StorageService,
     private readonly processingQueue: ProcessingQueueService,
     private readonly clipExporter: ClipExportService = new ClipExportService(prisma, storage),
-    @Optional() private readonly clipRenderQueue?: ClipRenderQueueService
+    @Optional() private readonly clipRenderQueue?: ClipRenderQueueService,
+    @Optional() private readonly llm?: LlmRouterService,
+    @Optional() private readonly moduleRef?: ModuleRef
   ) {
-    this.clipSelection = new ClipSelectionService(prisma, clipExporter, clipRenderQueue);
+    // Steps 9-12: the unified-generation collaborators. Each is optional, so the
+    // selection engine still runs (deterministically) in scripts and tests.
+    this.clipSelection = new ClipSelectionService(prisma, clipExporter, clipRenderQueue, {
+      interpretBrief: async (brief, aiMode) => interpretBrief({ brief,
+        llm: aiMode === 'ONLINE' ? this.llm ?? null : null, logger: this.logger, aiMode }),
+      semanticIntentScores: async (candidates, settings, aiMode) => aiMode === 'ONLINE' && this.llm
+        ? scoreCandidatesWithOpenAi({ llm: this.llm, brief: settings.brief,
+          intent: settings.interpreted.intent, candidates, logger: this.logger, aiMode }) : null,
+      referenceStyle: async (referenceId) => {
+        const reference = await this.prisma.referenceAsset.findUnique({ where: { id: referenceId } });
+        return reference?.status === 'READY' && reference.derivedStyle &&
+          typeof reference.derivedStyle === 'object' ? reference.derivedStyle as Record<string, unknown> : null;
+      },
+      savedStyles: async (ids) => {
+        const rows = await this.prisma.savedStyle.findMany({ where: { id: { in: ids } } });
+        return Object.fromEntries(rows.map((row) => [row.id, { category: row.category as never,
+          spec: row.spec as never, name: row.name }]));
+      },
+      afterDelivery: async (videoId) => {
+        const styling = this.moduleRef?.get(GenerationStylingService, { strict: false });
+        if (styling) await styling.ensureStyled(videoId);
+      }
+    });
   }
 
   private readonly clipSelection: ClipSelectionService;
@@ -109,6 +159,96 @@ export class VideosService implements OnApplicationBootstrap {
     await this.clipSelection.recoverStaleRenders().catch((error: unknown) =>
       this.logger.warn(`Stale clip render recovery failed: ${
         error instanceof Error ? error.message : String(error)}`));
+    // One-step entry: start the pre-selected clip request the moment analysis completes.
+    // The queue id is the ProcessingJob id. The sweep covers events missed across restarts.
+    this.analysisEvents = new QueueEvents(VIDEO_PROCESSING_QUEUE, { connection:
+      new IORedis(process.env.REDIS_URL ?? 'redis://localhost:6379', { maxRetriesPerRequest: null }) });
+    this.analysisEvents.on('completed', ({ jobId }) => void this.startAutoGeneration(jobId));
+    this.analysisEvents.on('error', (error) => this.logger.warn(`Analysis events: ${error.message}`));
+    this.autoGenerationSweep = setInterval(() => void this.sweepAutoGeneration(), 15_000);
+    await this.sweepAutoGeneration();
+  }
+
+  private analysisEvents?: QueueEvents;
+  private autoGenerationSweep?: NodeJS.Timeout;
+
+  async onModuleDestroy() {
+    if (this.autoGenerationSweep) clearInterval(this.autoGenerationSweep);
+    await this.analysisEvents?.close().catch(() => undefined);
+  }
+
+  /**
+   * Attach a pre-selected clip request to an existing source (a re-imported YouTube video).
+   * Starts it now when analysis is already complete, otherwise when it completes.
+   */
+  async requestAutoGeneration(videoId: string, request: ClipCreationRequest) {
+    const job = await this.prisma.processingJob.findFirst({ where: { videoId },
+      orderBy: { createdAt: 'desc' } });
+    if (!job) return;
+    await this.prisma.processingJob.update({ where: { id: job.id }, data: {
+      autoGeneration: request as unknown as Prisma.InputJsonValue,
+      autoGenerationStatus: 'PENDING', autoGenerationError: null } });
+    if (job.status === 'COMPLETED') await this.startAutoGeneration(job.id);
+  }
+
+  /**
+   * Hands the stored request to the ordinary clip-selection path - the same call the
+   * "Create clips" button makes - so there is no second generation pipeline. The claim makes
+   * concurrent triggers (queue event + sweep) start it once; create() is idempotent anyway.
+   */
+  async startAutoGeneration(processingJobId: string) {
+    try {
+      const claimed = await this.prisma.processingJob.updateMany({ where: { id: processingJobId,
+        status: 'COMPLETED', autoGenerationStatus: 'PENDING' },
+        data: { autoGenerationStatus: 'STARTING' } });
+      if (!claimed.count) return;
+      const job = await this.prisma.processingJob.findUniqueOrThrow({ where: { id: processingJobId } });
+      let request = job.autoGeneration as unknown as ClipCreationRequest & { adjustedFrom?: number };
+      // A YouTube link's length is unknown when the user picks a count. If the count is above
+      // what this video allows, make the most it allows and record the change for the page.
+      const video = await this.prisma.video.findUniqueOrThrow({ where: { id: job.videoId },
+        select: { duration: true } });
+      const allowed = maxClipCountForDuration(video.duration);
+      const asked = Number(request.requestedClipCount);
+      if (allowed > 0 && Number.isFinite(asked) && asked > allowed) {
+        request = { ...request, requestedClipCount: allowed, adjustedFrom: asked };
+        await this.prisma.processingJob.update({ where: { id: job.id },
+          data: { autoGeneration: request as unknown as Prisma.InputJsonValue } });
+        this.logger.warn(JSON.stringify({ event: 'auto_generation_count_adjusted', videoId: job.videoId,
+          asked, allowed, durationSec: video.duration }));
+      }
+      try {
+        const { adjustedFrom: _adjusted, ...creation } = request;
+        await this.clipSelection.create(job.videoId, { ...creation, regenerate: false });
+        await this.prisma.processingJob.update({ where: { id: job.id },
+          data: { autoGenerationStatus: 'STARTED', autoGenerationError: null } });
+        this.logger.log(JSON.stringify({ event: 'auto_generation_started', videoId: job.videoId,
+          processingJobId: job.id, requestedClipCount: request.requestedClipCount,
+          templateId: request.generation?.templateId ?? null }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Clips could not be started.';
+        await this.prisma.processingJob.update({ where: { id: job.id },
+          data: { autoGenerationStatus: 'FAILED', autoGenerationError: message.slice(0, 500) } });
+        this.logger.warn(`Auto generation for ${job.videoId} failed to start: ${message}`);
+      }
+    } catch (error) {
+      this.logger.warn(`Auto generation check failed: ${
+        error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private async sweepAutoGeneration() {
+    try {
+      // A claim left STARTING by a crash is released after two minutes.
+      await this.prisma.processingJob.updateMany({ where: { autoGenerationStatus: 'STARTING',
+        updatedAt: { lt: new Date(Date.now() - 120_000) } }, data: { autoGenerationStatus: 'PENDING' } });
+      const ready = await this.prisma.processingJob.findMany({ where: { status: 'COMPLETED',
+        autoGenerationStatus: 'PENDING' }, select: { id: true } });
+      for (const job of ready) await this.startAutoGeneration(job.id);
+    } catch (error) {
+      this.logger.warn(`Auto generation sweep failed: ${
+        error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async list(projectId?: string) {
@@ -211,7 +351,8 @@ export class VideosService implements OnApplicationBootstrap {
       where: { id: videoId },
       include: {
         processingJobs: { select: { id: true } },
-        generatedClips: { select: { bucket: true, objectKey: true } }
+        generatedClips: { select: { bucket: true, objectKey: true } },
+        referenceAssets: { select: { bucket: true, objectKey: true } }
       }
     });
     if (!video) throw new NotFoundException('Video not found');
@@ -228,7 +369,11 @@ export class VideosService implements OnApplicationBootstrap {
       video.audioBucket && video.audioObjectKey
         ? { bucket: video.audioBucket, objectKey: video.audioObjectKey }
         : null,
-      ...video.generatedClips
+      ...video.generatedClips,
+      // Unified generation objects: reference uploads (rows cascade with the Video) and the
+      // cached source poster. Removing an absent poster is a harmless no-op.
+      ...video.referenceAssets,
+      { bucket: video.bucket, objectKey: `previews/${video.id}/poster.jpg` }
     ].filter((value): value is { bucket: string; objectKey: string } => value !== null);
     await Promise.all(objects.map(({ bucket, objectKey }) =>
       this.storage.removeObject(bucket, objectKey).catch((error) => {
@@ -314,9 +459,52 @@ export class VideosService implements OnApplicationBootstrap {
     const video = await this.prisma.video.findUnique({ where: { id: videoId }, select: { id: true } });
     if (!video) throw new NotFoundException('Video not found');
     const clips = await this.prisma.generatedClip.findMany({
-      where: { videoId }, orderBy: { createdAt: 'asc' }, include: { candidate: true }
+      where: { videoId }, orderBy: { createdAt: 'asc' },
+      include: { candidate: true, editProject: { select: { id: true } } }
     });
     return clips.map(serializeGeneratedClip);
+  }
+
+  /** Step 9.1: the uploaded source itself, range-served for the preview player. */
+  async getVideoFile(videoId: string, rangeHeader?: string) {
+    const video = await this.prisma.video.findUnique({ where: { id: videoId },
+      select: { bucket: true, objectKey: true, sizeBytes: true, mimeType: true } });
+    if (!video) throw new NotFoundException('Video not found');
+    const size = Number(video.sizeBytes);
+    const match = rangeHeader?.match(/^bytes=(\d*)-(\d*)$/u);
+    if (!match) return { stream: await this.storage.getObject(video.bucket, video.objectKey),
+      size, start: 0, end: size - 1, partial: false, mimeType: video.mimeType };
+    const start = Math.max(0, Math.min(size - 1, match[1] ? Number(match[1]) : 0));
+    const end = Math.max(start, Math.min(size - 1, match[2] ? Number(match[2]) : size - 1));
+    return { stream: await this.storage.getPartialObject(video.bucket, video.objectKey, start,
+      end - start + 1), size, start, end, partial: true, mimeType: video.mimeType };
+  }
+
+  /**
+   * Step 9.1: a meaningful still of the source (a frame ~10% in, never a black
+   * first frame), made once with FFmpeg seeking over HTTP and cached in storage.
+   */
+  async getVideoPoster(videoId: string) {
+    const video = await this.prisma.video.findUnique({ where: { id: videoId },
+      select: { id: true, bucket: true, objectKey: true, duration: true } });
+    if (!video) throw new NotFoundException('Video not found');
+    const key = `previews/${video.id}/poster.jpg`;
+    const cached = await this.storage.statObject(video.bucket, key).then(() => true, () => false);
+    if (!cached) {
+      const directory = await mkdtemp(join(tmpdir(), 'source-poster-'));
+      try {
+        const url = await this.storage.presignedGetUrl(video.bucket, video.objectKey, 300);
+        const at = Math.max(0.5, Math.min(30, (video.duration ?? 10) * 0.1));
+        const output = join(directory, 'poster.jpg');
+        await execFileAsync('ffmpeg', ['-v', 'error', '-y', '-ss', at.toFixed(2), '-i', url,
+          '-frames:v', '1', '-vf', 'scale=720:-2', '-q:v', '4', output], { timeout: 60_000 });
+        await this.storage.uploadFile({ filePath: output, objectKey: key, mimeType: 'image/jpeg' });
+      } catch (error) {
+        throw new NotFoundException(`Source preview not available: ${
+          error instanceof Error ? error.message.slice(0, 160) : 'ffmpeg failed'}`);
+      } finally { await rm(directory, { recursive: true, force: true }).catch(() => undefined); }
+    }
+    return { stream: await this.storage.getObject(video.bucket, key), mimeType: 'image/jpeg' };
   }
 
   async getGeneratedClipFile(clipId: string, rangeHeader?: string) {
@@ -365,8 +553,27 @@ export class VideosService implements OnApplicationBootstrap {
     );
   }
 
+  /**
+   * Uploads arrive on disk (multer disk storage), so a long source is streamed to MinIO instead
+   * of being held in Node memory (measured: +~500 MiB for a 383 MiB file). The temp file is
+   * always removed, including when the upload is rejected. A buffer upload still works.
+   */
   async createFromUpload(projectId: string, file: Express.Multer.File, requestedAiMode?: unknown,
-    requestedProcessingType?: unknown, requestedAspectRatio?: unknown, requestedPlatform?: unknown) {
+    requestedProcessingType?: unknown, requestedAspectRatio?: unknown, requestedPlatform?: unknown,
+    source?: { sourceUrl: string; externalVideoId: string },
+    autoGeneration?: ClipCreationRequest | null) {
+    try {
+      return await this.createFromUploadFile(projectId, file, requestedAiMode, requestedProcessingType,
+        requestedAspectRatio, requestedPlatform, source, autoGeneration);
+    } finally {
+      if (file?.path) await rm(file.path, { force: true }).catch(() => undefined);
+    }
+  }
+
+  private async createFromUploadFile(projectId: string, file: Express.Multer.File, requestedAiMode?: unknown,
+    requestedProcessingType?: unknown, requestedAspectRatio?: unknown, requestedPlatform?: unknown,
+    source?: { sourceUrl: string; externalVideoId: string },
+    autoGeneration?: ClipCreationRequest | null) {
     const aiMode = normalizeAiProcessingMode(requestedAiMode);
     const targetPlatform = parseTargetPlatform(requestedPlatform);
     const processingType = parseProcessingType(requestedProcessingType);
@@ -382,28 +589,40 @@ export class VideosService implements OnApplicationBootstrap {
     }
 
     // Reject over-limit sources before storing them or spending any analysis on them.
-    if (isVideoTooLong(await probeUploadDuration(file.buffer, file.originalname))) {
+    const onDisk = typeof file.path === 'string' && file.path.length > 0;
+    if (isVideoTooLong(onDisk ? await probeUploadPath(file.path)
+      : await probeUploadDuration(file.buffer, file.originalname))) {
       throw new BadRequestException({ code: 'VIDEO_TOO_LONG', message: VIDEO_TOO_LONG_MESSAGE });
     }
 
     const objectKey = `projects/${projectId}/videos/${randomUUID()}${extname(file.originalname)}`;
-    const stored = await this.storage.uploadVideo({
-      buffer: file.buffer,
-      objectKey,
-      mimeType: file.mimetype
-    });
+    const stored = onDisk
+      ? await this.storage.uploadFile({ filePath: file.path, objectKey, mimeType: file.mimetype })
+      : await this.storage.uploadVideo({ buffer: file.buffer, objectKey, mimeType: file.mimetype });
+    if (source) {
+      try {
+        const storedStat = await this.storage.statObject(stored.bucket, stored.objectKey);
+        if (Number(storedStat.size) !== file.size) throw new Error('Stored source size mismatch');
+      } catch (error) {
+        await this.storage.removeObject(stored.bucket, stored.objectKey).catch(() => undefined);
+        throw error;
+      }
+    }
 
     const video = await this.prisma.video.create({
       data: {
         projectId,
         originalName: file.originalname,
+        ...(source ? { sourceType: 'YOUTUBE', sourceUrl: source.sourceUrl,
+          externalVideoId: source.externalVideoId } : {}),
         objectKey: stored.objectKey,
         bucket: stored.bucket,
         mimeType: file.mimetype,
         sizeBytes: BigInt(file.size),
         targetPlatform,
         processingJobs: { create: { status: "PENDING", aiMode, processingType,
-          outputAspectRatio } },
+          outputAspectRatio, ...(autoGeneration ? { autoGeneration,
+            autoGenerationStatus: 'PENDING' } : {}) } },
         processingStages: {
           create: Object.values(ProcessingStage).map((stage) => ({
             stage,

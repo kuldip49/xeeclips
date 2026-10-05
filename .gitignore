@@ -1,5 +1,9 @@
 node_modules/
 .next/
+.open-next/
+.wrangler/
+.dev.vars
+.vercel/
 dist/
 *.tsbuildinfo
 build/
@@ -7,6 +11,12 @@ build/
 .env
 .env.local
 .env.*.local
+.env.production
+.env.development
+.cloudflared/
+**/.cloudflared/
+**/cert.pem
+**/*-tunnel-credentials.json
 .venv/
 venv/
 .uv-cache/
@@ -60,3 +70,7 @@ apps/backend/assets/sfx/**/*.m4a
 apps/backend/assets/sfx/**/*.ogg
 apps/backend/assets/sfx/**/*.flac
 apps/backend/assets/sfx/sfx.json
+
+# Playwright browser E2E output
+test-results/
+playwright-report/

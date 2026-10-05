@@ -1,0 +1,9 @@
+# Copy outside the repository to the Windows user's .cloudflared directory, then
+# replace both placeholders. Keep the real credentials JSON outside Git.
+tunnel: <TUNNEL_UUID>
+credentials-file: C:/Users/<WINDOWS_USER>/.cloudflared/<TUNNEL_UUID>.json
+
+ingress:
+  - hostname: api.xeeclip.me
+    service: http://127.0.0.1:4000
+  - service: http_status:404

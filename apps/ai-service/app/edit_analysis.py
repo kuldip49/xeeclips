@@ -341,6 +341,8 @@ def analyze_edit_window(video_path: Path, fps: float = 4.0, max_frames: int = 48
         item["text_coverage"] = _round(coverage)
         item["text_boxes"] = boxes
         item["graphic_boxes"] = graphic_regions(item["image"])
+        gray = cv2.cvtColor(item["image"], cv2.COLOR_BGR2GRAY)
+        item["edge_density"] = _round(float((cv2.Canny(gray, 80, 160) > 0).mean()))
         item["ocr_lines"] = []
     ocr_lines: list[str] = []
     ocr = None

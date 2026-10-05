@@ -18,7 +18,9 @@ export type StructuredGenerationRequest = { schemaName: string; schema: StrictJs
   media?: Array<{ mimeType: string; data?: string; url?: string }>;
   local?: { schemaName: string; schema: StrictJsonSchema; systemPrompt?: string;
     userPrompt?: string; maxOutputTokens?: number; partialBatchField?: string } };
-export type LlmApiStyle = 'responses' | 'chat_completions' | 'gemini' | 'anthropic' | 'ollama';
+// Step 6: production semantic AI is the OpenAI API with deterministic fallback.
+// There is no local (Ollama/Qwen) LLM API style any more.
+export type LlmApiStyle = 'responses' | 'chat_completions' | 'gemini' | 'anthropic';
 export type LlmEndpointConfig = { provider: string; apiKey: string; baseUrl: string;
   model: string; apiStyle: LlmApiStyle; timeoutMs: number; maxRetries: number;
   retryBaseDelayMs: number; concurrency: number };
@@ -31,10 +33,7 @@ export type LlmFailureKind = 'CONFIGURATION_FAILURE' | 'AUTH_FAILURE' |
   'PROVIDER_5XX_FAILURE' | 'MALFORMED_RESPONSE_FAILURE' | 'SCHEMA_FAILURE' |
   'CONTENT_VALIDATION_FAILURE' | 'INVALID_REQUEST_FAILURE' | 'CIRCUIT_OPEN' |
   'CALL_BUDGET_EXCEEDED' | 'CONTENT_QUALITY_FAILURE' | 'PROVIDER_FAILURE' |
-  'LOCAL_PROVIDER_UNAVAILABLE' | 'LOCAL_MODEL_NOT_FOUND' |
-  'LOCAL_TIMEOUT_FAILURE' | 'LOCAL_CONNECTION_FAILURE' |
-  'LOCAL_RESPONSE_FAILURE' | 'LOCAL_SCHEMA_FAILURE' | 'AI_MODE_FALLBACK_ONLY' |
-  'MODEL_NOT_FOUND';
+  'AI_MODE_FALLBACK_ONLY' | 'MODEL_NOT_FOUND';
 
 export class LlmProviderError extends Error {
   constructor(public readonly kind: LlmFailureKind, message: string,
@@ -122,17 +121,6 @@ function geminiApiText(response: Record<string, unknown>) {
     'Gemini response contained no output text');
   return text;
 }
-function ollamaApiText(response: Record<string, unknown>) {
-  const message = response.message && typeof response.message === 'object'
-    ? response.message as Record<string, unknown> : null;
-  if (!message || typeof message.content !== 'string' || !message.content.trim()) {
-    throw new LlmProviderError('LOCAL_RESPONSE_FAILURE',
-      'Ollama response contained no final message content');
-  }
-  // Ollama may return thinking separately. Only the final content is ever persisted.
-  return message.content;
-}
-
 export function validateSchema(value: unknown, schema: Record<string, unknown>, path = '$'): void {
   const type = schema.type;
   if (type === 'object') {
@@ -297,7 +285,7 @@ export function parseSafelyExtractedStructuredJson(response: string, field?: str
   return value;
 }
 
-/** Backward-compatible name for callers/tests that describe the original Ollama behavior. */
+/** Backward-compatible alias; the safe extractor is used for NVIDIA-style responses. */
 export const parseLocalStructuredJson = parseSafelyExtractedStructuredJson;
 
 class Semaphore {
@@ -323,7 +311,7 @@ export class LlmProviderService {
   get providerName() { return legacyConfig().provider; }
   get modelName() { return legacyConfig().model; }
   isConfigured(config = legacyConfig()) {
-    return !!(config.baseUrl && config.model && (config.apiStyle === 'ollama' || config.apiKey));
+    return !!(config.baseUrl && config.model && config.apiKey);
   }
   async generateStructured<T>(request: StructuredGenerationRequest): Promise<T> {
     return this.generateStructuredWithConfig<T>(legacyConfig(), request);
@@ -365,10 +353,7 @@ export class LlmProviderService {
   }
   private async generateWithRetry<T>(config: LlmEndpointConfig,
     request: StructuredGenerationRequest, providerConcurrency: number) {
-    const effectiveRequest: StructuredGenerationRequest = config.apiStyle === 'ollama' && request.local
-      ? { ...request, ...request.local, role: request.role, options: request.options,
-        cacheKey: request.cacheKey, media: undefined, local: undefined }
-      : request;
+    const effectiveRequest: StructuredGenerationRequest = request;
     for (let attempt = 0; attempt <= config.maxRetries; attempt += 1) {
       const started = Date.now();
       const role = request.role || request.schemaName;
@@ -384,28 +369,23 @@ export class LlmProviderService {
           ? await this.requestResponsesApi(config, effectiveRequest)
           : config.apiStyle === 'gemini' ? await this.requestGeminiApi(config, effectiveRequest)
             : config.apiStyle === 'anthropic' ? await this.requestAnthropicApi(config, effectiveRequest)
-            : config.apiStyle === 'ollama' ? await this.requestOllamaApi(config, effectiveRequest)
               : await this.requestChatCompletionsApi(config, effectiveRequest);
         let parsed: unknown;
         try {
-          const safeExtraction = config.apiStyle === 'ollama' ||
-            config.provider.toLowerCase().includes('nvidia') ||
+          const safeExtraction = config.provider.toLowerCase().includes('nvidia') ||
             /(?:^|\.)nvidia\.com(?:\/|$)/iu.test(config.baseUrl);
           parsed = safeExtraction
             ? parseSafelyExtractedStructuredJson(response, effectiveRequest.partialBatchField)
             : parseStructuredJson(response, effectiveRequest.partialBatchField);
         } catch {
-          throw new LlmProviderError(config.apiStyle === 'ollama'
-            ? 'LOCAL_RESPONSE_FAILURE' : 'MALFORMED_RESPONSE_FAILURE',
-          'Structured generation output was not valid JSON');
+          throw new LlmProviderError('MALFORMED_RESPONSE_FAILURE',
+            'Structured generation output was not valid JSON');
         }
         try {
           parsed = validateStructuredOutput(parsed, effectiveRequest, message =>
             this.logger.warn(JSON.stringify({ event: 'llm_schema_repair',
               schema: effectiveRequest.schemaName, role: request.role, message })));
         } catch (error) {
-          if (config.apiStyle === 'ollama') throw new LlmProviderError('LOCAL_SCHEMA_FAILURE',
-            error instanceof Error ? error.message : 'Local structured output failed validation');
           throw error;
         }
         countLlmSuccess(role, config.provider);
@@ -440,14 +420,10 @@ export class LlmProviderService {
     const detail = error instanceof Error ? error.message : String(error);
     if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError' ||
       /timed?\s*out|timeout/iu.test(detail))) return new LlmProviderError(
-        config.apiStyle === 'ollama' ? 'LOCAL_TIMEOUT_FAILURE' : 'TIMEOUT_FAILURE',
-        config.apiStyle === 'ollama' ? 'Local structured generation timed out' :
-          'Structured generation timed out', undefined, true);
+        'TIMEOUT_FAILURE', 'Structured generation timed out', undefined, true);
     if (error instanceof TypeError || /fetch|network|dns|socket|connect/iu.test(detail))
-      return new LlmProviderError(config.apiStyle === 'ollama'
-        ? 'LOCAL_CONNECTION_FAILURE' : 'NETWORK_FAILURE', config.apiStyle === 'ollama'
-        ? 'Local Ollama connection failed' : 'Structured generation network request failed',
-      undefined, false);
+      return new LlmProviderError('NETWORK_FAILURE',
+        'Structured generation network request failed', undefined, false);
     return new LlmProviderError('PROVIDER_FAILURE', 'Structured generation request failed',
       undefined, false);
   }
@@ -519,38 +495,17 @@ export class LlmProviderService {
       return text;
     });
   }
-  private async requestOllamaApi(config: LlmEndpointConfig, request: StructuredGenerationRequest) {
-    const keepAlive = (process.env.LOCAL_LLM_KEEP_ALIVE || '').trim();
-    const response = await fetch(config.baseUrl + '/api/chat', { method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      signal: AbortSignal.timeout(request.options?.timeoutMs ?? config.timeoutMs),
-      body: JSON.stringify({ model: config.model, stream: false, think: false,
-        messages: [{ role: 'system', content: request.systemPrompt +
-          ' Return only the final JSON. Never include analysis, thinking, or markdown.' },
-        { role: 'user', content: request.userPrompt }],
-        format: ollamaJsonSchema(request.schema),
-        options: { temperature: request.options?.temperature ?? 0.1,
-          num_predict: request.options?.maxOutputTokens ?? request.maxOutputTokens ?? 6000 },
-        ...(keepAlive ? { keep_alive: keepAlive } : {}) }) });
-    return this.readResponse(response, config, request, ollamaApiText);
-  }
   private async readResponse(response: Response, config: LlmEndpointConfig,
     request: StructuredGenerationRequest,
     extract: (payload: Record<string, unknown>) => string) {
     if (!response.ok) {
       const status = response.status;
       const detail = await response.text();
-      const local = config.apiStyle === 'ollama';
       const googleFailure = config.provider === 'google' && status === 429
         ? parseGoogleResourceExhausted(detail, response.headers?.get('retry-after')) : null;
       const genericQuota = config.provider !== 'google' && status === 429 &&
         /quota|credit/iu.test(detail);
-      const localModelMissing = local && status === 404 && /model[^\n]{0,160}not found/iu.test(detail);
-      const kind: LlmFailureKind = localModelMissing ? 'LOCAL_MODEL_NOT_FOUND'
-        : local && status === 408 ? 'LOCAL_TIMEOUT_FAILURE'
-        : local && [502, 503, 504].includes(status) ? 'LOCAL_PROVIDER_UNAVAILABLE'
-        : local ? 'LOCAL_RESPONSE_FAILURE'
-        : status === 401 || status === 403 ? 'AUTH_FAILURE'
+      const kind: LlmFailureKind = status === 401 || status === 403 ? 'AUTH_FAILURE'
         : status === 408 ? 'TIMEOUT_FAILURE'
         : status === 404 ? 'MODEL_NOT_FOUND'
         : status === 402 || genericQuota ? 'QUOTA_FAILURE'
@@ -572,8 +527,7 @@ export class LlmProviderService {
       throw new LlmProviderError(kind,
         config.provider + ' structured generation request failed with HTTP ' + status +
           (providerCode ? ' (' + providerCode + ')' : ''),
-        status, kind === 'TIMEOUT_FAILURE' || kind === 'LOCAL_TIMEOUT_FAILURE' ||
-          kind === 'LOCAL_PROVIDER_UNAVAILABLE' || kind === 'PROVIDER_5XX_FAILURE' ||
+        status, kind === 'TIMEOUT_FAILURE' || kind === 'PROVIDER_5XX_FAILURE' ||
           kind === 'PROVIDER_SATURATION_FAILURE',
         1, googleFailure?.retryAfterMs ?? (status === 429 ?
           retryAfterMilliseconds(response.headers?.get('retry-after')) : undefined),
@@ -631,7 +585,7 @@ export class LlmProviderService {
     const inputChars = request.systemPrompt.length + request.userPrompt.length;
     const responseUsage = this.responseUsage.get(request);
     const requestedMaxOutputTokens = request.options?.maxOutputTokens ??
-      request.maxOutputTokens ?? (config.apiStyle === 'ollama' ? 6000 : 12000);
+      request.maxOutputTokens ?? 12000;
     this.logger.log(JSON.stringify({ event: 'llm_request', provider: config.provider,
       model: config.model, schema: request.schemaName, role: request.role, latencyMs: Date.now() - started,
       attempt, sameProviderRetry: attempt > 1, success, failureCategory: failureCategory || null,
@@ -665,23 +619,6 @@ export function geminiJsonSchema(schema: StrictJsonSchema, schemaName = ''): Str
       !(omitNumericBounds && (key === 'minimum' || key === 'maximum')) &&
       !(omitArrayBounds && (key === 'minItems' || key === 'maxItems')))
       .map(([key, child]) => [key, key === 'properties' || key === '$defs'
-        ? Object.fromEntries(Object.entries(child as Record<string, unknown>)
-          .map(([name, item]) => [name, visit(item)])) : visit(child)]));
-  };
-  return visit(schema) as StrictJsonSchema;
-}
-
-const OLLAMA_SCHEMA_KEYS = new Set(['type', 'properties', 'required', 'items', 'enum',
-  'minimum', 'maximum', 'minItems', 'maxItems', 'additionalProperties']);
-
-/** Keep the provider-facing schema small; full application validation remains unchanged. */
-export function ollamaJsonSchema(schema: StrictJsonSchema): StrictJsonSchema {
-  const visit = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(visit);
-    if (!value || typeof value !== 'object') return value;
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => OLLAMA_SCHEMA_KEYS.has(key))
-      .map(([key, child]) => [key, key === 'properties'
         ? Object.fromEntries(Object.entries(child as Record<string, unknown>)
           .map(([name, item]) => [name, visit(item)])) : visit(child)]));
   };

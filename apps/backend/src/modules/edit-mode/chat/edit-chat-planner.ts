@@ -19,7 +19,7 @@ import { createPerformanceTelemetry,
   performanceContext } from '../../processing/performance-telemetry';
 import type { ChatContext } from './edit-chat-context';
 import {
-  CHAT_INTENT_SCHEMA, validateChatIntent, type ChatIntent
+  CHAT_INTENT_SCHEMA, CHAT_MAX_MODEL_COMMANDS, validateChatIntent, type ChatIntent
 } from './edit-chat-commands';
 
 /** The role Phase 6 routes through. It already exists; nothing frozen changes. */
@@ -41,12 +41,16 @@ export const CHAT_PLANNER_ROLE = 'editingPlan' as const;
  * unaffected by what EditMode does in its own.
  *
  * EDIT_MODE_CHAT_AI_MODE wins when set; otherwise the deployment's declared
- * AI_PROCESSING_MODE is used. With neither set the behaviour is exactly as
- * before - FALLBACK_ONLY, deterministic planning only.
+ * AI_PROCESSING_MODE is used. With neither set the production policy applies:
+ * ONLINE (OpenAI) - the router still requires a configured, enabled OpenAI
+ * provider, so a deployment without a key reports NOT_CONFIGURED and plans
+ * deterministically. Set FALLBACK_ONLY to force rules-only explicitly.
+ * (Previously the unset default was FALLBACK_ONLY, which silently kept the AI
+ * editor off OpenAI even with a valid key.)
  */
 export const chatPlannerAiMode = () =>
   (process.env.EDIT_MODE_CHAT_AI_MODE || process.env.AI_PROCESSING_MODE || '').trim() ||
-  'FALLBACK_ONLY';
+  'ONLINE';
 
 const SYSTEM_PROMPT = [
   'You convert one editing instruction into structured commands for a video editor.',
@@ -54,34 +58,40 @@ const SYSTEM_PROMPT = [
   'Rules you must follow exactly:',
   '- Only use the actions listed in the schema. Never invent an action.',
   '- Never output FFmpeg, shell commands, SQL, code, file paths or database ids.',
-  '- EVERY command that is not an ADD_ command MUST carry a target. A command with a null',
-  '  target is rejected outright, so if you cannot name a target, ask for clarification.',
-  '- Choosing a target kind:',
-  '    ELEMENT  - use this for an existing element, with handle set to its handle from the',
-  '               context (for example {"kind":"ELEMENT","handle":"el3"}). This is the normal',
-  '               case and the one you should reach for first.',
-  '    AT_TIME  - the video segment covering a second, for SPLIT_ELEMENT and for deleting part',
-  '               of the video track: {"kind":"AT_TIME","atSec":12.5}.',
-  '    SELECTED - only what the user has selected right now.',
-  '    LAST     - only the element the previous turn changed.',
-  '    ROLE     - "the logo", "the music", when exactly one element plays that role.',
-  '    REF      - ONLY for something a COMMAND EARLIER IN THIS SAME PLAN created via its own',
-  '               "ref" field. A context handle like "el1" is NEVER a REF: use ELEMENT for it.',
-  '- To change project style, use a SETTINGS action and put the value in parameters, for',
-  '  example SET_ASPECT_RATIO with {"aspectRatio":"9:16"}. A SETTINGS command that sets no',
-  '  supported field is rejected.',
-  '- parameters carries every key; set the ones you mean and leave the rest null.',
-  '- Address files ONLY by an assetHandle from the supplied asset list. If the file the user',
-  '  named is not in that list, set needsClarification and say it is not uploaded.',
+  '- Address things ONLY by the opaque handles in the context: "text:hook", "logo:main",',
+  '  "audio:music1", "caption:12", "video:2", "zoom:1", "asset:logo1". A handle that is not',
+  '  in the context does not exist. Three handles address a whole track: "captions:all"',
+  '  (every caption), "video:all" (every video segment) and "audio:source" (the sound',
+  '  recorded with the video).',
+  '- Every element has a "semantic" role (HOOK, CTA, TITLE, CAPTION, LOGO, MUSIC,',
+  '  SOURCE_VIDEO, ZOOM...). "The hook" is the element whose semantic is HOOK.',
+  '- To change what the hook (or any text) SAYS, use SET_TEXT_CONTENT on that element.',
+  '  Never create a second hook when one exists.',
+  '- Target kinds: ELEMENT with a handle is the normal case. AT_TIME ({"atSec":12.5}) is only',
+  '  for SPLIT_ELEMENT / cutting video. SELECTED = what the user selected. LAST = what the',
+  '  previous turn changed ("it", "a little more"). REF = something an earlier command in',
+  '  THIS plan created via its own "ref".',
+  '- parameters is a short list of {name, number, text, flag}: set the one value field that',
+  '  matches the parameter and leave the other two null. Only include parameters you set.',
+  '- RELATIVE requests ("smaller", "a little louder", "warmer") are computed from the',
+  '  CURRENT values in the context and emitted as absolute values. "A little" is a small',
+  '  step; do not jump to an extreme.',
+  '- Units: positions, sizes and opacity are 0..1 fractions of the frame; volume is a gain',
+  '  0..2 (0.25 = 25%); colour controls are -1..1 (sharpness/fade/vignette 0..1); rotation',
+  '  is degrees clockwise; zoom scale is 1.03..1.15; speed 0.25..4.',
+  '- Change ONLY what was asked. Never touch captions, music, logo, colour, crop, zoom or',
+  '  the template unless the instruction names them.',
+  '- Address files ONLY by an asset handle from the asset list. If the file the user named',
+  '  is not in that list, set needsClarification and say it is not uploaded.',
   '- Never invent a timestamp. Use only: the numbers the user stated, the playhead, the',
   '  selected range, or the startSec/endSec of a supplied transcript window.',
   '- Never invent transcript wording, speaker names, or facts about the video.',
-  '- If the instruction is ambiguous - "make it smaller" with nothing selected and no obvious',
-  '  target - set needsClarification with a short question instead of guessing.',
-  '- Only change what was asked. Never rebuild the project or re-apply a preset.',
-  '- Text the user dictated is used verbatim. Do not strengthen, embellish or fact-check it.',
-  '- Give each grounding entry an honest confidence. Under-confident is safe; overconfident',
-  '  is not. Cuts and deletions need strong evidence.'
+  '- If the instruction is genuinely ambiguous (two logos, nothing selected), set',
+  '  needsClarification with ONE short question instead of guessing.',
+  '- If the editor has no command for what is asked (transitions, stabilisation...), set',
+  '  intent UNSUPPORTED and say so plainly in clarificationQuestion.',
+  '- Text the user dictated is used verbatim.',
+  '- Give each grounding entry an honest confidence. Cuts and deletions need strong evidence.'
 ].join('\n');
 
 /** The prompt body: a compact JSON view of everything addressable. */
@@ -90,19 +100,18 @@ function userPrompt(message: string, context: ChatContext): string {
     instruction: message,
     project: {
       timelineDurationSec: context.project.timelineDurationSec,
-      aspectRatio: context.project.style.aspectRatio,
-      subtitlePolicy: context.project.style.subtitlePolicy,
+      aspectRatio: context.project.aspectRatio,
       zoomPolicy: context.project.style.zoomPolicy,
       reframePolicy: context.project.style.reframePolicy,
-      gradingPolicy: context.project.style.gradingPolicy,
-      hookText: context.project.style.hookText,
+      currentTemplate: context.project.currentTemplate,
       hasTranscript: context.project.hasTranscript
     },
+    tracks: context.tracks,
     selection: context.selection,
     elements: context.elements.map((element) => ({
-      handle: element.handle, role: element.role, label: element.label,
-      startSec: element.startSec, endSec: element.endSec,
-      selected: element.selected, properties: element.properties
+      handle: element.handle, semantic: element.semantic, label: element.label,
+      startSec: element.startSec, endSec: element.endSec, selected: element.selected,
+      properties: element.properties
     })),
     assets: context.assets.map((asset) => ({
       handle: asset.handle, role: asset.role, filename: asset.filename,
@@ -112,9 +121,7 @@ function userPrompt(message: string, context: ChatContext): string {
       startSec: window.startSec, endSec: window.endSec,
       confidence: window.confidence, text: window.text
     })),
-    analysis: context.analysis,
-    recentTurns: context.recent.messages,
-    lastAffected: context.recent.lastAffectedHandles,
+    recent: context.recent,
     notes: context.notes
   };
   return [
@@ -162,10 +169,9 @@ export async function planWithLlm(input: {
         role: CHAT_PLANNER_ROLE,
         systemPrompt: SYSTEM_PROMPT,
         userPrompt: userPrompt(message, context),
-        // A strict response repeats every parameter key on every command, so
-        // one multi-command plan is far larger than the schema suggests. The
-        // Phase 7 soak hit truncation - which arrives as "not valid JSON" - at
-        // the Phase 6 budget of 1600.
+        // Workstream G's parameter LIST keeps a command to the values it sets,
+        // but a strict response is still verbose; the Phase 7 soak hit
+        // truncation (which arrives as "not valid JSON") at 1600.
         options: { temperature: 0.1,
           maxOutputTokens: Number(process.env.EDIT_MODE_CHAT_MAX_OUTPUT_TOKENS) || 4000 }
       }
@@ -174,7 +180,7 @@ export async function planWithLlm(input: {
   if (!result) return null;
   // Malformed output throws out of validateChatIntent and is handled by the
   // caller, which falls back rather than mutating anything.
-  const intent = validateChatIntent(result.data);
+  const intent = validateChatIntent(result.data, { maxCommands: CHAT_MAX_MODEL_COMMANDS });
   const checked = rejectInventedTimestamps(intent, context);
   logger.log(JSON.stringify({ event: 'edit_mode_chat_plan', provider: result.metadata.provider,
     model: result.metadata.model, commands: checked.commands.length,

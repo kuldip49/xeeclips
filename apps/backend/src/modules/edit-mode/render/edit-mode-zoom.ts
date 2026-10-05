@@ -15,6 +15,7 @@ import type { AnalysisFrame } from '../../editing/edit-analysis';
 import type { CropWindow } from '../../editing/reframe.service';
 import type { Shot } from '../../editing/shot-classifier';
 import type { PlannedZoomMoment, ZoomPolicy } from '../presets/edit-preset-policy';
+import { zoomMomentKey } from '../edit-mode-zoom-events';
 import type { RenderFrameSegment, RenderZoomEvent,
   RenderZoomRejection } from './edit-mode-render.types';
 import type { TimelineMap } from './edit-mode-timeline-map';
@@ -108,6 +109,23 @@ export type ZoomPlanInput = {
   /** Event ids a QA repair suppressed, and reduced scale ceilings, on re-render. */
   suppressed?: string[];
   scaleCeilings?: Record<string, number>;
+  /**
+   * Workstream G: zoom EFFECT elements, already on the exported timeline. They
+   * render whatever the zoom POLICY says - the user placed them - but they go
+   * through exactly the same shot, information and subject-safety checks as a
+   * planned moment. One that claims a planned moment replaces it.
+   */
+  manual?: ManualZoomInput[];
+  minGapSec?: number;
+  maxEvents?: number;
+  /** Speaker/camera changes that must settle before a punch-in starts. */
+  switchTimes?: number[];
+};
+
+export type ManualZoomInput = {
+  elementId: string; startSec: number; endSec: number; scale: number; enabled: boolean;
+  claimsMoment: string | null; triggerText: string; semanticReason?: string;
+  focusX?: number | null; focusY?: number | null; focusTrackId?: string | null;
 };
 
 export type ZoomPlanResult = { events: RenderZoomEvent[]; rejections: RenderZoomRejection[] };
@@ -116,35 +134,74 @@ export type ZoomPlanResult = { events: RenderZoomEvent[]; rejections: RenderZoom
 export const zoomEventId = (startSec: number, triggerText: string) =>
   `z${startSec.toFixed(3)}-${triggerText.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 24).toLowerCase()}`;
 
+/** The nearest named intensity for a free scale, for reporting only. */
+const intensityFor = (scale: number): Exclude<ZoomPolicy, 'OFF'> =>
+  (Object.entries(EDIT_MODE_ZOOM_SCALES) as Array<[Exclude<ZoomPolicy, 'OFF'>, number]>)
+    .reduce((best, entry) => Math.abs(entry[1] - scale) < Math.abs(best[1] - scale)
+      ? entry : best)[0];
+
+type ZoomCandidate = {
+  id: string; startSec: number; holdSec: number; requested: number;
+  intensity: Exclude<ZoomPolicy, 'OFF'>; triggerText: string; reason: string;
+  /** Planned moments respect the classifier's "no zoom on this kind of shot";
+   *  a zoom the user placed by hand overrides that editorial default. */
+  editorialGate: boolean;
+  focusX?: number | null; focusY?: number | null; focusTrackId?: string | null;
+};
+
 export function planEditModeZoom(input: ZoomPlanInput): ZoomPlanResult {
   const events: RenderZoomEvent[] = [];
   const rejections: RenderZoomRejection[] = [];
-  if (input.policy === 'OFF' || !input.moments.length) return { events, rejections };
+  const manual = input.manual ?? [];
+  if ((input.policy === 'OFF' || !input.moments.length) && !manual.length) {
+    return { events, rejections };
+  }
   const suppressed = new Set(input.suppressed ?? []);
   const ceilings = input.scaleCeilings ?? {};
+  const claimed = new Set(manual.map((zoom) => zoom.claimsMoment).filter(Boolean));
 
   // Phase 4 recorded the moments in SOURCE seconds. A moment whose words were
   // trimmed away simply has no exported instant and disappears with the cut.
-  const mapped = input.moments.flatMap((moment) => {
+  const planned = input.policy === 'OFF' ? [] : input.moments
+    .filter((moment) => !claimed.has(zoomMomentKey(moment)));
+  const candidates: ZoomCandidate[] = planned.flatMap((moment) => {
     const starts = input.map.toTimeline(moment.startSec);
     if (!starts.length) {
       rejections.push({ triggerText: moment.triggerText, startSec: moment.startSec,
         reason: 'TRIGGER_REMOVED_FROM_TIMELINE' });
       return [];
     }
-    return starts.map((startSec) => ({ moment, startSec,
-      endSec: startSec + Math.max(0.6, moment.endSec - moment.startSec) }));
-  }).sort((left, right) => left.startSec - right.startSec);
+    return starts.map((startSec) => ({
+      id: zoomEventId(startSec, moment.triggerText), startSec,
+      holdSec: Math.max(0.6, moment.endSec - moment.startSec),
+      requested: EDIT_MODE_ZOOM_SCALES[moment.intensity], intensity: moment.intensity,
+      triggerText: moment.triggerText, reason: moment.reason, editorialGate: true }));
+  });
+  // A hand-placed zoom's element length is the WHOLE move, so its hold is what
+  // remains after the ramps.
+  for (const zoom of manual) {
+    if (!zoom.enabled) continue;
+    candidates.push({ id: `ze-${zoom.elementId}`, startSec: zoom.startSec,
+      holdSec: Math.max(EDIT_MODE_ZOOM.minHoldSec, zoom.endSec - zoom.startSec -
+        EDIT_MODE_ZOOM.rampInSec - EDIT_MODE_ZOOM.rampOutSec),
+      requested: zoom.scale, intensity: intensityFor(zoom.scale),
+      triggerText: zoom.triggerText, reason: zoom.semanticReason || 'EDITED_ZOOM',
+      editorialGate: false, focusX: zoom.focusX, focusY: zoom.focusY,
+      focusTrackId: zoom.focusTrackId });
+  }
+  candidates.sort((left, right) => left.startSec - right.startSec);
 
-  for (const candidate of mapped) {
-    const { moment } = candidate;
-    const id = zoomEventId(candidate.startSec, moment.triggerText);
-    const reject = (reason: string) => rejections.push({ triggerText: moment.triggerText,
+  for (const candidate of candidates) {
+    const id = candidate.id;
+    const reject = (reason: string) => rejections.push({ triggerText: candidate.triggerText,
       startSec: round(candidate.startSec), reason });
     if (suppressed.has(id)) { reject('QA_REPAIR_SUPPRESSED'); continue; }
-    if (events.length >= EDIT_MODE_ZOOM.maxEvents) { reject('ZOOM_BUDGET_REACHED'); continue; }
+    if (events.length >= (input.maxEvents ?? EDIT_MODE_ZOOM.maxEvents)) {
+      reject('ZOOM_BUDGET_REACHED'); continue;
+    }
     const previous = events[events.length - 1];
-    if (previous && candidate.startSec - previous.endSec < EDIT_MODE_ZOOM.minGapSec) {
+    if (previous && candidate.startSec - previous.endSec <
+      (input.minGapSec ?? EDIT_MODE_ZOOM.minGapSec)) {
       reject('TOO_CLOSE_TO_PREVIOUS_ZOOM'); continue;
     }
 
@@ -154,7 +211,9 @@ export function planEditModeZoom(input: ZoomPlanInput): ZoomPlanResult {
     const segment = input.frameSegments[shotIndex];
     if (!shot || !segment) { reject('NO_SHOT_AT_TRIGGER'); continue; }
     if (segment.layout !== 'FILL') { reject('SHOT_IS_FITTED_NOT_CROPPED'); continue; }
-    if (!shot.zoomAllowed) { reject(`SHOT_DOES_NOT_ALLOW_ZOOM_${shot.shotClass}`); continue; }
+    if (candidate.editorialGate && !shot.zoomAllowed) {
+      reject(`SHOT_DOES_NOT_ALLOW_ZOOM_${shot.shotClass}`); continue;
+    }
     if (shot.informationMode) { reject('INFORMATION_SHOT'); continue; }
 
     // The whole move - rise, hold and return - has to live inside this shot,
@@ -162,16 +221,20 @@ export function planEditModeZoom(input: ZoomPlanInput): ZoomPlanResult {
     const startSec = Math.max(shot.start + EDIT_MODE_ZOOM.shotMarginSec, candidate.startSec);
     const rampIn = EDIT_MODE_ZOOM.rampInSec;
     const rampOut = EDIT_MODE_ZOOM.rampOutSec;
-    const hold = Math.max(EDIT_MODE_ZOOM.minHoldSec, candidate.endSec - candidate.startSec);
+    const hold = Math.max(EDIT_MODE_ZOOM.minHoldSec, candidate.holdSec);
     const endSec = startSec + rampIn + hold + rampOut;
     const limit = Math.min(shot.end - EDIT_MODE_ZOOM.shotMarginSec, input.durationSec);
     if (endSec > limit) { reject('SHOT_TOO_SHORT_FOR_A_SETTLED_ZOOM'); continue; }
+    if ((input.switchTimes ?? []).some((time) =>
+      time >= startSec - .5 && time <= endSec + .5)) {
+      reject('SPEAKER_SWITCH_NEEDS_CLEAR_FRAME'); continue;
+    }
 
     const focal = input.focalAt(startSec + rampIn + hold / 2);
-    const focusX = clamp(focal.x, 0.25, 0.75);
-    const focusY = clamp(focal.y, 0.25, 0.75);
-    const ceiling = ceilings[id] ?? EDIT_MODE_ZOOM_SCALES[moment.intensity];
-    let scale = Math.min(EDIT_MODE_ZOOM_SCALES[moment.intensity], ceiling);
+    const focusX = clamp(candidate.focusX ?? focal.x, 0.25, 0.75);
+    const focusY = clamp(candidate.focusY ?? focal.y, 0.25, 0.75);
+    const ceiling = ceilings[id] ?? candidate.requested;
+    let scale = Math.min(candidate.requested, ceiling);
     let failure = '';
     while (scale >= EDIT_MODE_ZOOM.minScale) {
       failure = safetyFailure({ ...input, startSec, peakStartSec: startSec + rampIn,
@@ -180,13 +243,25 @@ export function planEditModeZoom(input: ZoomPlanInput): ZoomPlanResult {
       scale = Number((scale - EDIT_MODE_ZOOM.scaleStep).toFixed(4));
     }
     if (scale < EDIT_MODE_ZOOM.minScale) { reject(failure || 'UNSAFE_AT_EVERY_SCALE'); continue; }
-    const requested = EDIT_MODE_ZOOM_SCALES[moment.intensity];
+    const requested = candidate.requested;
     const frame = (t: number) => Math.round(t * input.fps);
+    const focusFrame = nearestFrame(input.frames, startSec + rampIn + hold / 2);
+    const baselineAtFocus = input.cropAt(startSec + rampIn + hold / 2);
+    const focusTrack = focusFrame?.faces.filter((face) => face.trackId)
+      .sort((left, right) => {
+        const position = (face: typeof left) => ({
+          x: (face.x + face.w / 2 - baselineAtFocus.x) / baselineAtFocus.w,
+          y: (face.y + face.h / 2 - baselineAtFocus.y) / baselineAtFocus.h });
+        const a = position(left); const b = position(right);
+        return Math.hypot(a.x - focusX, a.y - focusY) -
+          Math.hypot(b.x - focusX, b.y - focusY);
+      })[0];
     events.push({
       id, startSec: round(startSec), peakStartSec: round(startSec + rampIn),
       peakEndSec: round(startSec + rampIn + hold), endSec: round(endSec),
       peakScale: scale, focusX: round(focusX), focusY: round(focusY),
-      intensity: moment.intensity, triggerText: moment.triggerText, reason: moment.reason,
+      intensity: candidate.intensity, triggerText: candidate.triggerText, reason: candidate.reason,
+      focusTrackId: candidate.focusTrackId ?? focusTrack?.trackId ?? null,
       startFrame: frame(startSec), peakStartFrame: frame(startSec + rampIn),
       peakEndFrame: frame(startSec + rampIn + hold), endFrame: frame(endSec),
       reducedFromScale: scale < requested - 1e-6 ? requested : null

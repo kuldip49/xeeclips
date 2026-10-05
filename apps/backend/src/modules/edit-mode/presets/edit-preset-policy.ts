@@ -28,7 +28,9 @@ export type HookPolicy = typeof HOOK_POLICIES[number];
 export const ZOOM_POLICIES = ['OFF', 'SUBTLE', 'MODERATE', 'STRONG'] as const;
 export type ZoomPolicy = typeof ZOOM_POLICIES[number];
 
-export const REFRAME_POLICIES = ['SOURCE', 'AUTO', 'FACE_FOCUSED', 'INFORMATION_PRESERVING'] as const;
+/** CENTERED is a static centre crop that always fills the canvas (no tracking). */
+export const REFRAME_POLICIES = ['SOURCE', 'AUTO', 'FACE_FOCUSED', 'INFORMATION_PRESERVING',
+  'CENTERED'] as const;
 export type ReframePolicy = typeof REFRAME_POLICIES[number];
 
 /** Presets never fetch music. They keep what the user added, or offer to place a

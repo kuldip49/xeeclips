@@ -1,7 +1,9 @@
 import logging
 import os
 import asyncio
+import gc
 import math
+import wave
 from threading import Lock
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -21,6 +23,54 @@ from app.edit_analysis import analyze_edit_window
 
 logger = logging.getLogger('uvicorn.error')
 visual_analysis_lock = Lock()  # One CPU-heavy video at a time per service process.
+# One transcription at a time: a second long source in parallel doubles the peak memory.
+transcription_lock = Lock()
+# Long audio is transcribed in windows of about this length, cut at the quietest moment near
+# each boundary, so memory stays flat however long the source is (a 2-hour WAV decoded whole,
+# plus VAD and word-timestamp copies, exhausted the container).
+TRANSCRIPTION_CHUNK_SEC = max(60, int(os.getenv('WHISPER_CHUNK_SEC', '600')))
+CUT_SEARCH_SEC = 8
+
+
+def _read_pcm(wav: wave.Wave_read, start: int, end: int):
+    import numpy as np
+    wav.setpos(start)
+    frames = wav.readframes(max(0, end - start))
+    return np.frombuffer(frames, dtype='<i2').astype(np.float32) / 32768.0
+
+
+def _quietest_cut(wav: wave.Wave_read, target: int, rate: int, total: int) -> int:
+    """The quietest 100 ms frame within +/- CUT_SEARCH_SEC of target, so no word is split."""
+    import numpy as np
+    lo = max(0, target - CUT_SEARCH_SEC * rate)
+    hi = min(total, target + CUT_SEARCH_SEC * rate)
+    window = _read_pcm(wav, lo, hi)
+    step = rate // 10
+    if window.size < step * 2:
+        return target
+    frames = window[: window.size - window.size % step].reshape(-1, step)
+    energy = np.sqrt(np.mean(frames * frames, axis=1))
+    return lo + int(np.argmin(energy)) * step + step // 2
+
+
+def _chunk_bounds(path: str):
+    """(start_sample, end_sample) windows, or None when the WAV is not 16-bit mono PCM."""
+    try:
+        with wave.open(path, 'rb') as wav:
+            if wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+                return None
+            rate, total = wav.getframerate(), wav.getnframes()
+            size = TRANSCRIPTION_CHUNK_SEC * rate
+            bounds, start = [], 0
+            while start < total:
+                # The last window may run a little long rather than leave a tiny tail.
+                end = total if total - start <= int(size * 1.25) else _quietest_cut(wav, start + size, rate, total)
+                end = max(end, start + rate)  # always progress
+                bounds.append((start, min(end, total)))
+                start = min(end, total)
+            return rate, bounds
+    except (wave.Error, EOFError):
+        return None
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
@@ -204,6 +254,11 @@ def health(response: Response) -> dict[str, str]:
 
 @app.post('/transcriptions', response_model=TranscriptionResponse)
 def transcribe(request: TranscriptionRequest) -> TranscriptionResponse:
+    with transcription_lock:
+        return _transcribe(request)
+
+
+def _transcribe(request: TranscriptionRequest) -> TranscriptionResponse:
     whisper_model = get_whisper_model()
     started_at = perf_counter()
     logger.info('Transcription request received')
@@ -222,26 +277,52 @@ def transcribe(request: TranscriptionRequest) -> TranscriptionResponse:
             logger.info('Audio file size: %d bytes', audio_path.stat().st_size)
 
             logger.info('English transcription/translation started')
-            raw_segments, info = whisper_model.transcribe(
-                str(audio_path),
-                beam_size=5,
-                vad_filter=True,
-                vad_parameters={
-                    'min_silence_duration_ms': int(
-                        os.getenv('WHISPER_VAD_MIN_SILENCE_MS', '500')
-                    ),
-                },
-                word_timestamps=True,
-                task='translate',
-            )
+            vad_parameters = {
+                'min_silence_duration_ms': int(os.getenv('WHISPER_VAD_MIN_SILENCE_MS', '500')),
+            }
+            chunking = _chunk_bounds(str(audio_path))
+            language = None
+            language_probability = None
+            total_duration = None
+            raw_items = []  # (offset, segment) across all windows, in order
+            if chunking is None:
+                raw_segments, info = whisper_model.transcribe(
+                    str(audio_path), beam_size=5, vad_filter=True, vad_parameters=vad_parameters,
+                    word_timestamps=True, task='translate')
+                raw_items = [(0.0, segment) for segment in raw_segments]
+                language, language_probability, total_duration = info.language, info.language_probability, info.duration
+            else:
+                rate, bounds = chunking
+                total_duration = bounds[-1][1] / rate if bounds else 0.0
+                logger.info('Transcribing %d window(s) of ~%ds', len(bounds), TRANSCRIPTION_CHUNK_SEC)
+                prompt = None
+                with wave.open(str(audio_path), 'rb') as wav:
+                    for index, (start, end) in enumerate(bounds):
+                        audio = _read_pcm(wav, start, end)
+                        raw_segments, info = whisper_model.transcribe(
+                            audio, beam_size=5, vad_filter=True, vad_parameters=vad_parameters,
+                            word_timestamps=True, task='translate',
+                            # The first window decides the language; later ones keep it, and the
+                            # previous window's tail keeps wording consistent across the cut.
+                            language=language, initial_prompt=prompt)
+                        window_items = [(start / rate, segment) for segment in raw_segments]
+                        if language is None:
+                            language, language_probability = info.language, info.language_probability
+                        tail = ' '.join(segment.text.strip() for _, segment in window_items[-3:]).strip()
+                        prompt = tail[-200:] or None
+                        raw_items.extend(window_items)
+                        del audio
+                        gc.collect()
+                        logger.info('Window %d/%d done (%.0f-%.0fs, %d segments)', index + 1, len(bounds),
+                                    start / rate, end / rate, len(window_items))
             segments = []
-            for position, segment in enumerate(raw_segments):
+            for position, (offset, segment) in enumerate(raw_items):
                 if not segment.text.strip():
                     continue
                 word_items = [
                     TranscriptWord(
-                        start=word.start,
-                        end=word.end,
+                        start=word.start + offset,
+                        end=word.end + offset,
                         text=word.word.strip(),
                         confidence=getattr(word, 'probability', None),
                     )
@@ -259,23 +340,23 @@ def transcribe(request: TranscriptionRequest) -> TranscriptionResponse:
                     segment_confidence = max(0.0, min(1.0, math.exp(segment.avg_logprob)))
                 segments.append(TranscriptSegment(
                     position=position,
-                    start=segment.start,
-                    end=segment.end,
+                    start=segment.start + offset,
+                    end=segment.end + offset,
                     text=segment.text.strip(),
                     words=word_items,
                     confidence=segment_confidence,
                     speaker=None,
                 ))
             logger.info('English transcription/translation completed')
-            logger.info('Detected source language: %s', info.language)
+            logger.info('Detected source language: %s', language)
             logger.info('Number of segments: %d', len(segments))
-            logger.info('Total duration: %s seconds', info.duration)
+            logger.info('Total duration: %s seconds', total_duration)
 
             return TranscriptionResponse(
                 text=' '.join(segment.text for segment in segments),
-                language=info.language,
-                language_probability=info.language_probability,
-                duration=info.duration,
+                language=language,
+                language_probability=language_probability,
+                duration=total_duration,
                 segments=segments,
             )
     except Exception as error:

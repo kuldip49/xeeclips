@@ -43,12 +43,17 @@ export function isVideoTooLong(durationSeconds: number | null | undefined) {
 export function maxClipCountForDuration(durationSeconds: number | null | undefined) {
   const duration = typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)
     ? Math.max(0, durationSeconds) : 0;
-  if (duration <= 600) return 6;
+  // 1..8 for every accepted source, up to 20 for sources up to an hour and up to 30 for
+  // sources up to two hours. Selection then delivers exactly the requested count (see the fill
+  // tiers below), so the requested value is never silently clamped.
   if (duration < 900) return 8;
-  if (duration <= 3600) return 12;
-  if (duration <= MAX_SOURCE_VIDEO_DURATION_SECONDS) return 20;
+  if (duration <= 3600) return 20;
+  if (duration <= MAX_SOURCE_VIDEO_DURATION_SECONDS) return 30;
   return 0;
 }
+
+/** The largest count any accepted source allows (a two-hour source). */
+export const MAX_REQUESTABLE_CLIPS = 30;
 
 /** Convenience starting value for the counter; never presented as a recommendation. */
 export function defaultClipCountForMax(maxClipCount: number) {
@@ -83,8 +88,10 @@ export type ClipProcessingType = ReturnType<typeof processingTypeForOutputStyle>
 
 /** Distinguishes rendered files of one source range: output style and target platform. */
 export const clipVariantKey = (processingType: ClipProcessingType,
-  targetPlatform: TargetPlatform | null | undefined) =>
-  `${processingType}:${targetPlatform ?? 'DEFAULT'}`;
+  targetPlatform: TargetPlatform | null | undefined, templateId?: string | null,
+  requestKey?: string | null) =>
+  `${processingType}:${targetPlatform ?? 'DEFAULT'}${templateId ? `:${templateId}` : ''}${
+    requestKey ? `:REQUEST:${requestKey}` : ''}`;
 
 export const NORMAL_CLIP_WIDTH = 1080;
 export const NORMAL_CLIP_HEIGHT = 1920;
@@ -144,7 +151,7 @@ export function evaluateCandidateUsability(candidate: SelectableCandidate,
   return { usable: true };
 }
 
-const overlapRatio = (a: SelectableCandidate, b: SelectableCandidate) => {
+export const overlapRatio = (a: SelectableCandidate, b: SelectableCandidate) => {
   const intersection = Math.max(0, Math.min(a.endTime, b.endTime) - Math.max(a.startTime, b.startTime));
   return intersection / Math.max(0.001, Math.min(a.endTime - a.startTime, b.endTime - b.startTime));
 };
@@ -156,6 +163,48 @@ export function isDuplicateOfAny(candidate: SelectableCandidate, selected: Selec
   return selected.some((other) => overlapRatio(candidate, other) > SELECTION_MAX_OVERLAP ||
     semanticSimilarity.similarity(candidate.transcriptText, other.transcriptText) >
       SELECTION_MAX_TEXT_SIMILARITY);
+}
+
+/**
+ * Fill tiers: used only once every distinct, usable moment has been tried, so a request still
+ * delivers exactly the number of clips asked for. Each tier tolerates more overlap with clips
+ * already chosen; none allows a repeat (near-identical range or transcript).
+ *   1 - moments the analysis scored as weaker, partly overlapping (<= 60%)
+ *   2 - more overlap (<= 80%)
+ *   3 - sentence-aligned windows slid across the transcript (<= 92%), for short sources
+ */
+export const FILL_TIER_LIMITS: Record<1 | 2 | 3, { overlap: number; text: number }> = {
+  1: { overlap: 0.6, text: 0.9 }, 2: { overlap: 0.8, text: 0.95 }, 3: { overlap: 0.92, text: 0.985 }
+};
+export type FillTier = 1 | 2 | 3;
+
+export function isNearDuplicateOfAny(candidate: SelectableCandidate, selected: SelectableCandidate[],
+  tier: FillTier) {
+  const limit = FILL_TIER_LIMITS[tier];
+  return selected.some((other) =>
+    (Math.abs(candidate.startTime - other.startTime) < 1 && Math.abs(candidate.endTime - other.endTime) < 1) ||
+    overlapRatio(candidate, other) > limit.overlap ||
+    semanticSimilarity.similarity(candidate.transcriptText, other.transcriptText) > limit.text);
+}
+
+/**
+ * Usability for fill candidates: the hard limits stay (valid range, inside the source, 15-120 s,
+ * real speech), but scoring-based rejections and the fragmentation/filler heuristics do not.
+ */
+export function evaluateFillUsability(candidate: SelectableCandidate,
+  videoDurationSeconds?: number | null): UsabilityVerdict {
+  const { startTime, endTime } = candidate;
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime) || startTime < 0 || endTime <= startTime)
+    return { usable: false, reason: 'INVALID_TIMESTAMP_RANGE' };
+  if (typeof videoDurationSeconds === 'number' && Number.isFinite(videoDurationSeconds) &&
+    endTime > videoDurationSeconds + 0.5)
+    return { usable: false, reason: 'OUTSIDE_SOURCE_DURATION' };
+  const duration = endTime - startTime;
+  if (duration < FINAL_CLIP_MIN_SECONDS - 0.001) return { usable: false, reason: 'TOO_SHORT' };
+  if (duration > FINAL_CLIP_MAX_SECONDS + 0.001) return { usable: false, reason: 'TOO_LONG' };
+  const words = tokens(candidate.transcriptText ?? '');
+  if (words.length < 8 || words.length / duration < 0.3) return { usable: false, reason: 'INSUFFICIENT_SPEECH' };
+  return { usable: true };
 }
 
 /** Strongest first with deterministic tie-breaks; scores are used exactly as stored. */

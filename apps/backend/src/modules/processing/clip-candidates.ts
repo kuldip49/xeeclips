@@ -495,8 +495,10 @@ export function aiShortlistLimit(durationSeconds: number) {
   const minutes = durationSeconds / 60;
   const base = minutes <= 10 ? 12 : minutes <= 20 ? 15 : minutes <= 30 ? 20 :
     minutes <= 60 ? 25 : 30;
-  // Keep the analyzed pool comfortably larger than the largest clip count a user may request.
-  return Math.max(base, Math.ceil(maxClipCountForDuration(durationSeconds) * 1.75));
+  // Three candidates per request slot absorbs overlap removal, hard quality
+  // gates and isolated render failures. Bound it so long videos do not create
+  // unbounded AI work.
+  return Math.min(40, Math.max(24, base, Math.ceil(maxClipCountForDuration(durationSeconds) * 3)));
 }
 
 export function shortlistForUnderstanding(candidates: ScoredClipCandidate[], durationSeconds: number) {
@@ -507,7 +509,8 @@ export function shortlistForUnderstanding(candidates: ScoredClipCandidate[], dur
 export function shortlistForCreative(candidates: ScoredClipCandidate[], durationSeconds: number) {
   const baseLimit = durationSeconds <= 600 ? 6 : durationSeconds <= 1200 ? 10 :
     durationSeconds <= 1800 ? 12 : durationSeconds <= 3600 ? 15 : 18;
-  const limit = Math.max(baseLimit, maxClipCountForDuration(durationSeconds));
+  const limit = Math.min(40, Math.max(24, baseLimit,
+    Math.ceil(maxClipCountForDuration(durationSeconds) * 3)));
   // AI confidence changes priority modestly; deterministic content quality remains the main signal.
   const ranked = candidates.map(candidate => ({ ...candidate,
     overallScore: candidate.overallScore * .9 + (candidate.confidence ?? 50) * .1 }));

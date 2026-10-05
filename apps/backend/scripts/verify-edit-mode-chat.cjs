@@ -26,6 +26,7 @@ const { EditChatService } = require('../dist/modules/edit-mode/chat/edit-chat.se
 const {
   EditChatProposalStore
 } = require('../dist/modules/edit-mode/chat/edit-chat-proposal-store');
+const { EditTemplateService } = require('../dist/modules/edit-mode/edit-template.service');
 const {
   EditModeRenderService
 } = require('../dist/modules/edit-mode/render/edit-mode-render.service');
@@ -109,7 +110,7 @@ async function main() {
     // deterministic planner carries the whole flow and no LLM call happens.
     isAnyConfigured: () => false,
     generate: async () => { throw new Error('the chat flow must not call a provider here'); }
-  });
+  }, new EditTemplateService(prisma, editMode));
   const render = new EditModeRenderService(prisma, storage);
   const outputDir = arg('out', process.env.QA_OUTPUT_DIR || join(tmpdir(), 'edit-mode-chat-qa'));
   const workspace = mkdtempSync(join(tmpdir(), 'verify-edit-chat-'));

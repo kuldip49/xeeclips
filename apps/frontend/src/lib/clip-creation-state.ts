@@ -1,4 +1,5 @@
 import type { ClipAnalysis, OutputStyle } from '@/lib/api';
+import { isAutomaticLook } from '@/lib/automatic-looks';
 
 /**
  * Selection rules for the post-analysis clip creation panel. Kept free of React so the exact
@@ -6,7 +7,7 @@ import type { ClipAnalysis, OutputStyle } from '@/lib/api';
  */
 
 /** Chosen for the user when analysis finishes so the panel is never in an unusable state. */
-export const DEFAULT_OUTPUT_STYLE: OutputStyle = 'NORMAL';
+export const DEFAULT_OUTPUT_STYLE: OutputStyle = 'AI_EDITED';
 
 /**
  * Output style is the user's post-analysis choice. A previous request wins so a refresh keeps what
@@ -42,4 +43,32 @@ export function canCreateClips(state: {
   if (!state.analysisReady || !state.outputStyle) return false;
   if (state.submitting || state.rendering) return false;
   return state.requestedClipCount >= 1 && state.requestedClipCount <= state.maxClipCount;
+}
+
+/**
+ * The single "look" choice: an OutputStyle (automatic edit / clean cuts) or a full template id.
+ * The persisted SELECTION wins (a styled request renders NORMAL, so outputStyle alone would turn
+ * "Automatic edit" into "Clean cuts"), then an older request's template, then its output style.
+ */
+export function restoreLook(previous: ClipAnalysis['clipRequest']): string {
+  const saved = previous?.generation?.look || previous?.generation?.templateId;
+  if (isAutomaticLook(saved)) return saved;
+  // Compatibility for requests created before Automatic 1 had a canonical id.
+  return 'AUTOMATIC_1';
+}
+
+export const isOutputStyle = (look: string | null): look is OutputStyle =>
+  look === 'NORMAL' || look === 'AI_EDITED';
+
+/**
+ * What the backend renders. Any explicit style (template, component, reference, or brief
+ * style words the resolver turned into choices) is applied canonically in the editor on
+ * top of a clean cut, so the delivered clip IS its editable project. Otherwise the plain
+ * automatic edit or clean cuts the user picked.
+ */
+export function requestOutputStyle(look: string | null, _styled: boolean | null): OutputStyle | null {
+  if (!look) return null;
+  // Automatic 2 is a style layer on the already-working Automatic 1 output,
+  // never a clean-cut replacement pipeline.
+  return look === 'NORMAL' ? 'NORMAL' : 'AI_EDITED';
 }

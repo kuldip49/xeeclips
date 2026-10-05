@@ -1,3 +1,4 @@
+import { isTransientAiServiceFailure, postAiServiceJson, waitForAiServiceHealthy, type AiServiceResponse } from './ai-service-http';
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Job, Worker } from 'bullmq';
 import { Prisma, ProcessingStage, ProcessingStageStatus } from '@prisma/client';
@@ -423,29 +424,44 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async requestTranscription(bucket: string, objectKey: string) {
-    this.logger.log('Sending POST /transcriptions');
-    let response: Response;
-    try {
-      response = await fetch(`${this.aiServiceUrl}/transcriptions`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ bucket, object_key: objectKey }),
-        signal: AbortSignal.timeout(this.aiServiceTimeoutMs)
-      });
-      this.logger.log('POST completed');
-    } catch (error) {
-      this.logger.error('POST failed');
-      throw error;
-    }
+    // A dropped connection or 5xx means the AI service crashed or restarted mid-request; it
+    // comes back on its own, so wait for it and try again rather than failing the video.
+    const attempts = Math.max(1, Math.min(5, Number(process.env.AI_TRANSCRIPTION_ATTEMPTS) || 3));
+    for (let attempt = 1; ; attempt++) {
+      this.logger.log(`Sending POST /transcriptions (attempt ${attempt}/${attempts})`);
+      let response: AiServiceResponse;
+      try {
+        // Not fetch: its hidden 300 s headers timeout failed every source over ~50 minutes.
+        response = await postAiServiceJson(`${this.aiServiceUrl}/transcriptions`,
+          { bucket, object_key: objectKey }, this.aiServiceTimeoutMs);
+        this.logger.log('POST completed');
+      } catch (error) {
+        this.logger.error(`POST failed: ${error instanceof Error ? error.message : String(error)}`);
+        if (attempt >= attempts || !isTransientAiServiceFailure(error)) throw error;
+        await this.awaitAiServiceRecovery(attempt);
+        continue;
+      }
 
-    if (!response.ok) {
-      const detail = await response.text();
-      throw Object.assign(new Error(
-        `AI transcription request failed (${response.status}): ${detail.slice(0, 1000)}`
-      ), { status: response.status });
-    }
+      if (!response.ok) {
+        const detail = await response.text();
+        if (attempt < attempts && isTransientAiServiceFailure(null, response.status)) {
+          this.logger.warn(`Transcription returned ${response.status}; retrying: ${detail.slice(0, 300)}`);
+          await this.awaitAiServiceRecovery(attempt);
+          continue;
+        }
+        throw Object.assign(new Error(
+          `AI transcription request failed (${response.status}): ${detail.slice(0, 1000)}`
+        ), { status: response.status });
+      }
 
-    return parseTranscription(await response.json());
+      return parseTranscription(await response.json());
+    }
+  }
+
+  private async awaitAiServiceRecovery(attempt: number) {
+    await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
+    const healthy = await waitForAiServiceHealthy(this.aiServiceUrl, 5 * 60_000);
+    this.logger.warn(JSON.stringify({ event: 'ai_service_recovery_wait', attempt, healthy }));
   }
 
   private async requestVisualAnalysis(
@@ -456,24 +472,20 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     candidates: Array<{ startTime: number; endTime: number }>
   ) {
     this.logger.log('Sending POST /visual-analysis');
-    const response = await fetch(`${this.aiServiceUrl}/visual-analysis`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      signal: AbortSignal.timeout(this.aiServiceTimeoutMs),
-      body: JSON.stringify({
-        bucket,
-        object_key: objectKey,
-        video_id: videoId,
-        candidates: candidates.map((candidate, position) => ({
-          position, start: candidate.startTime, end: candidate.endTime
-        })),
-        chunks: chunks.map((chunk) => ({
-          position: chunk.position,
-          start: chunk.startTime,
-          end: chunk.endTime
-        }))
-      })
-    });
+    // Same long-call helper as transcription (fetch's hidden 300 s headers timeout).
+    const response = await postAiServiceJson(`${this.aiServiceUrl}/visual-analysis`, {
+      bucket,
+      object_key: objectKey,
+      video_id: videoId,
+      candidates: candidates.map((candidate, position) => ({
+        position, start: candidate.startTime, end: candidate.endTime
+      })),
+      chunks: chunks.map((chunk) => ({
+        position: chunk.position,
+        start: chunk.startTime,
+        end: chunk.endTime
+      }))
+    }, this.aiServiceTimeoutMs);
 
     if (!response.ok) {
       const detail = await response.text();

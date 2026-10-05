@@ -43,6 +43,33 @@ async function splitSuite() {
   return { state, split: redone };
 }
 
+async function speedAwareSplitSuite() {
+  const state = await seedAnalyzedProject(createHarness());
+  const original = state.analyzed.elements[0];
+  const sped = await state.service.phase3Command(state.project.id, 'set-speed', {
+    revision: state.analyzed.revision, elementId: original.id, speed: 1.25
+  });
+  const withText = await state.service.phase3Command(state.project.id, 'add-text', {
+    revision: sped.revision, content: 'Retimed overlay'
+  });
+  const trimmed = await state.service.trimElement(state.project.id, {
+    revision: withText.revision, elementId: original.id, trimStart: 0, trimEnd: 10
+  });
+  assert.equal(videos(trimmed)[0].duration, 8,
+    'trim maps a source range to edited duration at the segment playback speed');
+  assert.equal(trimmed.elements.find((item) => item.type === 'TEXT').duration, 8,
+    'trim keeps overlays inside the shortened canonical timeline');
+  const split = await state.service.splitElement(state.project.id, {
+    revision: trimmed.revision, elementId: original.id, playheadSec: 5
+  });
+  assert.deepEqual(videos(split).map((item) => [item.startTime, item.duration,
+    item.trimStart, item.trimEnd]), [[0, 5, 0, 6.25], [5, 3, 6.25, 10]],
+  'split maps edited time back to source time at the segment playback speed');
+  assert.equal(videos(split)[0].properties.speed, 1.25);
+  assert.equal(videos(split)[1].properties.speed, 1.25);
+  assertNormalized(split);
+}
+
 async function trimSuite() {
   const state = await seedAnalyzedProject(createHarness());
   const original = state.analyzed.elements[0];
@@ -138,6 +165,7 @@ function frontendSuite() {
 
 async function main() {
   await splitSuite();
+  await speedAwareSplitSuite();
   await trimSuite();
   await deleteAndMoveSuite();
   frontendSuite();

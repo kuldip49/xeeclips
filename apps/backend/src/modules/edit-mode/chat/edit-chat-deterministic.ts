@@ -14,6 +14,14 @@
 // absolute values - a "20% smaller" request becomes the exact width the editor
 // will store. It still produces the same ChatIntent the LLM path produces, so
 // both go through identical validation, resolution and proposal machinery.
+//
+// Workstream G: everyday object edits ("the music is too loud", "move my logo
+// down", "make the hook shorter") are understood first by edit-chat-intents.ts.
+// This planner keeps the Phase 6 timeline shapes - cuts, splits, ranges, adding
+// uploaded files, aspect ratio and framing policy - and two dead ends were
+// removed from it: "remove the hook" used to clear `settings.hookText` (which
+// nothing renders) and "turn subtitles off" used to set a policy that does not
+// hide caption elements. Both now go to the elements that are on screen.
 
 import type { ChatContext, ChatElementView } from './edit-chat-context';
 import {
@@ -53,6 +61,15 @@ const clamp = (value: number, low: number, high: number) =>
 /** A selected second, held inside the timeline that actually exists. */
 const clampToTimeline = (value: number, duration: number) =>
   Number(Math.min(duration, Math.max(0, value)).toFixed(3));
+
+/** "undo that" / "redo that", or null. Checked before anything else. */
+export function historyTravel(message: string): ChatIntent | null {
+  const text = message.toLowerCase().trim();
+  const match =
+    /^(?:can you\s+|could you\s+|please\s+|now\s+|just\s+|ok(?:ay)?,?\s+)*(undo|redo)\b(?:\s+(?:that|this|it|again|my\s+last\s+(?:change|edit|action)|the\s+last\s+(?:change|edit|action)))?\s*(?:please)?\s*[.!]?$/u
+      .exec(text);
+  return match ? travel(match[1] === 'redo' ? 'REDO' : 'UNDO') : null;
+}
 
 /** History travel, which is not an edit and produces no commands. */
 const travel = (direction: 'UNDO' | 'REDO'): ChatIntent => ({
@@ -154,7 +171,10 @@ const handleTarget = (element: ChatElementView): ChatTarget =>
  */
 function refitOverlays(context: ChatContext, newDurationSec: number): ChatCommand[] {
   return context.elements.flatMap((element): ChatCommand[] => {
-    if (element.role === 'VIDEO') return [];
+    // Preset zoom claims are virtual context, not canonical timeline overlays.
+    // They are materialised only by an explicit zoom edit and must never be
+    // refitted or removed as a side effect of a range cut.
+    if (element.role === 'VIDEO' || element.virtual) return [];
     if (element.endSec <= newDurationSec + 1e-6) return [];
     const room = Number((newDurationSec - element.startSec).toFixed(3));
     if (room < MIN_SEGMENT_SEC) {
@@ -301,6 +321,30 @@ export function planDeterministicChat(message: string, context: ChatContext): Ch
       .exec(text);
   if (travelMatch) return travel(travelMatch[1] === 'redo' ? 'REDO' : 'UNDO');
 
+  // A range explicitly selected on the timeline outranks any stale element or
+  // preset target carried by the conversation. Handle it before project-style,
+  // zoom and audio branches so "remove this part" cannot be stolen by the
+  // previously active object.
+  const selectedRange = context.selection.selectedTimeRange;
+  if (selectedRange && /\b(remove|cut|delete|drop|get rid of|take out)\b/u.test(text) &&
+    /\b(this|that|it|here|selection|selected|section|part|bit|range)\b/u.test(text)) {
+    const startSec = clampToTimeline(selectedRange.startSec, duration);
+    const endSec = clampToTimeline(selectedRange.endSec, duration);
+    if (endSec - startSec < MIN_SELECTED_RANGE_SEC) {
+      return clarify('That selection is too short to remove. Drag a longer range on the ' +
+        'timeline and ask me again.');
+    }
+    const cut = cutRangeCommands(context, startSec, endSec);
+    if ('question' in cut) return clarify(cut.question);
+    return intent({
+      summary: `Remove the selected ${startSec.toFixed(1)}s–${endSec.toFixed(1)}s.`,
+      commands: cut.commands,
+      grounding: [ground('SELECTION', CERTAIN,
+        `The range selected on the timeline: ${startSec.toFixed(1)}s–${endSec.toFixed(1)}s.`,
+        { startSec, endSec })]
+    });
+  }
+
   // --- Project style -------------------------------------------------------
 
   const aspect = /\b(9\s*[:x]\s*16|16\s*[:x]\s*9|1\s*[:x]\s*1|vertical|portrait|horizontal|landscape|square)\b/u.exec(text);
@@ -313,21 +357,6 @@ export function planDeterministicChat(message: string, context: ChatContext): Ch
       commands: [{ kind: 'SETTINGS', action: 'SET_ASPECT_RATIO',
         parameters: { aspectRatio }, reason: 'The request names an output shape.' }],
       grounding: [ground('CONTEXT', CERTAIN, `Requested aspect ratio ${aspectRatio}.`)]
-    });
-  }
-
-  if (/\b(subtitles?|captions?)\b/u.test(text) &&
-    /\b(on|off|enable|disable|turn|add|remove|show|hide)\b/u.test(text)) {
-    const off = /\b(off|disable|remove|hide|no)\b/u.test(text);
-    return intent({
-      summary: off ? 'Turn subtitles off.' : 'Turn subtitles on.',
-      commands: [{ kind: 'SETTINGS', action: 'SET_SUBTITLE_POLICY',
-        parameters: { subtitlePolicy: off ? 'OFF' : 'ALWAYS' },
-        reason: 'The request sets the caption policy.' }],
-      grounding: [ground('CONTEXT', CERTAIN, `Subtitle policy ${off ? 'OFF' : 'ALWAYS'}.`)],
-      warnings: off || context.project.hasTranscript ? []
-        : ['This source has not been analysed yet, so captions can only appear after you run ' +
-          '"Analyze source".']
     });
   }
 
@@ -387,17 +416,6 @@ export function planDeterministicChat(message: string, context: ChatContext): Ch
     });
   }
 
-  if (/\b(remove|delete|drop|no|get rid of|clear)\b.*\bhook\b/u.test(text)) {
-    return intent({
-      summary: 'Remove the on-screen hook.',
-      commands: [{ kind: 'SETTINGS', action: 'SET_HOOK',
-        parameters: { hookText: null, hookPolicy: 'OFF' },
-        reason: 'The request removes the headline.' }],
-      grounding: [ground('CONTEXT', CERTAIN,
-        style.hookText ? `Current hook: "${style.hookText}".` : 'No hook is currently set.')]
-    });
-  }
-
   // --- Audio ---------------------------------------------------------------
 
   const audioSubject = /\b(music|soundtrack|song|audio|background (?:audio|track))\b/u.test(text);
@@ -429,7 +447,8 @@ export function planDeterministicChat(message: string, context: ChatContext): Ch
         length.toFixed(1)}s.`,
       commands: [{ kind: 'ELEMENT', action: 'SET_AUDIO_FADE',
         target: handleTarget(subject.element),
-        parameters: { fadeInSec: fadeIn ? length : 0, fadeOutSec: fadeOut ? length : 0 },
+        parameters: { fadeInSec: fadeIn ? length : Number(subject.element.properties.fadeInSec ?? 0),
+          fadeOutSec: fadeOut ? length : Number(subject.element.properties.fadeOutSec ?? 0) },
         reason: 'The request sets audio fades.' }],
       grounding: [ground('CONTEXT', CERTAIN, `Fade length ${length.toFixed(1)}s.`)]
     });
@@ -455,31 +474,6 @@ export function planDeterministicChat(message: string, context: ChatContext): Ch
   }
 
   // --- Video timeline ------------------------------------------------------
-
-  // "delete this section" with a range selected on the timeline.
-  //
-  // The range is the user's own gesture, so it is the strongest grounding there
-  // is - stronger than any transcript match - and it is used verbatim. Nothing
-  // is inferred from the wording except that a removal was asked for.
-  const selectedRange = context.selection.selectedTimeRange;
-  if (selectedRange && /\b(remove|cut|delete|drop|get rid of|take out)\b/u.test(text) &&
-    /\b(this|that|it|here|selection|selected|section|part|bit|range)\b/u.test(text)) {
-    const startSec = clampToTimeline(selectedRange.startSec, duration);
-    const endSec = clampToTimeline(selectedRange.endSec, duration);
-    if (endSec - startSec < MIN_SELECTED_RANGE_SEC) {
-      return clarify('That selection is too short to remove. Drag a longer range on the ' +
-        'timeline and ask me again.');
-    }
-    const cut = cutRangeCommands(context, startSec, endSec);
-    if ('question' in cut) return clarify(cut.question);
-    return intent({
-      summary: `Remove the selected ${startSec.toFixed(1)}s–${endSec.toFixed(1)}s.`,
-      commands: cut.commands,
-      grounding: [ground('SELECTION', CERTAIN,
-        `The range selected on the timeline: ${startSec.toFixed(1)}s–${endSec.toFixed(1)}s.`,
-        { startSec, endSec })]
-    });
-  }
 
   // "remove the first 3 seconds" / "cut the last 2 seconds"
   const edge = /\b(?:remove|cut|trim|drop|delete|chop|take)\b[^.]*?\b(first|last|opening|final|beginning|end)\b[^.]*?(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s)\b/u
@@ -776,26 +770,31 @@ export function planDeterministicChat(message: string, context: ChatContext): Ch
 }
 
 /**
- * The FALLBACK_ONLY answer for a request this planner could not parse.
+ * The answer for a request nothing could turn into an edit.
  *
- * Deliberately blunt: in fallback mode there is no language understanding
- * available, so the honest response is to say what is missing and offer the
- * concrete phrasings that do work - never a speculative edit.
+ * Workstream G, Part 21: this used to be a canned menu ("I can still do direct
+ * edits - for example ...") and it was shown even for requests the editor could
+ * perform - "change the on screen hook" received it. Actionable requests are
+ * now recognised upstream; what reaches here genuinely was not understood, so
+ * the reply says exactly that and asks for the one thing that is missing: which
+ * object, and what should happen to it. It names the objects THIS project has.
  */
 export function fallbackUnsupported(context: ChatContext): ChatIntent {
-  const semantic = context.transcript.available;
+  const present = [
+    context.tracks.hook ? 'the hook' : null,
+    context.elements.some((element) => element.semantic === 'LOGO') ? 'the logo' : null,
+    context.elements.some((element) => element.semantic === 'MUSIC') ? 'the music' : null,
+    context.tracks.captions.count ? 'the captions' : null,
+    'the video'
+  ].filter(Boolean) as string[];
   return {
-    intent: 'UNSUPPORTED',
-    summary: 'I cannot plan that request in this mode.',
+    intent: 'NEEDS_CLARIFICATION',
+    summary: 'I did not understand which change you want.',
     commands: [],
     grounding: [],
-    warnings: [semantic
-      ? 'Requests phrased by meaning - "the part where I talk about pricing" - need ONLINE or ' +
-        'OFFLINE AI mode. Direct instructions still work here.'
-      : 'No AI provider is configured for this mode, so only direct instructions are available.'],
+    warnings: [],
     needsClarification: true,
-    clarificationQuestion: 'I can still do direct edits - for example "remove the first 3 ' +
-      'seconds", "cut from 12 to 17 seconds", "split here", "mute the music", "make the logo ' +
-      'smaller" or "make it 9:16". Which would you like?'
+    clarificationQuestion: `I didn't understand what to change. Which part - ${
+      present.join(', ')} - and what should happen to it?`
   };
 }

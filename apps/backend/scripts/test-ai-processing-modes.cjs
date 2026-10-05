@@ -63,14 +63,13 @@ async function main() {
 
   const timeoutRoles = ['multimodalUnderstanding', 'wholeVideoUnderstanding',
     'clipUnderstanding', 'creativeGeneration', 'critic', 'componentRepair'];
-  for (const mode of ['ONLINE', 'OFFLINE']) {
-    for (const role of timeoutRoles) assert.equal(effectiveRoleTimeoutMs(mode, role),
-      AI_MODE_ROLE_TIMEOUTS[mode][role], `${mode}/${role} timeout must match policy`);
-  }
+  // Step 6: only ONLINE has model timeouts; there is no local (OFFLINE) model policy.
+  assert.deepEqual(Object.keys(AI_MODE_ROLE_TIMEOUTS), ['ONLINE']);
+  for (const role of timeoutRoles) assert.equal(effectiveRoleTimeoutMs('ONLINE', role),
+    AI_MODE_ROLE_TIMEOUTS.ONLINE[role], `ONLINE/${role} timeout must match policy`);
   process.env.LLM_WHOLE_VIDEO_UNDERSTANDING_TIMEOUT_MS = '99999';
   process.env.LOCAL_LLM_WHOLE_VIDEO_UNDERSTANDING_TIMEOUT_MS = '99999';
   assert.equal(effectiveRoleTimeoutMs('ONLINE', 'wholeVideoUnderstanding'), 18000);
-  assert.equal(effectiveRoleTimeoutMs('OFFLINE', 'wholeVideoUnderstanding'), 30000);
 
   const calls = [];
   const provider = { isConfigured: () => true, async generateStructuredWithConfig(config) {
@@ -83,9 +82,8 @@ async function main() {
     'componentRepair']) {
     assert.deepEqual(router.routesFor(role, 'ONLINE').map(route => route.provider), ['openai']);
     assert.equal(router.routesFor(role, 'ONLINE')[0].model, 'gpt-5.6-luna');
-    assert.deepEqual(router.routesFor(role, 'OFFLINE').map(route => route.provider),
-      ['clipUnderstanding', 'creativeGeneration', 'critic', 'componentRepair'].includes(role)
-        ? ['ollama'] : []);
+    assert.deepEqual(router.routesFor(role, 'OFFLINE'), [],
+      'legacy OFFLINE has no model route (there is no local production LLM)');
     assert.deepEqual(router.routesFor(role, 'FALLBACK_ONLY'), []);
   }
 
@@ -112,28 +110,25 @@ async function main() {
     await new ClipIntelligenceService(router).analyzeMultimodal('video', [{ position: 0,
       sceneChangeCount: 1, averageMotion: 10, largestFaceRatio: 0, faceCount: 0,
       ocrText: '' }]);
-    await router.generate({ role: 'clipUnderstanding', request: request('offline-clip') });
-    await router.generate({ role: 'creativeGeneration', request: request('offline-creative') });
+    await assert.rejects(() => router.generate({ role: 'clipUnderstanding',
+      request: request('offline-clip') }), error => error.kind === 'AI_MODE_FALLBACK_ONLY');
+    await assert.rejects(() => router.generate({ role: 'creativeGeneration',
+      request: request('offline-creative') }), error => error.kind === 'AI_MODE_FALLBACK_ONLY');
   });
-  assert.deepEqual(calls, ['ollama', 'ollama'],
-    'both clip-level roles must reach Ollama after deterministic heavy roles');
+  assert.deepEqual(calls, [], 'legacy OFFLINE clip-level roles make no model call at all');
   assert.equal(completeOfflineRoute.telemetry.cloudLlmCalls, 0);
 
   const bounded = [];
   const timeoutRouter = new LlmRouterService({ isConfigured: () => true,
     async generateStructuredWithConfig(config, input) {
-      bounded.push({ mode: config.apiStyle === 'ollama' ? 'OFFLINE' : 'ONLINE',
+      bounded.push({ mode: 'ONLINE',
         role: input.role, timeoutMs: config.timeoutMs, maxRetries: config.maxRetries,
         requestTimeoutMs: input.options.timeoutMs });
       return { value: 'ok' };
     } });
-  for (const mode of ['ONLINE', 'OFFLINE']) {
-    for (const role of timeoutRoles) {
-      if (mode === 'OFFLINE' && ['multimodalUnderstanding', 'wholeVideoUnderstanding'].includes(role))
-        continue;
-      await inMode(mode, () => timeoutRouter.generate({ role,
-      request: request(`timeout-${mode}-${role}`) }));
-    }
+  for (const role of timeoutRoles) {
+    await inMode('ONLINE', () => timeoutRouter.generate({ role,
+      request: request(`timeout-ONLINE-${role}`) }));
   }
   for (const item of bounded) {
     assert.equal(item.timeoutMs, AI_MODE_ROLE_TIMEOUTS[item.mode][item.role]);
@@ -182,12 +177,12 @@ async function main() {
     inMode('ONLINE', () => router.generate({ role: 'wholeVideoUnderstanding',
       request: request('concurrent-online') })),
     inMode('OFFLINE', () => router.generate({ role: 'clipUnderstanding',
-      request: request('concurrent-offline') })),
+      request: request('concurrent-offline') }).catch(error => error.kind)),
     inMode('FALLBACK_ONLY', () => router.generate({ role: 'wholeVideoUnderstanding',
       request: request('concurrent-fallback') }).catch(error => error.kind))
   ]);
   assert.ok(calls.includes('openai'));
-  assert.ok(calls.includes('ollama'));
+  assert.equal(calls.includes('ollama'), false);
   assert.equal(calls.includes('nvidia'), false);
 
   let resumed;
@@ -196,7 +191,7 @@ async function main() {
     processingJob: { update: async () => ({}), findUniqueOrThrow: async () => ({ id: 'job' }) } };
   const queue = { async resume(data, prepare) { resumed = data; await prepare(); } };
   await new VideosService(prisma, {}, queue, {}).retry('video');
-  assert.equal(resumed.aiMode, 'OFFLINE');
+  assert.equal(resumed.aiMode, 'FALLBACK_ONLY', 'a stored legacy OFFLINE job resumes deterministically');
 
   const endpoint = { provider: 'google', apiKey: 'test', baseUrl: 'https://example.test',
     model: 'gemini-test', apiStyle: 'gemini', timeoutMs: 25000, maxRetries: 1,

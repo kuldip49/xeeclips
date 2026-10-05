@@ -1,6 +1,8 @@
+import { postAiServiceJson, type AiServiceResponse } from '../processing/ai-service-http';
 import { BadGatewayException, Injectable } from '@nestjs/common';
 import type { EditAsset, Prisma } from '@prisma/client';
 import { StorageService } from '../storage/storage.service';
+import { editAssetStorageLocation } from './edit-asset-storage';
 
 const asJson = (value: unknown): Prisma.InputJsonValue =>
   JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -13,14 +15,10 @@ export class EditModeAnalysisService {
   constructor(private readonly storage: StorageService) {}
 
   private async post(path: string, body: Record<string, unknown>) {
-    let response: Response;
+    let response: AiServiceResponse;
     try {
-      response = await fetch(`${this.aiServiceUrl}${path}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeoutMs)
-      });
+      // Not fetch: its hidden 300 s headers timeout would cut off a long source's analysis.
+      response = await postAiServiceJson(`${this.aiServiceUrl}${path}`, body, this.timeoutMs);
     } catch (error) {
       throw new BadGatewayException(`${path} is unavailable: ${
         error instanceof Error ? error.message : String(error)}`);
@@ -33,17 +31,18 @@ export class EditModeAnalysisService {
   }
 
   async analyze(asset: EditAsset) {
-    await this.storage.statObject(asset.bucket, asset.objectKey).catch(() => {
+    const location = editAssetStorageLocation(asset);
+    await this.storage.statObject(location.bucket, location.objectKey).catch(() => {
       throw new BadGatewayException('The EditMode source object is missing from storage');
     });
 
     const transcript = await this.post('/transcriptions', {
-      bucket: asset.bucket,
-      object_key: asset.objectKey
+      bucket: location.bucket,
+      object_key: location.objectKey
     });
     const rawAnalysis = await this.post('/edit-analysis', {
-      bucket: asset.bucket,
-      object_key: asset.objectKey,
+      bucket: location.bucket,
+      object_key: location.objectKey,
       fps: Number(process.env.EDIT_ANALYSIS_FPS) || 4
     });
     const record = rawAnalysis && typeof rawAnalysis === 'object'
@@ -78,4 +77,3 @@ export class EditModeAnalysisService {
     return { transcript: asJson(transcript), analysis: asJson(analysis) };
   }
 }
-

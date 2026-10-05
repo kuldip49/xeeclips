@@ -11,10 +11,16 @@
 
 import { gradingFilter, type GradePreset, type ImageStats } from '../../editing/color-grade';
 import { buildSubtitlePhrases } from '../../editing/subtitle-phrases';
+import { readAudioState, speechWindowsFromTranscript } from '../edit-mode-audio';
+import { readTransform } from '../edit-mode-transform';
+import { readZoomEffect } from '../edit-mode-zoom-events';
 import { analysisFramesFromCache, wordsFromCache } from '../presets/edit-preset-evidence';
 import { readEditPresetRun, readEditProjectStyle,
   type GradingPolicy } from '../presets/edit-preset-policy';
+import { applyUppercase, readCaptionWords, readTextRuns, readTextStyle,
+  DEFAULT_CAPTION_BOX } from '../edit-mode-text';
 import { fontSizePx } from './edit-mode-ass';
+import { autoFitText, type ResolvedVisualLayout } from '../styles/resolved-visual-layout';
 import { planCamera, resolveCanvas } from './edit-mode-camera';
 import { planEditModeZoom } from './edit-mode-zoom';
 import { buildTimelineMap, remapAnalysisFrames,
@@ -88,6 +94,9 @@ export type BuiltPlan = { plan: RenderPlan; evidence: RenderEvidence };
 export function buildRenderPlan(input: PlanInput): BuiltPlan {
   const warnings: string[] = [];
   const style = readEditProjectStyle(input.project.settings);
+  const storedLayout = record(input.project.settings).resolvedVisualLayout;
+  const visualLayout = storedLayout && typeof storedLayout === 'object' && !Array.isArray(storedLayout) &&
+    number(record(storedLayout).version, 0) === 1 ? storedLayout as ResolvedVisualLayout : null;
   const presetRun = readEditPresetRun(input.project.settings);
   const source = input.assets.find((asset) => asset.role === 'SOURCE');
   if (!source) {
@@ -100,7 +109,8 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
   const map = buildTimelineMap(input.elements.map((element) => ({
     id: element.id, type: element.type, track: element.track, position: element.position,
     startTime: element.startTime, duration: element.duration,
-    trimStart: element.trimStart, trimEnd: element.trimEnd })));
+    trimStart: element.trimStart, trimEnd: element.trimEnd,
+    properties: element.properties })));
   if (!map.segments.length || !(map.durationSec > 0)) {
     throw new EditExportError('INVALID_TIMELINE',
       'The timeline has no playable video segment to export.');
@@ -115,20 +125,37 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
   }
   const frames = remapAnalysisFrames(cached.frames, map);
   const boundaries = timelineShotBoundaries(cached.shotBoundaries, map);
+  const automatic2 = visualLayout?.editingProfile === 'AUTOMATIC_2';
+  const card = automatic2 && visualLayout?.videoFrame.mode === 'CARD'
+    ? { x: 0, y: 0, width: canvas.width,
+      height: Math.max(2, Math.round(visualLayout.videoFrame.height * canvas.height / 2) * 2) }
+    : undefined;
   const camera = planCamera({
     policy: style.reframePolicy,
     preserveInformation: style.informationRegionPolicy !== 'IGNORE',
     aspectRatio: style.aspectRatio,
     canvas: { ...canvas, fps }, source: { width: sourceWidth, height: sourceHeight },
     frames, boundaries, map,
-    widenShots: input.widenShots, informationFitShots: input.informationFitShots
+    widenShots: input.widenShots, informationFitShots: input.informationFitShots,
+    viewport: card, speakerSafe: automatic2, words: transcript.words
   });
 
   const zoom = planEditModeZoom({
     policy: style.zoomPolicy, moments: presetRun?.plannedZoomMoments ?? [], map,
     shots: camera.shots, frameSegments: camera.frameSegments, frames,
     cropAt: camera.cropAt, focalAt: camera.focalAt, fps, durationSec: map.durationSec,
-    suppressed: input.suppressedZoomIds, scaleCeilings: input.zoomScaleCeilings
+    suppressed: input.suppressedZoomIds, scaleCeilings: input.zoomScaleCeilings,
+    minGapSec: automatic2 ? 5 : undefined,
+    maxEvents: automatic2 ? (map.durationSec <= 15 ? 1 : map.durationSec <= 45 ? 3 : 4) : undefined,
+    switchTimes: automatic2 ? camera.speakerSegments.slice(1).map((segment) => segment.startSec) : undefined,
+    manual: input.elements.flatMap((element) => {
+      const zoom = element.type === 'EFFECT' ? readZoomEffect(element.properties) : null;
+      return zoom ? [{ elementId: element.id, startSec: element.startTime,
+        endSec: element.startTime + element.duration, scale: zoom.scale, enabled: zoom.enabled,
+        claimsMoment: zoom.claimsMoment, triggerText: zoom.triggerText,
+        semanticReason: zoom.semanticReason, focusX: zoom.focusX, focusY: zoom.focusY,
+        focusTrackId: zoom.focusTrackId }] : [];
+    })
   });
 
   const grade = EDIT_MODE_GRADES[style.gradingPolicy];
@@ -152,6 +179,9 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
     const startSec = round(Math.max(0, element.startTime));
     const endSec = round(Math.min(map.durationSec, element.startTime + element.duration));
     if (element.type === 'IMAGE') {
+      // Hiding an overlay is canonical element state, exactly as it is for a
+      // caption: a hidden logo is absent from the export as well as the preview.
+      if (properties.hidden === true) continue;
       const asset = element.assetId ? assetsById.get(element.assetId) : undefined;
       if (!asset) {
         throw new EditExportError('ASSET_MISSING',
@@ -168,12 +198,32 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
         startSec, endSec,
         opacity: clamp01(number(properties.opacity, 1)),
         zIndex: Math.round(number(properties.zIndex, 10)),
-        preserveAspectRatio: properties.preserveAspectRatio !== false
+        preserveAspectRatio: properties.preserveAspectRatio !== false,
+        ...readTransform(properties)
       });
       continue;
     }
     if (element.type === 'TEXT' || element.type === 'SUBTITLE') {
-      const overlay = textOverlay(element, properties, canvas, startSec, endSec);
+      // "Hide captions" is canonical element state, so a hidden caption is
+      // absent from the export exactly as it is absent from the preview.
+      if (properties.hidden === true) continue;
+      let overlay = textOverlay(element, properties, canvas, startSec, endSec);
+      const role = String(properties.templateRole ?? properties.presetRole ?? '');
+      const region = element.type === 'SUBTITLE' ? visualLayout?.captions
+        : role === 'HOOK' ? visualLayout?.hook
+          : role === 'KEY_POINT' ? visualLayout?.supportingText : null;
+      if (region) {
+        const preferred = element.type === 'SUBTITLE' ? region.fontSize
+          : autoFitText(overlay.content, { width: region.width, height: region.height,
+            maxLines: region.maxLines, preferred: region.fontSize,
+            minimum: Math.min(30, region.fontSize), lineHeight: region.lineHeight,
+            ...('glyphWidthEm' in region && region.glyphWidthEm
+              ? { glyphWidthEm: region.glyphWidthEm } : {}) });
+        overlay = { ...overlay,
+          x: Math.round(region.x * canvas.width), y: Math.round(region.y * canvas.height),
+          width: Math.round(region.width * canvas.width), height: Math.round(region.height * canvas.height),
+          fontSizePx: fontSizePx(preferred, canvas.width), lineSpacing: region.lineHeight };
+      }
       (element.type === 'SUBTITLE' ? subtitles : textOverlays).push(overlay);
       continue;
     }
@@ -185,18 +235,26 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
           { elementId: element.id, assetId: element.assetId });
       }
       const trimStart = Math.max(0, number(element.trimStart, 0));
+      // Every audio value is read through the canonical reader, so the editor,
+      // an assistant bundle and the renderer resolve a missing or out-of-range
+      // stored value in exactly one place - and a legacy clip saved before
+      // ducking existed reads back un-ducked rather than as NaN.
+      const audio = readAudioState(properties);
+      // Fades are carried through EXACTLY as stored. They are bounds-checked by
+      // the command layer on the way in and by `validateRenderPlan` on the way
+      // out: a pair that does not fit its clip fails the export with a clear
+      // message rather than being silently shortened into something the user
+      // never asked for.
+      const length = Math.max(0, endSec - startSec);
       audioTracks.push({
         elementId: element.id, assetId: asset.id, kind: 'MUSIC', startSec, endSec,
         trimStart: round(trimStart),
-        trimEnd: round(element.trimEnd == null ? trimStart + (endSec - startSec) : element.trimEnd),
-        volume: clamp01(number(properties.volume, 0.25)),
-        muted: properties.muted === true,
-        fadeInSec: Math.max(0, number(properties.fadeInSec, 0)),
-        fadeOutSec: Math.max(0, number(properties.fadeOutSec, 0)),
-        duckUnderSpeech: properties.duckUnderSpeech === true,
-        duckLevel: clamp01(number(properties.duckLevel, 0.25)),
-        attackMs: Math.max(0, number(properties.attackMs, 150)),
-        releaseMs: Math.max(0, number(properties.releaseMs, 350))
+        trimEnd: round(element.trimEnd == null ? trimStart + length : element.trimEnd),
+        volume: audio.volume, muted: audio.muted,
+        fadeInSec: round(audio.fadeInSec), fadeOutSec: round(audio.fadeOutSec),
+        duckUnderSpeech: audio.duckEnabled,
+        duckLevel: audio.duckGain,
+        attackMs: audio.attackMs, releaseMs: audio.releaseMs
       });
     }
   }
@@ -208,7 +266,26 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
   // deterministic phrase logic, word for word and on their own timings.
   let subtitlesFromTranscript = false;
   const hasSourceAudio = input.hasSourceAudio ?? record(source.metadata).hasAudio !== false;
-  if (style.subtitlePolicy !== 'OFF' && !subtitles.length) {
+
+  // --- Speech windows for ducking -------------------------------------------
+  //
+  // Derived from the SAME cached transcript the captions use, projected onto the
+  // exported timeline by the same map. Nothing re-transcribes and nothing
+  // guesses: when the cached transcript carries no word timings there are no
+  // windows, `duckingAvailable` is false, and the command layer refuses to turn
+  // ducking on rather than shipping an export that silently does nothing.
+  const duckingAvailable = transcript.wordTimings && transcript.words.length > 0;
+  const speechWindows = duckingAvailable
+    ? speechWindowsFromTranscript(transcript.words, map) : [];
+  if (!duckingAvailable && audioTracks.some((track) => track.duckUnderSpeech)) {
+    warnings.push('A music track asks to duck under speech, but the cached transcript has no ' +
+      'word timings, so no ducking is applied.');
+  }
+  // Step 5 shadow-state rule: canonical SUBTITLE elements always win. A track
+  // whose captions are all HIDDEN still exists - the user hid it - so it must
+  // not be silently replaced by a render-only track built from the transcript.
+  const hasCanonicalCaptions = input.elements.some((element) => element.type === 'SUBTITLE');
+  if (style.subtitlePolicy !== 'OFF' && !hasCanonicalCaptions) {
     if (!transcript.wordTimings) {
       warnings.push('Subtitles are enabled but the cached transcript has no word timings, so no ' +
         'captions are rendered.');
@@ -243,7 +320,10 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
     sourceRevision: input.project.revision,
     sourceAssetId: source.id,
     presetId: style.selectedPreset,
-    canvas: { ...canvas, fps, aspectRatio: style.aspectRatio, sourceWidth, sourceHeight },
+    canvas: { ...canvas, fps, aspectRatio: style.aspectRatio, sourceWidth, sourceHeight,
+      visualLayout,
+      fitBackground: ['BLACK', 'WHITE'].includes(String(record(input.project.settings).fitBackground))
+        ? record(input.project.settings).fitBackground as 'BLACK' | 'WHITE' : 'BLUR' },
     durationSec: map.durationSec,
     videoSegments: map.segments,
     visualOverlays, textOverlays, subtitles, audioTracks,
@@ -259,6 +339,8 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
       zoomPolicy: style.zoomPolicy, gradingPolicy: style.gradingPolicy,
       subtitlePolicy: style.subtitlePolicy },
     hasSourceAudio,
+    speechWindows,
+    duckingAvailable,
     subtitlesFromTranscript,
     warnings
   };
@@ -267,35 +349,60 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
     informationCrop: camera.informationCrop,
     frames, cropAt: camera.cropAt, fitExpression: camera.fitExpression,
     informationFitExpression: camera.informationFitExpression, cameraFilter: camera.filter,
-    renderHeight: canvas.height } };
+    renderHeight: automatic2 && card ? card.height : canvas.height,
+    speakerSegments: camera.speakerSegments, speakerSwitchCount: camera.speakerSwitchCount,
+    faceSafetyViolations: camera.faceSafetyViolations, cameraMoves: camera.cameraMoves,
+    punches: camera.punches } };
 }
 
 function textOverlay(element: PlanElement, properties: Record<string, unknown>,
   canvas: { width: number; height: number }, startSec: number,
   endSec: number): RenderTextOverlay {
-  const content = typeof properties.content === 'string' ? properties.content : '';
+  // Style is read through the canonical reader, so the renderer and the editor
+  // resolve defaults, legacy `backgroundColor` plates and out-of-range stored
+  // values in exactly one place.
+  const style = readTextStyle(properties);
+  const raw = typeof properties.content === 'string' ? properties.content : '';
+  const content = applyUppercase(raw, style.uppercase);
+  // Word timings are stored relative to the element; the ASS builder works in
+  // timeline seconds, so they are rebased here once.
+  const words = readCaptionWords(properties)
+    .map((word) => ({ start: round(startSec + word.start), end: round(startSec + word.end),
+      text: applyUppercase(word.text, style.uppercase) }))
+    .filter((word) => word.end > word.start);
   return {
     elementId: element.id,
     kind: element.type === 'SUBTITLE' ? 'SUBTITLE' : 'TEXT',
     content,
     lines: content.split(/\r?\n/u),
     startSec, endSec,
-    x: Math.round(clamp01(number(properties.x, 0.1)) * canvas.width),
+    x: Math.round(clamp01(number(properties.x, DEFAULT_CAPTION_BOX.x)) * canvas.width),
     y: Math.round(clamp01(number(properties.y, 0.4)) * canvas.height),
     width: Math.max(2, Math.round(clamp01(number(properties.width, 0.8)) * canvas.width)),
     height: Math.max(2, Math.round(clamp01(number(properties.height, 0.15)) * canvas.height)),
-    fontSizePx: fontSizePx(number(properties.fontSize, 40), canvas.width),
-    fontWeight: Math.round(number(properties.fontWeight, 700)),
-    fontFamily: typeof properties.fontFamily === 'string' ? properties.fontFamily
-      : 'Arial, sans-serif',
-    textAlign: properties.textAlign === 'left' || properties.textAlign === 'right'
-      ? properties.textAlign : 'center',
-    color: typeof properties.color === 'string' ? properties.color : '#ffffff',
+    fontSizePx: fontSizePx(style.fontSize, canvas.width),
+    fontWeight: style.fontWeight,
+    fontFamily: style.fontFamily,
+    textAlign: style.textAlign,
+    color: style.color,
     backgroundColor: typeof properties.backgroundColor === 'string'
       ? properties.backgroundColor : 'transparent',
-    opacity: clamp01(number(properties.opacity, 1)),
+    opacity: style.opacity,
     zIndex: Math.round(number(properties.zIndex, 30)),
-    presetRole: typeof properties.presetRole === 'string' ? properties.presetRole : null
+    presetRole: typeof properties.presetRole === 'string' ? properties.presetRole : null,
+    stroke: style.stroke,
+    shadow: style.shadow,
+    background: style.background,
+    // Letter spacing travels in DESIGN units; the ASS builder converts it with
+    // the same helper every other dimension uses.
+    letterSpacing: style.letterSpacing,
+    lineSpacing: style.lineSpacing,
+    rotation: number(properties.rotation, 0),
+    uppercase: style.uppercase,
+    activeWord: style.activeWord,
+    textRuns: readTextRuns(properties).map((run) => ({ ...run,
+      text: applyUppercase(run.text, style.uppercase) })),
+    words
   };
 }
 
@@ -303,14 +410,24 @@ function textOverlay(element: PlanElement, properties: Record<string, unknown>,
  * gives a caption element, so a policy-only project and an element-backed one
  * render the same shape. */
 function defaultSubtitleOverlay(canvas: { width: number; height: number }): RenderTextOverlay {
+  const style = readTextStyle({});
   return {
     elementId: 'transcript', kind: 'SUBTITLE', content: '', lines: [],
     startSec: 0, endSec: 0,
-    x: Math.round(0.1 * canvas.width), y: Math.round(0.73 * canvas.height),
-    width: Math.round(0.8 * canvas.width), height: Math.round(0.13 * canvas.height),
+    x: Math.round(DEFAULT_CAPTION_BOX.x * canvas.width),
+    y: Math.round(DEFAULT_CAPTION_BOX.y * canvas.height),
+    width: Math.round(DEFAULT_CAPTION_BOX.width * canvas.width),
+    height: Math.round(DEFAULT_CAPTION_BOX.height * canvas.height),
     fontSizePx: fontSizePx(40, canvas.width), fontWeight: 700,
-    fontFamily: 'Arial, sans-serif', textAlign: 'center',
+    fontFamily: 'Inter, sans-serif', textAlign: 'center',
     color: '#ffffff', backgroundColor: '#00000099', opacity: 1, zIndex: 35,
-    presetRole: 'SUBTITLE'
+    presetRole: 'SUBTITLE',
+    stroke: { ...style.stroke },
+    shadow: { ...style.shadow },
+    background: { enabled: true, color: '#000000', opacity: 0.6, padding: 12, radius: 8 },
+    letterSpacing: 0, lineSpacing: 1.2, rotation: 0, uppercase: false,
+    activeWord: { ...style.activeWord },
+    textRuns: [],
+    words: []
   };
 }

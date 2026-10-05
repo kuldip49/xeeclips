@@ -7,22 +7,45 @@ import {
   Headers,
   Param,
   Post,
+  Put,
   Query,
+  Req,
   Res,
   StreamableFile,
   UploadedFile,
   UseInterceptors
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { Response } from 'express';
+import { diskStorage } from 'multer';
+import { tmpdir } from 'os';
+import { rm } from 'fs/promises';
+import { Request, Response } from 'express';
+import { parseAutoGeneration } from './auto-generation';
 import { VideosService } from './videos.service';
+import { VideoUploadSessionService } from './video-upload-session.service';
 import { parseClipCreationRequest } from './clip-selection.service';
 
 export const parseClipSelection = parseClipCreationRequest;
 
 @Controller()
 export class VideosController {
-  constructor(private readonly videosService: VideosService) {}
+  constructor(private readonly videosService: VideosService,
+    private readonly uploadSessions: VideoUploadSessionService) {}
+
+  @Post('projects/:projectId/videos/upload-sessions')
+  createUploadSession(@Param('projectId') projectId: string, @Body() body: Record<string, unknown>) {
+    return this.uploadSessions.create(projectId, body);
+  }
+
+  @Put('upload-sessions/:id/chunks/:index')
+  writeUploadChunk(@Param('id') id: string, @Param('index') index: string, @Req() request: Request) {
+    return this.uploadSessions.writeChunk(id, index, request);
+  }
+
+  @Post('upload-sessions/:id/complete')
+  completeUpload(@Param('id') id: string) {
+    return this.uploadSessions.complete(id);
+  }
 
   @Get('videos')
   listVideos(@Query('projectId') projectId?: string) {
@@ -93,6 +116,33 @@ export class VideosController {
     return this.videosService.getGeneratedClips(id);
   }
 
+  /** Step 9.1: play the uploaded source before configuring generation. */
+  @Get('videos/:id/file')
+  async getVideoFile(
+    @Param('id') id: string,
+    @Headers('range') range: string | undefined,
+    @Res({ passthrough: true }) response: Response
+  ) {
+    const file = await this.videosService.getVideoFile(id, range);
+    response.setHeader('Accept-Ranges', 'bytes');
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', file.end - file.start + 1);
+    if (file.partial) {
+      response.status(206);
+      response.setHeader('Content-Range', `bytes ${file.start}-${file.end}/${file.size}`);
+    }
+    return new StreamableFile(file.stream);
+  }
+
+  /** Step 9.1: a meaningful still of the source for the setup preview. */
+  @Get('videos/:id/poster')
+  async getVideoPoster(@Param('id') id: string, @Res({ passthrough: true }) response: Response) {
+    const poster = await this.videosService.getVideoPoster(id);
+    response.setHeader('Content-Type', poster.mimeType);
+    response.setHeader('Cache-Control', 'public, max-age=86400');
+    return new StreamableFile(poster.stream);
+  }
+
   @Get('generated-clips/:clipId/file')
   async getGeneratedClipFile(
     @Param('clipId') clipId: string,
@@ -128,13 +178,15 @@ export class VideosController {
   }
 
   @Post('projects/:projectId/videos')
-  @UseInterceptors(FileInterceptor('file'))
-  uploadVideo(
+  // Disk, not memory: a long source is streamed to storage instead of held in the Node heap.
+  @UseInterceptors(FileInterceptor('file', { storage: diskStorage({ destination: tmpdir() }) }))
+  async uploadVideo(
     @Param('projectId') projectId: string,
     @Body('aiMode') aiMode: unknown,
     @Body('processingType') processingType: unknown,
     @Body('aspectRatio') aspectRatio: unknown,
     @Body('targetPlatform') targetPlatform: unknown,
+    @Body('generationRequest') generationRequest: unknown,
     @UploadedFile() file?: Express.Multer.File
   ) {
     if (!file) {
@@ -145,8 +197,14 @@ export class VideosController {
       throw new BadRequestException('Uploaded file must be a video');
     }
 
-    // Uploads start analysis only; output style is chosen after analysis via clip-selection.
+    // One-step entry: an optional pre-selected clip request (validated now) is handed to the
+    // ordinary clip-selection path once analysis completes. Without it, uploads analyse only.
+    let autoGeneration: ReturnType<typeof parseAutoGeneration>;
+    try { autoGeneration = parseAutoGeneration(generationRequest); } catch (error) {
+      if (file.path) await rm(file.path, { force: true }).catch(() => undefined);
+      throw error;
+    }
     return this.videosService.createFromUpload(projectId, file, aiMode, processingType, aspectRatio,
-      targetPlatform);
+      targetPlatform, undefined, autoGeneration);
   }
 }

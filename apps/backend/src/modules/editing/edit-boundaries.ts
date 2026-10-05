@@ -672,9 +672,30 @@ export function optimizeEditBoundaries(input: {
   }
   const selectedEnding = endings.find((item) => item.index === baseEndIndex);
   const bestEnding = [...endings].sort((a, b) => b.score - a.score)[0];
-  const ending = selectedEnding && bestEnding !== selectedEnding &&
+  let ending = selectedEnding && bestEnding !== selectedEnding &&
     bestEnding.score < selectedEnding.score + tuning.endingWinMargin ?
     selectedEnding : bestEnding;
+  // A finished sentence or answer always beats an unfinished one, whatever the score margin:
+  // the margin only protects the selected end against a marginally "better" clean one.
+  if (!isUsableEnding(ending.index)) {
+    const clean = endings.filter((item) => isUsableEnding(item.index) && !item.continuation)
+      .sort((a, b) => b.score - a.score)[0];
+    if (clean) ending = clean;
+    else {
+      // Nothing finished inside the search windows: keep going forward until the thought ends
+      // (within the length limit, and never across a long silence).
+      for (let index = baseEndIndex + 1; index < words.length; index++) {
+        if (words[index].start - words[index - 1].end >= 2.5) break;
+        if (words[index].end - words[startIndex].start > maxDuration) break;
+        if (!isCleanEnding(index)) continue;
+        const extended = { index, origin: 'FORWARD' as EndingOrigin,
+          ...scoreEnding(words, index, { baseIndex: baseEndIndex, origin: 'FORWARD', newTopicIndex }) };
+        endings.push(extended);
+        ending = extended;
+        break;
+      }
+    }
+  }
   let endIndex = ending.index;
   const lunaEndingApplied = ending.origin === 'LUNA';
   const baseWasClean = isCleanEnding(baseEndIndex);

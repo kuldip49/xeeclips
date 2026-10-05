@@ -5,12 +5,14 @@ import { mkdtemp, rm, stat } from 'fs/promises';
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { promisify } from 'util';
+import { createHash } from 'crypto';
 import { PrismaService } from '../database/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { EditPlanService, EditPlanResult } from '../editing/edit-plan.service';
 import { EditingPlanValidator } from '../editing/editing-plan-validator';
 import { evaluateLoop, LoopDecision, VideoEditExecutorService } from '../editing/video-edit-executor.service';
 import { SubtitleRendererService } from '../editing/subtitle-renderer.service';
+import { AUTOMATIC_RAW, rawEditPlan } from '../editing/raw-edit-plan';
 import { ReframeService } from '../editing/reframe.service';
 import type { TimedWord } from '../editing/edit-plan';
 import { LlmRouterService } from '../processing/llm-router.service';
@@ -28,6 +30,7 @@ import { packagingTelemetry } from '../processing/platform-packaging';
 import { ContentPackagingService, packagingTelemetryOf } from '../editing/content-packaging.service';
 import type { OutputAspectRatio, ProcessingType } from '../processing/processing-type';
 import { detectSponsorSegment } from '../editing/sponsor-segment';
+import { probeMedia } from '../processing/media-probe';
 
 export type ClipExportOptions = {
   processingType: ProcessingType;
@@ -35,12 +38,39 @@ export type ClipExportOptions = {
   targetPlatform?: TargetPlatform | null;
   preparedSourcePath?: string;
   rank?: number;
+  generationJobId?: string;
+  generationRequestKey?: string;
+  /** Last-resort renders (fill tiers): keep a clip whose final pixel QA fails, as DEGRADED. */
+  acceptDegradedQuality?: boolean;
+  templateId?: string;
+  styleVariant?: string;
 };
 
 export type ClipExportBatchSource = { sourcePath: string; preparationMs: number;
   dispose: () => Promise<void> };
 
+export type ClipFailureType = 'PERSISTENCE_FAILED' | 'STORAGE_FAILED' | 'CONTRACT_VIOLATION';
+export class ClipInfrastructureError extends Error {
+  constructor(readonly failureType: ClipFailureType, message: string, readonly cause?: unknown) {
+    super(message);
+    this.name = 'ClipInfrastructureError';
+  }
+}
+
+/** A variant has one canonical storage address across retries and jobs. */
+export function renderedClipObjectKey(projectId: string, videoId: string, rangeKey: string,
+  variantKey: string) {
+  const identity = createHash('sha256').update(JSON.stringify({ videoId, rangeKey, variantKey }))
+    .digest('hex').slice(0, 32);
+  return `projects/${projectId}/videos/${videoId}/clips/${identity}.mp4`;
+}
+
 const execFileAsync = promisify(execFile);
+function clipProcessTimeoutMs() {
+  const configured = Number(process.env.CLIP_PROCESS_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0 ?
+    Math.max(60_000, Math.floor(configured)) : 20 * 60_000;
+}
 type ClipProbe = { format?: { duration?: string }; streams?: Array<{
   codec_type?: string; codec_name?: string; width?: number; height?: number;
 }> };
@@ -83,7 +113,7 @@ export async function exportClipFile(
       '-filter_complex', VERTICAL_FIT_FILTER, '-map', '[v]', '-map', '0:a:0?',
       '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
       '-c:a', 'aac', '-movflags', '+faststart', '-avoid_negative_ts', 'make_zero', outputPath
-    ], { maxBuffer: 10 * 1024 * 1024 });
+    ], { maxBuffer: 10 * 1024 * 1024, timeout: clipProcessTimeoutMs(), killSignal: 'SIGKILL' });
     return probeExportedClip(outputPath, duration);
   }
   await execFileAsync('ffmpeg', [
@@ -92,14 +122,14 @@ export async function exportClipFile(
     '-map', '0:v:0', '-map', '0:a:0?',
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
     '-c:a', 'aac', '-movflags', '+faststart', '-avoid_negative_ts', 'make_zero', outputPath
-  ], { maxBuffer: 10 * 1024 * 1024 });
+  ], { maxBuffer: 10 * 1024 * 1024, timeout: clipProcessTimeoutMs(), killSignal: 'SIGKILL' });
   return probeExportedClip(outputPath, duration);
 }
 
 async function probeExportedClip(outputPath: string, duration: number) {
   const { stdout } = await execFileAsync('ffprobe', [
     '-v', 'error', '-show_streams', '-show_format', '-of', 'json', outputPath
-  ], { maxBuffer: 10 * 1024 * 1024 });
+  ], { maxBuffer: 10 * 1024 * 1024, timeout: 60_000, killSignal: 'SIGKILL' });
   const probe = JSON.parse(stdout) as ClipProbe;
   const video = probe.streams?.find((stream) => stream.codec_type === 'video');
   const actualDuration = Number(probe.format?.duration);
@@ -115,6 +145,24 @@ async function probeExportedClip(outputPath: string, duration: number) {
 // complete a thought or open on a stronger sentence.
 export const EDIT_WINDOW_PADDING_SEC = 4;
 
+/** Clamp candidate and padding against the downloaded file, before any trim encode. */
+export function clampEditWindowToSource(candidateStart: number, candidateEnd: number,
+  probedDuration: number, paddingSec = EDIT_WINDOW_PADDING_SEC) {
+  if (!Number.isFinite(probedDuration) || probedDuration <= 0 ||
+    !Number.isFinite(candidateStart) || !Number.isFinite(candidateEnd) ||
+    candidateStart < 0 || candidateStart >= probedDuration) {
+    throw new Error('Editing source trim is outside the probed media duration');
+  }
+  // FFmpeg receives millisecond precision. Floor so formatting cannot round
+  // the requested final frame beyond the source's probed end.
+  const safeEnd = Math.floor(probedDuration * 1000) / 1000;
+  const end = Math.min(candidateEnd, safeEnd);
+  if (!(end > candidateStart) || end - candidateStart < FINAL_CLIP_MIN_SECONDS)
+    throw new Error('Editing source trim is too short after clamping');
+  return { candidateEnd: end, windowStart: Math.max(0, candidateStart - paddingSec),
+    windowEnd: Math.min(safeEnd, end + paddingSec) };
+}
+
 export async function exportSourceWindow(sourcePath: string, outputPath: string,
   startTime: number, endTime: number) {
   const duration = endTime - startTime;
@@ -125,9 +173,9 @@ export async function exportSourceWindow(sourcePath: string, outputPath: string,
     '-t', duration.toFixed(3), '-map', '0:v:0', '-map', '0:a:0?',
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '16', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', '192k', '-avoid_negative_ts', 'make_zero', outputPath],
-  { maxBuffer: 10 * 1024 * 1024 });
+  { maxBuffer: 10 * 1024 * 1024, timeout: clipProcessTimeoutMs(), killSignal: 'SIGKILL' });
   const { stdout } = await execFileAsync('ffprobe', ['-v', 'error', '-show_streams', '-show_format',
-    '-of', 'json', outputPath], { maxBuffer: 10 * 1024 * 1024 });
+    '-of', 'json', outputPath], { maxBuffer: 10 * 1024 * 1024, timeout: 60_000, killSignal: 'SIGKILL' });
   const probe = JSON.parse(stdout) as ClipProbe;
   const video = probe.streams?.find((stream) => stream.codec_type === 'video');
   const actual = Number(probe.format?.duration);
@@ -223,15 +271,39 @@ export class ClipExportService {
       parseProcessingType((await latestJob())?.processingType);
     const targetPlatform = options ? options.targetPlatform ?? null
       : ((video as Video & { targetPlatform?: TargetPlatform | null }).targetPlatform ?? null);
-    const variantKey = clipVariantKey(processingType, targetPlatform);
+    const variantKey = clipVariantKey(processingType, targetPlatform, options?.templateId,
+      options?.generationRequestKey);
     const variantWhere = { videoId_rangeKey_variantKey: { videoId: video.id,
       rangeKey: candidate.rangeKey, variantKey } };
+    const objectKey = renderedClipObjectKey(video.projectId, video.id, candidate.rangeKey,
+      variantKey);
+    if (!Number.isFinite(candidate.startTime) || !Number.isFinite(candidate.endTime) ||
+      candidate.startTime < 0 || candidate.endTime <= candidate.startTime ||
+      (video.duration != null && candidate.endTime > video.duration + 0.5))
+      throw new Error('Invalid source range for clip export');
+    const keyOwner = await this.prisma.generatedClip.findUnique({ where: { objectKey } });
+    if (keyOwner && (keyOwner.videoId !== video.id || keyOwner.rangeKey !== candidate.rangeKey ||
+      keyOwner.variantKey !== variantKey))
+      throw new ClipInfrastructureError('PERSISTENCE_FAILED',
+        `Rendered clip key is owned by a different variant: ${objectKey}`);
     // Each output variant is stored separately: Normal never replaces AI Edited or vice versa.
     const existing = await this.prisma.generatedClip.findUnique({ where: variantWhere });
     if (existing && isReusableClipVariant(existing)) {
+      if (options?.templateId && existing.templateId && existing.templateId !== options.templateId)
+        throw new ClipInfrastructureError('CONTRACT_VIOLATION',
+          `Stored clip template ${existing.templateId} differs from ${options.templateId}`);
+      const reused = options?.generationJobId ? await this.prisma.generatedClip.update({
+        where: { id: existing.id }, data: {
+          generationJobId: options.generationJobId,
+          templateId: options.templateId ?? null,
+          requestedTemplate: options.templateId ?? null,
+          effectiveTemplate: options.templateId ?? null,
+          styleVariant: options.styleVariant ?? options.templateId ?? null,
+          requestedClipIndex: options.rank ?? null
+        } }) : existing;
       this.logger.log(JSON.stringify({ event: 'clip_export_performance', videoId: video.id,
         rangeKey: candidate.rangeKey, variantKey, exportMs: Date.now() - exportStarted, cacheHits: 1 }));
-      return existing;
+      return reused;
     }
     if (existing) {
       // Same variant rendered in an outdated format (source-aspect Normal): re-render it.
@@ -267,7 +339,7 @@ export class ClipExportService {
           'VERTICAL_9_16');
       } else {
         const edited = await this.renderEdited(video, candidate, job, sourcePath, directory, aspectRatio,
-          targetPlatform, options?.rank);
+          targetPlatform, options?.rank, options?.templateId, options?.acceptDegradedQuality === true);
         outputPath = edited.outputPath;
         metadata = edited.metadata;
         editPlan = edited.editPlan;
@@ -278,11 +350,12 @@ export class ClipExportService {
         thumbnailPath = edited.thumbnailPath;
       }
       const storageStarted = Date.now();
-      const objectKey = `projects/${video.projectId}/videos/${video.id}/clips/${
-        candidate.rangeKey.replace(/[^0-9:.-]/gu, '').replace(/:/gu, '-')}-${
-          processingType === 'EDITED_CLIPS' ? 'edited' : 'normal'}-${
-          (targetPlatform ?? 'default').toLowerCase()}.mp4`;
-      const stored = await this.storage.uploadFile({ filePath: outputPath, objectKey, mimeType: 'video/mp4' });
+      let stored: { bucket: string; objectKey: string };
+      try {
+        stored = await this.storage.uploadFile({ filePath: outputPath, objectKey, mimeType: 'video/mp4' });
+      } catch (error) {
+        throw new ClipInfrastructureError('STORAGE_FAILED', 'Clip upload failed', error);
+      }
       // The designed cover ships with the clip; a cover failure never fails the export.
       let thumbnail: { objectKey: string; width: number; height: number } | null = null;
       if (thumbnailPath) {
@@ -301,7 +374,8 @@ export class ClipExportService {
         Object.assign(editTelemetry, { sourcePreparationMs,
           sourceCacheHit: Boolean(options?.preparedSourcePath), storageMs,
           totalCandidateMs: Date.now() - exportStarted });
-      const clip = await this.prisma.generatedClip.upsert({
+      let clip;
+      try { clip = await this.prisma.generatedClip.upsert({
         where: variantWhere,
         create: {
           videoId: video.id, candidateId: candidate.id, rangeKey: candidate.rangeKey,
@@ -310,13 +384,27 @@ export class ClipExportService {
           mimeType: 'video/mp4', sizeBytes: BigInt(metadata.sizeBytes),
           width: metadata.width, height: metadata.height, codec: metadata.codec,
           processingType, targetPlatform, variantKey,
+          generationJobId: options?.generationJobId ?? null,
+          templateId: options?.templateId ?? null,
+          requestedTemplate: options?.templateId ?? null,
+          effectiveTemplate: options?.templateId ?? null,
+          styleVariant: options?.styleVariant ?? options?.templateId ?? null,
+          requestedClipIndex: options?.rank ?? null,
           aspectRatio: processingType === 'EDITED_CLIPS' ? aspectRatio : '9:16',
           ...(thumbnail ? { thumbnailObjectKey: thumbnail.objectKey, thumbnailMimeType: 'image/jpeg',
             thumbnailWidth: thumbnail.width, thumbnailHeight: thumbnail.height } : {}),
           ...(editPlan ? { editPlan } : {}), ...(editTelemetry ? { editTelemetry } : {}),
           ...(contentPackaging ? { contentPackaging } : {})
         }, update: {}
-      });
+      }); } catch (error) {
+        // A concurrent retry may have committed the identical variant. Reuse only
+        // after checking its canonical identity; never hide a different owner.
+        const winner = await this.prisma.generatedClip.findUnique({ where: variantWhere });
+        if (winner?.objectKey === objectKey && winner.templateId === (options?.templateId ?? null))
+          clip = winner;
+        else throw new ClipInfrastructureError('PERSISTENCE_FAILED',
+          `GeneratedClip persistence failed for ${variantKey}`, error);
+      }
       if (job && editTelemetry && typeof editTelemetry === 'object' &&
         !Array.isArray(editTelemetry)) {
         const previousWrite = this.telemetryWrites.get(job.id) ?? Promise.resolve();
@@ -409,16 +497,24 @@ export class ClipExportService {
   private async renderEdited(video: Video, candidate: ClipCandidate,
     job: { aiMode: AiProcessingMode | null } | null, sourcePath: string, directory: string,
     aspectRatio: ReturnType<typeof parseOutputAspectRatio>, targetPlatform: TargetPlatform | null,
-    rank?: number) {
+    rank?: number, templateId?: string, acceptDegradedQuality = false) {
     const processingType = 'EDITED_CLIPS' as const;
     const candidateStarted = Date.now();
+    const sourceProbe = await probeMedia(sourcePath);
+    const sourceWindow = clampEditWindowToSource(candidate.startTime, candidate.endTime,
+      sourceProbe.videoDurationSec ?? sourceProbe.durationSec ?? Number.NaN);
+    if (sourceWindow.candidateEnd < candidate.endTime - 1e-6) {
+      this.logger.warn(JSON.stringify({ event: 'clip_source_trim_clamped', videoId: video.id,
+        candidateId: candidate.id, previousEnd: candidate.endTime,
+        correctedEnd: sourceWindow.candidateEnd,
+        probedDurationSec: sourceProbe.videoDurationSec ?? sourceProbe.durationSec }));
+      candidate = { ...candidate, endTime: sourceWindow.candidateEnd };
+    }
     this.logger.log(JSON.stringify({ event: 'clip_candidate_stage', videoId: video.id,
       candidateId: candidate.id, stage: 'PLANNING' }));
-    const windowStart = Math.max(0, candidate.startTime - EDIT_WINDOW_PADDING_SEC);
-    const windowEnd = Math.min(video.duration ?? candidate.endTime + EDIT_WINDOW_PADDING_SEC,
-      candidate.endTime + EDIT_WINDOW_PADDING_SEC);
+    const windowStart = sourceWindow.windowStart;
+    const windowEnd = sourceWindow.windowEnd;
     const windowPath = join(directory, 'edit-window.mp4');
-    const window = await exportSourceWindow(sourcePath, windowPath, windowStart, windowEnd);
     const context = await this.prisma.video.findUniqueOrThrow({ where: { id: video.id },
       select: { transcript: { include: { segments: { orderBy: { position: 'asc' } } } },
         understanding: { select: { summary: true, mainTopic: true, contentType: true } },
@@ -429,6 +525,23 @@ export class ClipExportService {
     const words = timedWords(segments, candidate.startTime, candidate.endTime);
     const windowWords = timedWords(segments, windowStart, windowEnd)
       .filter((word) => word.start >= windowStart && word.end <= windowEnd);
+    // Transcript-only rejection precedes even the intermediate FFmpeg encode.
+    const boundaryPrecheck = optimizeEditBoundaries({ words: windowWords,
+      candidateStart: candidate.startTime, candidateEnd: candidate.endTime, windowStart, windowEnd,
+      planCuts: [], hints: { loopSuitable: false } });
+    if (!boundaryPrecheck.clipStartNatural && !boundaryPrecheck.clipStartContextComplete) {
+      const report = { preRenderClassification: 'SKIP_BEFORE_RENDER', candidateSkippedBeforeRender: true,
+        candidateId: candidate.id, rank, preRenderRejectReason: 'UNREPAIRABLE_START_CONTEXT',
+        preRenderRejectReasons: ['UNREPAIRABLE_START_CONTEXT'],
+        timeSpentBeforeRejectMs: Date.now() - candidateStarted, llmCallsBeforeReject: 0,
+        analysisMsBeforeReject: 0, preRenderRejectedCount: 1, skippedBeforeRenderCount: 1,
+        preRenderRepairCount: boundaryPrecheck.openingRepairAttempted ? 1 : 0,
+        fullRenderAttempts: 0, gradingRepairAttempts: 0, gradingRepairRenderMs: 0,
+        wastedRenderMs: 0, boundary: boundaryPrecheck };
+      this.logger.warn(JSON.stringify({ event: 'candidatePreRenderRejected', ...report }));
+      throw new EditQualityError('Edited clip rejected before source-window render: unusable start context', report);
+    }
+    const window = await exportSourceWindow(sourcePath, windowPath, windowStart, windowEnd);
     const candidateChunks = context.chunks.filter((chunk) =>
       chunk.startTime < candidate.endTime && chunk.endTime > candidate.startTime);
     let lastSpeaker: string | null = null;
@@ -459,24 +572,6 @@ export class ClipExportService {
         preRenderRepairCount: 0, fullRenderAttempts: 0, gradingRepairAttempts: 0,
         gradingRepairRenderMs: 0, wastedRenderMs: 0,
         sponsorSegmentDetected: true, sponsorSegmentTrimmed: false, sponsor });
-    // Run the existing deterministic boundary repair before the edit-plan LLM.
-    // If it still cannot make the opening natural and self-contained, rendering
-    // cannot improve it and this candidate should release its worker slot now.
-    const boundaryPrecheck = optimizeEditBoundaries({ words: windowWords,
-      candidateStart: candidate.startTime, candidateEnd: candidate.endTime, windowStart, windowEnd,
-      planCuts: [], hints: { loopSuitable: false } });
-    if (!boundaryPrecheck.clipStartNatural && !boundaryPrecheck.clipStartContextComplete) {
-      const report = { preRenderClassification: 'SKIP_BEFORE_RENDER', candidateSkippedBeforeRender: true,
-        candidateId: candidate.id, rank, preRenderRejectReason: 'UNREPAIRABLE_START_CONTEXT',
-        preRenderRejectReasons: ['UNREPAIRABLE_START_CONTEXT'],
-        timeSpentBeforeRejectMs: Date.now() - candidateStarted, llmCallsBeforeReject: 0,
-        analysisMsBeforeReject: analysisMs, preRenderRejectedCount: 1, skippedBeforeRenderCount: 1,
-        preRenderRepairCount: boundaryPrecheck.openingRepairAttempted ? 1 : 0,
-        fullRenderAttempts: 0, gradingRepairAttempts: 0, gradingRepairRenderMs: 0,
-        wastedRenderMs: 0, boundary: boundaryPrecheck };
-      this.logger.warn(JSON.stringify({ event: 'candidatePreRenderRejected', ...report }));
-      throw new EditQualityError('Edited clip rejected before planning: unusable start context', report);
-    }
     const preflightTimeline = buildEditedTimeline({ candidateStart: candidate.startTime,
       candidateEnd: candidate.endTime, rawStart: candidate.startTime, rawEnd: candidate.endTime,
       editedStart: boundaryPrecheck.editedStart, editedEnd: boundaryPrecheck.editedEnd,
@@ -543,7 +638,8 @@ export class ClipExportService {
     let hookRealignedMechanism = result.hookMechanism;
     const prepare = async (source: EditPlan, fromLuna: boolean,
       hookPool: EditPlanResult['hookCandidates']): Promise<PreparedEdit> => {
-      const plan = forceLandscapeEditorialFrame(source, window.width, window.height, targetPlatform);
+      const framed = forceLandscapeEditorialFrame(source, window.width, window.height, targetPlatform);
+      const plan = templateId === AUTOMATIC_RAW ? rawEditPlan(framed) : framed;
       const planCuts = plan.operations.filter((operation) =>
         operation.type === 'TRIM' || operation.type === 'REMOVE_SILENCE')
         .map((operation) => ({ start: operation.startSec, end: operation.endSec }));
@@ -618,11 +714,22 @@ export class ClipExportService {
       boundary, timeline, loop };
     };
     const outputPath = join(directory, 'edited-clip.mp4');
+    // Automatic 2 never ships this render: it is the card's temporary preview and the
+    // source of the editable plan, and the canonical Automatic 2 export (with its own QA
+    // and repair pass) replaces it. So it is encoded cheaply and Automatic 1's pixel QA
+    // (hook, subtitle, background, camera-transition checks of a layout Automatic 2
+    // discards) neither runs nor rejects the candidate. Automatic 1 is unchanged.
+    const temporaryPreview = templateId === 'AUTOMATIC_2';
     const render = (input: PreparedEdit) => this.executor.execute(windowPath, outputPath,
       input.plan, windowWords, [], [], speakerChangeTimes, { inputOffsetSec: windowStart,
         timeline: input.timeline, analysis, boundary: input.boundary, loop: input.loop,
         seed: candidate.rangeKey, candidateId: candidate.id, rank,
-        avoidMusicTrackIds: this.recentMusicTracks.get(video.id) ?? [] });
+        avoidMusicTrackIds: this.recentMusicTracks.get(video.id) ?? [],
+        ...(temporaryPreview ? { qa: false, previewEncode: true } : {}),
+        // Raw: Automatic 1's framing in the middle of the canvas on a plain dark surround.
+        ...(templateId === AUTOMATIC_RAW ? { sfxDisabled: true, gradeDisabled: true,
+          backgroundMode: 'DARK_NEUTRAL' as const } : {}),
+        ...(acceptDegradedQuality ? { acceptDegradedQuality: true } : {}) });
     let planResult = result;
     let prepared = await prepare(result.plan, result.source === 'LUNA', result.hookCandidates);
     let source = result.source;
@@ -695,7 +802,8 @@ export class ClipExportService {
     contentPackaging = this.contentPackager.finalize(contentPackaging,
       visual.hookText || planResult.hookFinalText, {
         hookVisible: measured.hook.hookVisibleAtFrame0 === true ||
-          measured.hook.hookVisibleWithin100ms === true,
+          measured.hook.hookVisibleWithin100ms === true ||
+          (temporaryPreview && visual.hookRendered === true),
         hookReadable: measured.hook.hookReadable,
         hookInsideSafeZone: measured.hook.hookInsideSafeZone,
         subjectVisible: (measured.subject.mainSubjectVisibleRatio ?? 1) >= .8,
@@ -957,6 +1065,11 @@ export class ClipExportService {
       candidateSkippedBeforeRender: quality.candidateSkippedBeforeRender,
       editingFallbackReason: fallbackReason,
       editingPlanLlmCalls: editMetrics.llmRequestCountByRole.editingPlan ?? 0,
+      ...(temporaryPreview ? { baseRenderRole: 'AUTOMATIC_2_TEMPORARY_PREVIEW',
+        baseRenderEncode: 'ultrafast/crf26', baseRenderQa: 'DEFERRED_TO_CANONICAL_EXPORT' } : {}),
+      ...(templateId === 'AUTOMATIC_2' ? { visualAnalysis: {
+        source: analysis.source, frames: analysis.frames,
+        shotBoundaries: analysis.shotBoundaries, ocrText: analysis.ocrText } } : {}),
       validatorWarnings: result.warnings };
     this.logger.log(JSON.stringify({ event: 'edited_clip_visual_quality',
       videoId: video.id, rangeKey: candidate.rangeKey,

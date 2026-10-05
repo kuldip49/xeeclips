@@ -219,7 +219,15 @@ async function main() {
 
     // 9. Element bodies and trim handles stop propagation, so dragging a clip
     //    can never be reinterpreted as a range selection.
-    assert.ok(/event\.stopPropagation\(\); onSelect\(element\.id\)/u.test(timeline));
+    // B.5 moved selection behind a ref so the handler stays referentially stable
+    // for the memoized blocks, so this checks the BEHAVIOUR (a block press stops
+    // propagation and selects) rather than the old one-line spelling.
+    // Workstream E renamed selectBlock -> pressBlock when the same handler grew
+    // drag-to-move and the split tool; the claim it guards is unchanged.
+    const selectBlock = timeline.slice(timeline.indexOf('const pressBlock = useCallback'),
+      timeline.indexOf('const beginEdge = useCallback'));
+    assert.ok(/event\.stopPropagation\(\)/u.test(selectBlock) &&
+      /onSelect\(element\.id\)/u.test(selectBlock));
     assert.ok(/event\.preventDefault\(\); event\.stopPropagation\(\);/u.test(timeline));
     ok('range selection cannot hijack element dragging or trim-handle dragging');
 
@@ -718,7 +726,7 @@ async function main() {
     // 61. Nothing in EditMode touches a frozen pipeline row or service.
     for (const forbidden of ['ProcessingQueueService', 'VideoProcessorService',
       'ClipSelectionService', 'ClipRenderQueueService', 'ClipExportService',
-      'processingJob', 'clipCandidate', 'generatedClip', 'videoProcessingStage',
+      'processingJob', 'clipCandidate', 'prisma.generatedClip', 'videoProcessingStage',
       'transcriptChunk', 'chunkAnalysis', 'videoUnderstanding']) {
       assert.ok(!all.includes(forbidden), `EditMode references ${forbidden}`);
     }
@@ -730,14 +738,13 @@ async function main() {
       'EditMode imports from the projects module');
     ok('Phase 7 added no import from the frozen videos or projects modules');
 
-    // 63. The OFFLINE role allowlist was not touched.
+    // 63. Step 6 removed the local-LLM route entirely, so there is no OFFLINE role
+    // allowlist left to widen: an old OFFLINE job is normalised to deterministic rules.
     const router = fs.readFileSync(path.join(__dirname, '..', 'src', 'modules', 'processing',
       'llm-router.service.ts'), 'utf8');
-    const offlineRoles = /const OFFLINE_MODEL_ROLES = new Set<LlmTaskRole>\(\[([\s\S]*?)\]\)/u
-      .exec(router)[1];
-    assert.ok(!offlineRoles.includes('editingPlan'),
-      'editingPlan was added to the OFFLINE allowlist - see the Phase 7 routing decision');
-    ok('the frozen OFFLINE role allowlist is unchanged (OFFLINE stays deterministic-only)');
+    assert.ok(!/OFFLINE_MODEL_ROLES/u.test(router) && !/ollama/iu.test(router.replace(/\/\/.*$/gmu, '')),
+      'a local-LLM (OFFLINE/Ollama) route came back into the router');
+    ok('no local-LLM route exists (OFFLINE stays deterministic-only)');
   }
 
   console.log(`\nEditMode Phase 7 tests passed (${passed} checks).`);

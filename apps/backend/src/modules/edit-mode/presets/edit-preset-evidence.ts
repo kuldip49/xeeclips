@@ -67,9 +67,12 @@ const track = (value: unknown, timestamp: number): VisualTrack | null => {
   const shape = { x: finite(item.x), y: finite(item.y), w: finite(item.w), h: finite(item.h) };
   if (!(shape.w > 0) || !(shape.h > 0)) return null;
   return { timestamp, ...shape,
-    confidence: item.score == null ? undefined : finite(item.score),
-    mouthActivity: item.mouth_activity == null ? undefined : finite(item.mouth_activity),
-    trackId: item.track_id == null ? undefined : String(item.track_id) };
+    confidence: item.score == null && item.confidence == null ? undefined
+      : finite(item.score ?? item.confidence),
+    mouthActivity: item.mouth_activity == null && item.mouthActivity == null ? undefined
+      : finite(item.mouth_activity ?? item.mouthActivity),
+    trackId: item.track_id == null && item.trackId == null ? undefined
+      : String(item.track_id ?? item.trackId) };
 };
 
 /** The cached EditMode analysis stores the AI service response verbatim, so the
@@ -93,9 +96,14 @@ export function analysisFramesFromCache(value: unknown): { frames: AnalysisFrame
       textCoverage: finite(frame.text_coverage ?? frame.textCoverage),
       textBoxes: list('text_boxes').concat(list('textBoxes'))
         .map(box).filter((item): item is TextBox => !!item),
-      graphicBoxes: list('graphic_boxes').map(box).filter((item): item is TextBox => !!item),
+      graphicBoxes: list('graphic_boxes').concat(list('graphicBoxes'))
+        .map(box).filter((item): item is TextBox => !!item),
       ocrLines: list('ocr_lines').concat(list('ocrLines')).map(String).filter(Boolean),
-      ocrCoverage: frame.ocr_coverage == null ? undefined : finite(frame.ocr_coverage)
+      ocrCoverage: frame.ocr_coverage == null && frame.ocrCoverage == null ? undefined
+        : finite(frame.ocr_coverage ?? frame.ocrCoverage),
+      edgeDensity: frame.edge_density == null && frame.edgeDensity == null ? undefined
+        : finite(frame.edge_density ?? frame.edgeDensity),
+      visualLabels: list('visual_labels').concat(list('visualLabels')).map(String).filter(Boolean)
     }];
   }).sort((left, right) => left.t - right.t);
   const shotBoundaries = (Array.isArray(record.shotBoundaries) ? record.shotBoundaries

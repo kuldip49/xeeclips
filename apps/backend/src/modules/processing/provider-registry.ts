@@ -11,15 +11,12 @@ export function normalizeFailureCategory(kind: LlmFailureKind): NormalizedFailur
   if (kind === 'QUOTA_FAILURE' || kind === 'QUOTA_EXHAUSTED_FAILURE') return 'QUOTA_EXHAUSTED';
   if (kind === 'RATE_LIMIT_FAILURE') return 'RATE_LIMIT_FAILURE';
   if (kind === 'PROVIDER_5XX_FAILURE') return 'PROVIDER_5XX_FAILURE';
-  if (kind === 'PROVIDER_SATURATION_FAILURE' || kind === 'LOCAL_PROVIDER_UNAVAILABLE' ||
-    kind === 'CIRCUIT_OPEN') return 'PROVIDER_UNAVAILABLE';
-  if (kind === 'TIMEOUT_FAILURE' || kind === 'LOCAL_TIMEOUT_FAILURE') return 'TIMEOUT_FAILURE';
+  if (kind === 'PROVIDER_SATURATION_FAILURE' || kind === 'CIRCUIT_OPEN') return 'PROVIDER_UNAVAILABLE';
+  if (kind === 'TIMEOUT_FAILURE') return 'TIMEOUT_FAILURE';
   if (kind === 'TRUNCATED_RESPONSE_FAILURE') return 'TRUNCATED_RESPONSE_FAILURE';
-  if (kind === 'SCHEMA_FAILURE' || kind === 'LOCAL_SCHEMA_FAILURE' ||
-    kind === 'MALFORMED_RESPONSE_FAILURE') return 'SCHEMA_FAILURE';
-  if (kind === 'MODEL_NOT_FOUND' || kind === 'LOCAL_MODEL_NOT_FOUND') return 'MODEL_NOT_FOUND';
-  if (kind === 'NETWORK_FAILURE' || kind === 'LOCAL_CONNECTION_FAILURE')
-    return 'CONNECTION_FAILURE';
+  if (kind === 'SCHEMA_FAILURE' || kind === 'MALFORMED_RESPONSE_FAILURE') return 'SCHEMA_FAILURE';
+  if (kind === 'MODEL_NOT_FOUND') return 'MODEL_NOT_FOUND';
+  if (kind === 'NETWORK_FAILURE') return 'CONNECTION_FAILURE';
   return 'UNKNOWN_PROVIDER_FAILURE';
 }
 
@@ -118,8 +115,9 @@ class EnvironmentProviderAdapter implements LlmProviderAdapter {
     const legacyConcurrency = this.definition.legacyConcurrency?.(role);
     return { provider: this.id, apiKey: (process.env[this.setting + '_API_KEY'] || '').trim(),
       baseUrl: (process.env[this.setting + '_BASE_URL'] || this.definition.baseUrl).replace(/\/+$/u, ''),
-      // ONLINE's active provider/model contract is fixed: OpenAI GPT-5.6 Luna.
-      model: this.id === 'openai' ? 'gpt-5.6-luna' : this.modelFor(role), apiStyle: this.definition.apiStyle,
+      // ONLINE is OpenAI only. The model is environment-driven (OPENAI_MODEL or
+      // OPENAI_<ROLE>_MODEL) with the documented default when unset.
+      model: this.modelFor(role), apiStyle: this.definition.apiStyle,
       timeoutMs: bounded(this.setting + '_TIMEOUT_MS', bounded('LLM_TIMEOUT_MS', 90000, 1000), 1000),
       maxRetries: 0, retryBaseDelayMs: bounded('LLM_RETRY_BASE_DELAY_MS', 1000),
       concurrency: this.update.concurrency ?? bounded(this.setting + '_CONCURRENCY',
@@ -175,8 +173,9 @@ export class ProviderRegistry {
       () => this.overrides.get(definition.id)));
   }
   register(provider: LlmProviderAdapter) {
-    if (provider.id === 'ollama' || provider.id === 'local')
-      throw new Error('Local providers cannot enter the ONLINE registry');
+    // Step 6 production policy: no local LLM provider can ever be registered.
+    if (['ollama', 'local', 'qwen', 'lmstudio'].includes(provider.id.toLowerCase()))
+      throw new Error('Local LLM providers are not supported in production');
     this.providers.set(provider.id, provider);
   }
   get(id: string) { return this.providers.get(id.toLowerCase()); }

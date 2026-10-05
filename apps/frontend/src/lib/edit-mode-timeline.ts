@@ -35,8 +35,11 @@ export function resolvePreviewPosition(elements: EditElement[], timelineTime: nu
   const safeTime = Math.max(0, Math.min(timelineTime, Math.max(0, duration - 0.0001)));
   const element = videos.find((item) => safeTime >= item.startTime &&
     safeTime < item.startTime + item.duration) ?? videos.at(-1)!;
-  return { element, timelineTime: safeTime,
-    sourceTime: element.trimStart + Math.max(0, safeTime - element.startTime) };
+  // A sped-up segment covers more source seconds per timeline second, so the
+  // mapping scales by the element's playback rate. At 1x this is unchanged.
+  const speed = Number(element.properties.speed ?? 1) || 1;
+  return { element, timelineTime: safeTime, speed,
+    sourceTime: element.trimStart + Math.max(0, safeTime - element.startTime) * speed };
 }
 
 export function historyAvailability(history: Array<{ id: string; action: string; revision: number;
@@ -45,10 +48,19 @@ export function historyAvailability(history: Array<{ id: string; action: string;
   // an action missing here leaves Undo greyed out for a step the backend would
   // happily undo. APPLY_ASSISTANT_EDIT is one AI chat turn, undone as one step.
   const manual = new Set(['TRIM_ELEMENT', 'SPLIT_ELEMENT', 'DELETE_ELEMENT', 'MOVE_ELEMENT',
-    'APPLY_PRESET', 'APPLY_ASSISTANT_EDIT',
+    'ADJUST_SOURCE_RANGE',
+    'APPLY_PRESET', 'APPLY_ASSISTANT_EDIT', 'APPLY_TEMPLATE', 'SET_TEXT_CASE',
     'ADD_IMAGE', 'ADD_LOGO', 'ADD_TEXT', 'ADD_AUDIO', 'RESIZE_ELEMENT', 'SET_ELEMENT_TIMING',
     'SET_ELEMENT_OPACITY', 'SET_ELEMENT_Z_INDEX', 'UPDATE_TEXT', 'SET_AUDIO_VOLUME',
-    'SET_AUDIO_MUTED', 'SET_AUDIO_FADE', 'DUPLICATE_ELEMENT', 'REMOVE_ELEMENT']);
+    'SET_AUDIO_MUTED', 'SET_AUDIO_FADE', 'DUPLICATE_ELEMENT', 'REMOVE_ELEMENT',
+    'SET_VIDEO_CROP', 'SET_VIDEO_ROTATION', 'SET_VIDEO_FLIP', 'SET_VIDEO_SCALE',
+    'SET_VIDEO_POSITION', 'SET_VIDEO_FRAMING', 'SET_SPEED',
+    'SET_TEXT_CONTENT', 'SET_TEXT_FONT', 'SET_TEXT_SIZE', 'SET_TEXT_WEIGHT', 'SET_TEXT_COLOR',
+    'SET_TEXT_ALIGNMENT', 'SET_TEXT_STROKE', 'SET_TEXT_SHADOW', 'SET_TEXT_BACKGROUND',
+    'SET_TEXT_SPACING', 'SET_TEXT_STYLE_PRESET', 'SET_TEXT_RUNS',
+    'GENERATE_CAPTIONS', 'REMOVE_CAPTIONS', 'SET_CAPTIONS_VISIBLE', 'SET_CAPTION_TEXT',
+    'SPLIT_CAPTION', 'MERGE_CAPTION', 'SET_CAPTION_STYLE', 'SET_CAPTION_ACTIVE_WORD',
+    'APPLY_CAPTION_STYLE_TO_ALL']);
   const active: string[] = [];
   let redo: string[] = [];
   [...history].sort((left, right) => left.revision - right.revision).forEach((entry) => {

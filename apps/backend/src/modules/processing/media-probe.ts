@@ -78,6 +78,7 @@ type ProbeStream = {
   avg_frame_rate?: string;
   r_frame_rate?: string;
   bit_rate?: string;
+  duration?: string;
 };
 
 type ProbeFormat = { duration?: string; bit_rate?: string; format_name?: string };
@@ -101,6 +102,8 @@ export type MediaProbeResult = {
   videoStreamIndex: number | null;
   audioStreamIndex: number | null;
   durationSec: number | null;
+  /** Video stream end when known; containers can have a longer trailing audio stream. */
+  videoDurationSec: number | null;
   formatName: string | null;
   fps: number | undefined;
   width: number | null;
@@ -140,6 +143,7 @@ export async function probeMedia(filePath: string): Promise<MediaProbeResult> {
   const videoStream = streams.find((item) => item.codec_type === 'video');
   const audioStream = streams.find((item) => item.codec_type === 'audio');
   const durationSec = Number(probe.format?.duration);
+  const videoDurationSec = Number(videoStream?.duration);
   const bitrate = probe.format?.bit_rate ?? videoStream?.bit_rate;
 
   return {
@@ -150,6 +154,8 @@ export async function probeMedia(filePath: string): Promise<MediaProbeResult> {
     videoStreamIndex: typeof videoStream?.index === 'number' ? videoStream.index : null,
     audioStreamIndex: typeof audioStream?.index === 'number' ? audioStream.index : null,
     durationSec: Number.isFinite(durationSec) ? durationSec : null,
+    videoDurationSec: Number.isFinite(videoDurationSec) && videoDurationSec > 0
+      ? videoDurationSec : null,
     formatName: probe.format?.format_name ?? null,
     fps: parseFrameRate(videoStream?.avg_frame_rate ?? videoStream?.r_frame_rate),
     width: videoStream?.width ?? null,

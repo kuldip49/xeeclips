@@ -1,9 +1,14 @@
 const assert = require('node:assert/strict');
 const { EditModeService } = require('../dist/modules/edit-mode/edit-mode.service.js');
+// The real error class, so the service's `instanceof` unique-name guard fires
+// against the harness exactly as it does against Postgres.
+const prismaKnownRequestError =
+  require('@prisma/client').Prisma.PrismaClientKnownRequestError.prototype;
 
 function createHarness() {
   const rows = {
     editProjects: new Map(), editAssets: new Map(), editElements: new Map(), editHistory: new Map(),
+    editTemplates: new Map(),
     processingJobs: new Map([['existing-job', {}]]),
     clipCandidates: new Map([['existing-candidate', {}]]),
     generatedClips: new Map([['existing-clip', {}]])
@@ -48,6 +53,12 @@ function createHarness() {
         const updated = { ...row, ...data, updatedAt: new Date() };
         rows.editProjects.set(where.id, updated); return { ...updated };
       },
+      updateMany: async ({ where, data }) => {
+        const row = rows.editProjects.get(where.id);
+        if (!row || (where.revision !== undefined && row.revision !== where.revision)) return { count: 0 };
+        rows.editProjects.set(where.id, { ...row, ...data, updatedAt: new Date() });
+        return { count: 1 };
+      },
       delete: async ({ where }) => { const row = rows.editProjects.get(where.id); rows.editProjects.delete(where.id); return row; }
     },
     editAsset: {
@@ -70,6 +81,64 @@ function createHarness() {
       deleteMany: async ({ where }) => { for (const [key, value] of rows.editElements)
         if (value.editProjectId === where.editProjectId) rows.editElements.delete(key); },
       createMany: async ({ data }) => { for (const value of data) rows.editElements.set(value.id, { ...value }); }
+    },
+    // Workstream F: user-saved style templates. Deliberately unrelated to
+    // EditProject - a template is portable and outlives any one project.
+    editTemplate: {
+      create: async ({ data }) => {
+        for (const row of rows.editTemplates.values()) {
+          if (row.ownerScope === (data.ownerScope ?? 'LOCAL') && row.name === data.name) {
+            const error = new Error('Unique constraint failed');
+            error.code = 'P2002';
+            error.clientVersion = 'test';
+            Object.setPrototypeOf(error, prismaKnownRequestError);
+            throw error;
+          }
+        }
+        const now = new Date();
+        const row = { id: id('template'), description: '', ownerScope: 'LOCAL', version: 1,
+          ...data, createdAt: now, updatedAt: now };
+        rows.editTemplates.set(row.id, row);
+        return { ...row };
+      },
+      findUnique: async ({ where }) => {
+        const row = rows.editTemplates.get(where.id);
+        return row ? { ...row } : null;
+      },
+      findFirst: async ({ where }) => {
+        for (const row of rows.editTemplates.values()) {
+          if (row.ownerScope === where.ownerScope && row.name === where.name) return { ...row };
+        }
+        return null;
+      },
+      findMany: async ({ where }) => [...rows.editTemplates.values()]
+        .filter((row) => !where?.ownerScope || row.ownerScope === where.ownerScope)
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map((row) => ({ ...row })),
+      count: async ({ where }) => [...rows.editTemplates.values()]
+        .filter((row) => !where?.ownerScope || row.ownerScope === where.ownerScope).length,
+      update: async ({ where, data }) => {
+        const current = rows.editTemplates.get(where.id);
+        if (!current) throw new Error('not found');
+        for (const row of rows.editTemplates.values()) {
+          if (row.id !== where.id && row.ownerScope === current.ownerScope &&
+            row.name === data.name) {
+            const error = new Error('Unique constraint failed');
+            error.code = 'P2002';
+            error.clientVersion = 'test';
+            Object.setPrototypeOf(error, prismaKnownRequestError);
+            throw error;
+          }
+        }
+        const row = { ...current, ...data, updatedAt: new Date() };
+        rows.editTemplates.set(where.id, row);
+        return { ...row };
+      },
+      delete: async ({ where }) => {
+        const row = rows.editTemplates.get(where.id);
+        rows.editTemplates.delete(where.id);
+        return row;
+      }
     },
     editHistory: {
       create: async ({ data }) => { const key = `${data.editProjectId}:${data.revision}`;

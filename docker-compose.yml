@@ -4,13 +4,14 @@ services:
       context: .
       dockerfile: apps/frontend/Dockerfile
     container_name: ai-content-frontend
+    restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:4000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
       SERVER_API_URL: http://backend:4000
       ENABLE_VISUAL_ANALYSIS: ${ENABLE_VISUAL_ANALYSIS:-false}
       SHOW_DEVELOPER_DIAGNOSTICS: ${SHOW_DEVELOPER_DIAGNOSTICS:-false}
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
     depends_on:
       backend:
         condition: service_started
@@ -26,10 +27,13 @@ services:
     build:
       context: .
       dockerfile: apps/backend/Dockerfile
+      args:
+        ENABLE_YOUTUBE_IMPORT: ${YOUTUBE_IMPORT_APPROVED:-false}
     container_name: ai-content-backend
+    restart: unless-stopped
     environment:
       PORT: 4000
-      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ai_content_platform
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in the ignored .env file}
       REDIS_URL: redis://redis:6379
       VIDEO_WORKER_CONCURRENCY: ${VIDEO_WORKER_CONCURRENCY:-1}
       CLIP_RENDER_CONCURRENCY: ${CLIP_RENDER_CONCURRENCY:-1}
@@ -38,6 +42,15 @@ services:
       AI_SERVICE_TIMEOUT_MS: ${AI_SERVICE_TIMEOUT_MS:-1800000}
       ENABLE_VISUAL_ANALYSIS: ${ENABLE_VISUAL_ANALYSIS:-false}
       FORCE_REPROCESS: ${FORCE_REPROCESS:-false}
+      YOUTUBE_IMPORT_APPROVED: ${YOUTUBE_IMPORT_APPROVED:-false}
+      YOUTUBE_IMPORT_BINARY: ${YOUTUBE_IMPORT_BINARY:-yt-dlp}
+      YOUTUBE_IMPORT_CONNECT_TIMEOUT: ${YOUTUBE_IMPORT_CONNECT_TIMEOUT:-30}
+      YOUTUBE_IMPORT_TOTAL_TIMEOUT: ${YOUTUBE_IMPORT_TOTAL_TIMEOUT:-10800}
+      YOUTUBE_IMPORT_STALL_TIMEOUT: ${YOUTUBE_IMPORT_STALL_TIMEOUT:-300}
+      YOUTUBE_IMPORT_MAX_DURATION: ${YOUTUBE_IMPORT_MAX_DURATION:-7200}
+      YOUTUBE_IMPORT_MAX_BYTES: ${YOUTUBE_IMPORT_MAX_BYTES:-4294967296}
+      YOUTUBE_IMPORT_MAX_ATTEMPTS: ${YOUTUBE_IMPORT_MAX_ATTEMPTS:-3}
+      YOUTUBE_IMPORT_CONCURRENCY: ${YOUTUBE_IMPORT_CONCURRENCY:-2}
       VISUAL_INTELLIGENCE_ENABLED: ${VISUAL_INTELLIGENCE_ENABLED:-true}
       VISUAL_ANALYSIS_PROFILE: ${VISUAL_ANALYSIS_PROFILE:-BALANCED}
       VISUAL_SAMPLE_INTERVAL_SEC: ${VISUAL_SAMPLE_INTERVAL_SEC:-2.75}
@@ -99,21 +112,7 @@ services:
       GOOGLE_CONCURRENCY: ${GOOGLE_CONCURRENCY:-2}
       GOOGLE_MULTIMODAL_FAILOVER_ENABLED: ${GOOGLE_MULTIMODAL_FAILOVER_ENABLED:-true}
       NVIDIA_OMNI_TEXT_FAILOVER_ENABLED: ${NVIDIA_OMNI_TEXT_FAILOVER_ENABLED:-false}
-      LOCAL_LLM_ENABLED: ${LOCAL_LLM_ENABLED:-false}
-      LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://host.docker.internal:11434}
-      LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen3:4b}
-      LOCAL_LLM_TIMEOUT_MS: ${LOCAL_LLM_TIMEOUT_MS:-60000}
-      LOCAL_LLM_MULTIMODAL_UNDERSTANDING_TIMEOUT_MS: ${LOCAL_LLM_MULTIMODAL_UNDERSTANDING_TIMEOUT_MS:-20000}
-      LOCAL_LLM_WHOLE_VIDEO_UNDERSTANDING_TIMEOUT_MS: ${LOCAL_LLM_WHOLE_VIDEO_UNDERSTANDING_TIMEOUT_MS:-30000}
-      LOCAL_LLM_CLIP_UNDERSTANDING_TIMEOUT_MS: ${LOCAL_LLM_CLIP_UNDERSTANDING_TIMEOUT_MS:-45000}
-      LOCAL_LLM_CREATIVE_GENERATION_TIMEOUT_MS: ${LOCAL_LLM_CREATIVE_GENERATION_TIMEOUT_MS:-45000}
-      LOCAL_LLM_CRITIC_TIMEOUT_MS: ${LOCAL_LLM_CRITIC_TIMEOUT_MS:-35000}
-      LOCAL_LLM_COMPONENT_REPAIR_TIMEOUT_MS: ${LOCAL_LLM_COMPONENT_REPAIR_TIMEOUT_MS:-30000}
       LOCAL_WHOLE_VIDEO_INPUT_CHARS: ${LOCAL_WHOLE_VIDEO_INPUT_CHARS:-12000}
-      LOCAL_LLM_MAX_CONCURRENCY: ${LOCAL_LLM_MAX_CONCURRENCY:-1}
-      LOCAL_LLM_KEEP_ALIVE: ${LOCAL_LLM_KEEP_ALIVE:-5m}
-      LOCAL_LLM_CIRCUIT_FAILURE_THRESHOLD: ${LOCAL_LLM_CIRCUIT_FAILURE_THRESHOLD:-2}
-      LOCAL_LLM_CIRCUIT_COOLDOWN_MS: ${LOCAL_LLM_CIRCUIT_COOLDOWN_MS:-30000}
       LLM_CIRCUIT_FAILURE_THRESHOLD: ${LLM_CIRCUIT_FAILURE_THRESHOLD:-3}
       LLM_CIRCUIT_WINDOW_MS: ${LLM_CIRCUIT_WINDOW_MS:-60000}
       LLM_CIRCUIT_COOLDOWN_MS: ${LLM_CIRCUIT_COOLDOWN_MS:-45000}
@@ -152,11 +151,13 @@ services:
       CLIP_MIN_STRONG_SCORE: ${CLIP_MIN_STRONG_SCORE:-60}
       MINIO_ENDPOINT: minio
       MINIO_PORT: 9000
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in the ignored .env file}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      UPLOAD_STAGING_DIR: /app/upload-staging
       MINIO_BUCKET: ai-content-platform
     ports:
-      - "${BACKEND_PORT:-4000}:4000"
+      - "127.0.0.1:${BACKEND_PORT:-4000}:4000"
     volumes:
       # Your curated music folders, mounted read-only: drop tracks in, run
       # `npm run music:scan` in apps/backend, and restart the backend - no rebuild.
@@ -164,6 +165,7 @@ services:
       # Your sound-design assets, mounted read-only: the folder a file sits in is
       # its category, so no scan step is needed - just restart the backend.
       - ./apps/backend/assets/sfx:/app/apps/backend/assets/sfx:ro
+      - upload_staging:/app/upload-staging
     depends_on:
       postgres:
         condition: service_healthy
@@ -178,12 +180,13 @@ services:
     build:
       context: ./apps/ai-service
     container_name: ai-content-ai-service
+    restart: unless-stopped
     environment:
       PORT: 8000
       MINIO_ENDPOINT: minio
       MINIO_PORT: 9000
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in the ignored .env file}
       WHISPER_MODEL: ${WHISPER_MODEL:-base}
       WHISPER_MODEL_PATH: ${WHISPER_MODEL_PATH:-/models/whisper-base}
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
@@ -228,7 +231,7 @@ services:
       - -c
       - >-
         python scripts/setup_visual_models.py;
-        exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+        exec uvicorn app.main:app --host 0.0.0.0 --port 8000
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -236,7 +239,7 @@ services:
       retries: 3
       start_period: 60s
     ports:
-      - "${AI_SERVICE_PORT:-8000}:8000"
+      - "127.0.0.1:${AI_SERVICE_PORT:-8000}:8000"
 
     depends_on:
       minio:
@@ -245,12 +248,13 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: ai-content-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ai_content_platform}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the ignored .env file}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -262,8 +266,9 @@ services:
   redis:
     image: redis:7-alpine
     container_name: ai-content-redis
+    restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -275,13 +280,14 @@ services:
   minio:
     image: minio/minio:latest
     container_name: ai-content-minio
+    restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in the ignored .env file}
     ports:
-      - "9000:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -298,7 +304,7 @@ services:
         condition: service_started
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in the ignored .env file}
       MINIO_BUCKET: ${MINIO_BUCKET:-ai-content-platform}
     entrypoint: >
       /bin/sh -c "
@@ -311,3 +317,4 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+  upload_staging:

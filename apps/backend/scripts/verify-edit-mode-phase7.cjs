@@ -23,6 +23,7 @@ const { PrismaClient } = require('@prisma/client');
 const { StorageService } = require('../dist/modules/storage/storage.service');
 const { EditModeService } = require('../dist/modules/edit-mode/edit-mode.service');
 const { EditChatService } = require('../dist/modules/edit-mode/chat/edit-chat.service');
+const { EditTemplateService } = require('../dist/modules/edit-mode/edit-template.service');
 const {
   EditChatProposalStore
 } = require('../dist/modules/edit-mode/chat/edit-chat-proposal-store');
@@ -92,7 +93,8 @@ async function main() {
   const editMode = new EditModeService(prisma, storage, { analyze: async () => {
     throw new Error('Phase 7 verification must never re-analyse'); } });
   const proposals = new EditChatProposalStore();
-  const chat = new EditChatService(prisma, editMode, proposals, NO_LLM);
+  const chat = new EditChatService(prisma, editMode, proposals, NO_LLM,
+    new EditTemplateService(prisma, editMode));
   const render = new EditModeRenderService(prisma, storage);
   const recovery = new EditModeRecoveryService(prisma, storage);
 
@@ -340,7 +342,8 @@ async function main() {
       // that planned it: the same thing a restarted process gets.
       const restartedStore = new EditChatProposalStore();
       await wait(500);
-      const restartedChat = new EditChatService(prisma, editMode, restartedStore, NO_LLM);
+      const restartedChat = new EditChatService(prisma, editMode, restartedStore, NO_LLM,
+        new EditTemplateService(prisma, editMode));
 
       if (restartedStore.durable) {
         const applied = await restartedChat.apply(project.id, {

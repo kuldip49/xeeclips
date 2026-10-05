@@ -35,7 +35,9 @@ function frontendSuite() {
     ['back', 'early'], 'visibility is time-based and zIndex sorted');
   const preview = fs.readFileSync(path.join(__dirname,
     '../../frontend/src/components/edit-mode/edit-preview.tsx'), 'utf8');
-  assert(preview.includes("kind: 'move' | 'resize'"));
+  // Preview gestures stay a typed union. Workstream C widened it with 'rotate',
+  // so this pins the two Phase 3 gestures rather than the whole union.
+  assert(preview.includes("'move' | 'resize'"));
   assert(preview.includes('onPointerUp') || preview.includes("addEventListener('pointerup'"));
 }
 

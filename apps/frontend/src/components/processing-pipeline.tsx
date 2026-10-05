@@ -40,9 +40,9 @@ export function ProcessingPipeline({
   const activeStage = video.processingStages?.find((stage) => stage.status === 'PROCESSING');
   const activeLabel = stages.find((stage) => stage.name === activeStage?.stage)?.label;
   const aiMode = job?.aiMode ?? 'FALLBACK_ONLY';
-  const sourceLabel = aiMode === 'ONLINE' ? 'AI provider: OpenAI GPT-5.6 Luna'
-    : aiMode === 'OFFLINE' ? 'Processing engine: Qwen3 4B + deterministic analysis'
-      : 'Processing engine: Local deterministic pipeline';
+  const sourceLabel = aiMode === 'ONLINE'
+    ? 'AI provider: OpenAI (built-in rules take over automatically if it is unavailable)'
+    : 'Processing engine: built-in deterministic rules';
 
   return (
     <div className='grid gap-4 rounded-2xl border border-white/[.08] bg-[#0d111c] p-4 sm:p-5' aria-label='Video processing pipeline'>

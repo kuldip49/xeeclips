@@ -7,11 +7,15 @@ import { VideosService } from "./videos.service";
 import { ClipExportService } from './clip-export.service';
 import { ClipRenderQueueService } from './clip-render-queue.service';
 import { EditingModule } from '../editing/editing.module';
+import { VideoImportService } from './video-import.service';
+import { VideoImportController } from './video-import.controller';
+import { VideoUploadSessionService } from './video-upload-session.service';
 
 @Module({
   imports: [StorageModule, ProcessingModule, EditingModule],
-  controllers: [VideosController],
-  providers: [ClipExportService, ClipRenderQueueService, VideosService],
+  controllers: [VideosController, VideoImportController],
+  providers: [ClipExportService, ClipRenderQueueService, VideosService, VideoImportService,
+    VideoUploadSessionService],
   exports: [VideosService]
 })
 export class VideosModule {}

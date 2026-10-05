@@ -56,13 +56,14 @@ async function main() {
     assert.equal(calls.some(call => call.provider === provider), false);
 
   calls.length = 0;
+  // Step 6: a legacy OFFLINE job never reaches any model - there is no local LLM.
   const offlineMetrics = createPerformanceTelemetry('OFFLINE');
-  await performanceContext.run(offlineMetrics, () => router.generate({
+  await performanceContext.run(offlineMetrics, () => assert.rejects(() => router.generate({
     role: 'creativeGeneration', request: request('offline')
-  }));
+  }), error => error.kind === 'AI_MODE_FALLBACK_ONLY'));
   assert.equal(offlineMetrics.cloudLlmCalls, 0);
-  assert.equal(offlineMetrics.localLlmCalls, 1);
-  assert.deepEqual(calls.map(call => call.provider), ['ollama']);
+  assert.equal(offlineMetrics.localLlmCalls, 0);
+  assert.deepEqual(calls.map(call => call.provider), []);
 
   calls.length = 0;
   const fallbackMetrics = createPerformanceTelemetry('FALLBACK_ONLY');

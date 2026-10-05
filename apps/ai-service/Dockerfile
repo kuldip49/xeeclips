@@ -27,4 +27,4 @@ RUN if [ "$DOWNLOAD_VISUAL_MODELS" = "true" ]; then python scripts/setup_visual_
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

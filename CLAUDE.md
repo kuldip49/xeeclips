@@ -105,14 +105,14 @@ Stage order (see `PROJECT_STATE.md` for the authoritative, detailed history of e
 
 ### Multi-model LLM routing (`apps/backend/src/modules/processing/`)
 
-LLM calls are provider-neutral and routed per-task by `llm-router.service.ts` / `llm-provider.service.ts` /
-`provider-registry.ts`, with per-task cross-provider failover, bounded retries, per-model concurrency limits,
-and circuit-breaker cooldowns. Normal role assignment: an Omni/multimodal model for visual+transcript
-evidence, a reasoning model for clip/critic judgments, and a creative model for one structured candidate-pool
-generation request. When no configured provider succeeds, generation falls back to a deterministic
-(non-LLM) path rather than failing the job — this fallback is intentional, not a bug, and is exercised by
-`test-local-fallback-quality.cjs`. All provider keys/models are environment-driven (see `docker-compose.yml`
-for the full list of `LLM_*` / `NVIDIA_*` / `GOOGLE_*` / `OPENAI_*` / `LOCAL_LLM_*` vars) — never hardcode a
+Production semantic AI is the OpenAI API only (backend-only key, model from `OPENAI_MODEL`), routed per-task
+by `llm-router.service.ts` / `llm-provider.service.ts` / `provider-registry.ts` with bounded retries,
+concurrency limits and circuit-breaker cooldowns. There is **no local/Ollama/Qwen LLM route**: an old `OFFLINE`
+job is normalised to `FALLBACK_ONLY` by `normalizeAiProcessingMode`. (Faster-Whisper, OpenCV, YOLO and PaddleOCR
+in the AI service are ordinary local ML and stay.) When OpenAI cannot be used, generation falls back to a
+deterministic (non-LLM) path rather than failing the job — intentional, exercised by
+`test-local-fallback-quality.cjs` and `test-local-llm-routing.cjs` (now the production-policy test). User-facing
+AI failure states (401/429/timeout/network/5xx) come from `src/modules/ai/ai-availability.ts`. Never hardcode a
 model identifier or API key.
 
 ### Data model
@@ -124,9 +124,12 @@ cascading deletes throughout so re-processing a video never leaves orphaned rows
 
 ### Frontend
 
-`apps/frontend/src/app/projects/[id]` is the project workspace: it polls processing progress, then
-progressively loads transcript chunks, chunk analysis, visual analysis, understanding, and clip candidates as
-they become available, each panel with its own loading/empty/pending/failure/retry state.
+`apps/frontend/src/app/projects/[id]` is the unified workspace: upload → immediate source preview →
+optional look (Automatic edit / Clean cuts / template), component styles, reference video and brief →
+count → generate → result cards with Preview / Edit / Ask AI / Export (`components/generation/*`,
+`clip-creation-panel.tsx`). Edit and Ask AI open the same canonical EditProject in `app/edit-mode/[id]`
+(`?panel=ai` opens the AI editor). Any URL placed in the DOM must use `getPublicApiBaseUrl()` (SSR's
+`SERVER_API_URL` is not browser-reachable). Browser E2E: `apps/frontend/e2e/` (`npm run test:e2e`).
 
 ### AI service boundary
 

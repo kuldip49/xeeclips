@@ -15,7 +15,8 @@ const AUDIO_MIMES = new Set(['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wa
 export type ValidationContext = {
   assets: PlanAsset[];
   /** Source probe from the downloaded file, when the service has already read it. */
-  sourceProbe?: { hasVideo: boolean; hasAudio: boolean; durationSec: number | null } | null;
+  sourceProbe?: { hasVideo: boolean; hasAudio: boolean; durationSec: number | null;
+    videoDurationSec?: number | null } | null;
 };
 
 const fail = (code: ConstructorParameters<typeof EditExportError>[0], message: string,
@@ -41,7 +42,8 @@ export function validateRenderPlan(plan: RenderPlan, context: ValidationContext)
   if (!plan.videoSegments.length) {
     fail('INVALID_TIMELINE', 'The timeline has no playable video segment to export.');
   }
-  const sourceDuration = source?.duration ?? null;
+  const sourceDuration = context.sourceProbe?.videoDurationSec ??
+    context.sourceProbe?.durationSec ?? source?.duration ?? null;
   let cursor = 0;
   for (const segment of plan.videoSegments) {
     if (!(segment.sourceEnd > segment.sourceStart)) {
@@ -52,7 +54,7 @@ export function validateRenderPlan(plan: RenderPlan, context: ValidationContext)
       fail('INVALID_TIMELINE', 'A clip on the timeline starts before the beginning of the source.',
         { elementId: segment.elementId });
     }
-    if (sourceDuration != null && segment.sourceEnd > sourceDuration + 0.25) {
+    if (sourceDuration != null && segment.sourceEnd > sourceDuration + 1e-5) {
       fail('INVALID_TIMELINE', 'A clip on the timeline runs past the end of the source video.',
         { elementId: segment.elementId, sourceEnd: segment.sourceEnd, sourceDuration });
     }

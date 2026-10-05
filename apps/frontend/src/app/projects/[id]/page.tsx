@@ -4,7 +4,7 @@ import { ArrowLeft } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { ProjectWorkspace } from '@/components/project-workspace';
 import { Button } from '@/components/ui/button';
-import { getProject } from '@/lib/api';
+import { ApiError, getProject } from '@/lib/api';
 
 type ProjectDetailPageProps = {
   params: Promise<{ id: string }>;
@@ -12,7 +12,10 @@ type ProjectDetailPageProps = {
 
 export default async function ProjectDetailPage({ params }: ProjectDetailPageProps) {
   const { id } = await params;
-  const project = await getProject(id).catch(() => null);
+  const project = await getProject(id).catch((error: unknown) => {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  });
 
   if (!project) notFound();
 

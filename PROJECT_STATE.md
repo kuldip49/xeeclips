@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-09-21
+Last updated: 2026-09-28
 
 ## Milestones
 
@@ -16,6 +16,7 @@ Last updated: 2026-09-21
 - EditMode Phase 4 (presets + no-prompt auto edit): complete — see `docs/edit-mode-phase4.md`
 - EditMode Phase 5 (render, export, EditMode QA): complete — see `docs/edit-mode-phase5.md`
 - EditMode Phase 6 (AI chat editor): complete — see `docs/edit-mode-phase6.md`
+- Unified AI video editor (Steps 5–25): see "Unified AI Video Editor" below
 
 ## Product Flow — Analysis-First, Platform-Aware Clip Creation
 
@@ -929,6 +930,272 @@ preset planner use. Full detail in `docs/edit-mode-phase6.md`.
 - Tests: `test:edit-mode-chat` (89 offline checks, also run by `test:edit-mode`) and
   `verify:edit-mode-chat` (27 checks against the live stack, ending in a real Phase 5 export and
   FFprobe, cleaning up after itself).
+
+## Unified AI Video Editor — Steps 5–25 (2026-09-27 … 09-28)
+
+One product: upload → source preview → optional look / component styles / reference / brief →
+count → generate → every clip is Preview / Edit / Ask AI / Export, all on ONE canonical EditProject.
+
+- Step 5 scope + constraints: `edit-mode/edit-command-scope.ts` (SELECTED_ELEMENT(S) / TRACK /
+  CURRENT_SEGMENT / ALL_VIDEO_SEGMENTS / PROJECT; actors MANUAL_USER_ACTION / AI_ACTION /
+  TEMPLATE_ACTION / SYSTEM_ACTION; constraints PROTECT_* + TARGET_RANGE_ONLY), enforced inside
+  `applyElementCommand`, not in prompts. Task constraints bind AI only; project locks
+  (`GET/PUT /edit-mode/projects/:id/constraints`) bind everyone. Bundles with `onInvalid: CONTINUE`
+  return per-command DONE / BLOCKED_BY_CONSTRAINT / UNSUPPORTED / INVALID / FAILED / SKIPPED. Every
+  block logs `edit_constraint_blocked`. `edit-mode-framing.ts`: FIT/FILL/9:16/16:9/1:1/FREE for one
+  segment or all, as one history row. Caption style never regenerates wording; only
+  REGENERATE_CAPTIONS rewrites. Test: `test-edit-mode-scope-constraints.cjs` (109).
+- Step 6 production model policy: OpenAI only (`OPENAI_MODEL`), deterministic fallback, no
+  Ollama/Qwen route; `OFFLINE` rows normalise to `FALLBACK_ONLY`. User-facing AI states
+  (401/429/timeout/network/5xx/…) in `src/modules/ai/ai-availability.ts`; `NOT_REQUESTED` marks a
+  deliberate rule-based step (e.g. the live style preview) so it is never reported as an outage.
+- Steps 7/8/16/18 agent: `edit-mode/agent/` — observe → plan (deterministic fast path, OpenAI planner)
+  → typed tool registry → canonical commands → reload → verify → ledger per clause (DONE /
+  NEEDS_CONFIRMATION / NEEDS_INPUT / UNSUPPORTED / FAILED / SKIPPED / BLOCKED_BY_CONSTRAINT) →
+  self-review. Destructive work waits for "yes" unless autonomy is AI_AUTONOMOUS; a tool's own
+  `destructive` predicate is authoritative for its commands. Semantic boundaries
+  (`edit-agent-boundary.ts`) use word timestamps; multi-cut projects only trim the outer segment.
+  Test: `test-edit-agent.cjs` (53).
+- Steps 9–12, 14, 15, 17 generation: `edit-mode/styles/` — 20 full templates + 9 component
+  libraries, ONE precedence resolver (instruction > component > reference > template > default),
+  brief → content intent (re-ranks the de-duplicated pool; "only X" filters) + style hints,
+  reference video → measured editing principles mapped onto our styles, saved styles by stable id.
+  A styled request renders clean cuts and applies the style canonically in each clip's own
+  EditProject (`GenerationStylingService`, one TEMPLATE revision, then a canonical export), so the
+  delivered clip IS the editable project. Migration `20260927030000_unified_generation`
+  (`ProcessingJob.generationSettings`, `ReferenceAsset`, `SavedStyle`) — applied.
+  Frontend: `components/generation/*`, `lib/creative-generation.ts`, `clip-creation-panel.tsx`;
+  the upload form no longer asks Normal vs Edited. Editor: `?panel=ai` opens the AI editor; the
+  Templates tool has "My styles". Tests: `test-unified-generation.cjs` (54),
+  `apps/frontend/scripts/test-clip-creation-ui.cjs` (51).
+- Step 13 delivery: `clipSelection.deliveryStopReason` (REQUESTED_COUNT_DELIVERED /
+  NO_ADDITIONAL_DISTINCT_USABLE_MOMENTS / EXPANSION_ONLY_PRODUCED_DUPLICATES_OR_OFF_INTENT) and a
+  `clip_delivery_stopped` log whenever fewer than N are delivered.
+- Real-media verification: `scripts/verify-unified-generation.cjs --file <talk.mp4>` (24 checks,
+  disposable): poster + ranged source, precedence, N delivered, canonical styling, 1080x1920 exports
+  with audio, Ask AI verified without rewording, briefs choose different moments.
+- Brief semantics (09-28): "only"/"just" express RESTRICTION (`strict` for topics, `strictModes` for
+  a kind of moment) and are never topic tokens; editing instructions ("just make it cleaner") are
+  never content filters; "the part about hiring" -> topic "hiring". A kind restriction that nothing
+  shows degrades to ranking instead of delivering zero clips (mode evidence is lexical/fuzzy); a
+  strict topic shortfall stays an honest shortfall. Topics match whole words ("ai" no longer
+  matches "said").
+- Selected configuration vs resolved plan: the user's top-level look (`generation.look`:
+  AI_EDITED / NORMAL / template id) is persisted and restored, because a styled request renders a
+  clean cut (`outputStyle: NORMAL`) - previously "Automatic edit" + style words reloaded as
+  "Clean cuts".
+- Video deletion now also removes reference uploads and the cached source poster from MinIO.
+- Found by the browser E2E / outage run and fixed (09-28): the source `<video>` was server-rendered
+  with the internal `SERVER_API_URL` (black, unplayable) - DOM media URLs now use
+  `getPublicApiBaseUrl()`; boundary moves through the lineage-aware outer range were always
+  "not verified" (the tool now verifies the reloaded edge and that inner cuts are kept); the editor
+  preview drew every fitted frame on black while the export uses `settings.fitBackground` (white/black
+  exact now, blur labelled); the AI editor defaulted to rules-only when `EDIT_MODE_CHAT_AI_MODE` was
+  unset (now ONLINE); a rejected key was mislabelled "not configured" / "try again soon" (the router
+  now keeps the permanent cause, the agent keeps the planner's real availability state).
+- Found by the 60-minute performance run and fixed (09-28): every source whose transcription took
+  more than 5 minutes (roughly > 50 min of media) FAILED with `fetch failed: HeadersTimeoutError` -
+  Node's global fetch has a hidden 300 s headers timeout that `AI_SERVICE_TIMEOUT_MS` (30 min) never
+  reached. Transcription, visual analysis, editor source analysis and reference analysis now use
+  `processing/ai-service-http.ts` (node:http, only the configured timeout). Test:
+  `scripts/test-ai-service-http.cjs`. Known limitation: a client-side timeout does not cancel the
+  AI service's work, which keeps running until it finishes.
+- Browser E2E: `apps/frontend/e2e/unified-flow.spec.ts` (32 steps, installed Chrome,
+  `E2E_SOURCE=<talk.mp4> npm run test:e2e`, `E2E_TRACE=1` for traces). Outage run:
+  `scripts/verify-openai-unavailable.cjs` against a backend whose key is invalid (never the real one).
+- Bugs only real media exposed (fixed, with regression tests): the materializer gave NORMAL clips
+  the probed MP4 length instead of the source interval, so the 1e-4 duration validator refused every
+  later command; styling orphaned by a backend restart never resumed (now resumed on boot); "only
+  the serious explanations" became a strict literal topic that excluded every candidate.
+
+## Automatic 2 = street3.mp4 visual template (2026-09-30)
+
+- `street3.mp4` is the single visual reference. Measured (1080x1920): black canvas; media window x0-1080 **y610-1310 (700 px)**, fixed for every shot; hook ink y485-580 (two centred serif lines); supporting-line ink y1324-1448.
+- One constant, `AUTOMATIC_2_STREET3_LAYOUT` (`apps/backend/src/modules/edit-mode/styles/automatic-2-street3-layout.ts`), feeds `resolveVisualLayout` -> persisted layout -> browser preview and FFmpeg export. Outer geometry never varies with source, face count or B-roll. Details: `docs/automatic-2-street3.md`.
+- Typeface EB Garamond (`font-eb-garamond` in the backend image; `public/fonts/EBGaramond12-Regular.otf` in the frontend). Hook `#D0D0D1` with amber/deep-red semantic emphasis, present for the whole reel; supporting line omitted unless it is a real sub-hook (filler such as "The clip examines..." is rejected).
+- ASS wrapping is font-aware (serif width scale + balanced two-line breaks) for EB Garamond only; Automatic 1 fonts are unchanged.
+- Result card shows the playable base media with a "temporary preview" badge while the Automatic 2 export renders, then swaps automatically.
+- QA: `scripts/qa-street3-compare.py`, `npm run verify:automatic-2`, `scripts/verify-automatic-2-e2e.cjs`.
+
+### Automatic 2 completion / reliability pass (2026-10-03)
+
+Template geometry unchanged. Rules in `docs/automatic-2-street3.md` ("Reliability rules"); regressions in
+`scripts/test-automatic-2-reliability.cjs`.
+- Information-safe FIT no longer needs the classifier: OCR/text/graphic/edge/label evidence, and any landscape
+  shot that is mostly faceless, is fitted whole. Shots are additionally split where useful-face presence flips
+  for >=1.5 s each side (wipes/dissolves that hard-cut detection misses). Automatic 1 framing unchanged.
+- INVALID_TRIM root cause: trims were validated against stored container duration (+250 ms slack) while FFmpeg
+  reads the actual stream (e.g. 704.9 s video in a 705.0 s container). Edit window and render trims are now
+  clamped to the probe before planning/FFmpeg
+  (overruns up to 1 s are corrected; a larger one is a broken timeline and still fails as INVALID_TIMELINE).
+- Automatic 2 base clip = temporary preview only: `ultrafast/crf26`, Automatic 1 pixel QA skipped (it was also
+  rejecting valid Automatic 2 candidates, e.g. `hardCutTransitionClean`). One full-quality render: the canonical
+  EditMode export (own QA + repair). Editable plan unchanged.
+- Export fixes found on real media: long EB Garamond hooks were emitted as one overflowing ASS line (wrapper now
+  uses the fitter's 0.40 em/char floor); the fallback "What makes ... useful in practice" line and supporting lines
+  that repeat the on-screen hook are rejected; final export metadata now records `camera` telemetry.
+- Fixed 10-03: pressing Create again with unchanged settings did nothing (an identical finished request was
+  answered as "already satisfied"). The button now reads "Regenerate N Clips" in that case and sends
+  `regenerate: true`, which starts a new request (fresh renders under a new request key); retries and
+  double-submits of an in-progress request are still de-duplicated. Test: `test-clip-selection-flow.cjs`.
+- Design changes 10-03 (user request; street3 geometry unchanged): white hook with red highlighted words, no supporting line, speaker
+  punch-in (medium/close alternating at sentence ends, face-safe), semantic-only sparse zoom (inherited
+  Automatic 1 zooms replaced), and the pending Results card previews in the Automatic 2 frame instead of the
+  Automatic 1-format base. Details: `docs/automatic-2-street3.md`. Existing clips need Regenerate to pick it up.
+
+## One-step entry: upload or YouTube link → Generate (2026-10-04)
+
+The project page's "Generate clips" form is the only entry: a file **or** a YouTube link (tab shown only when
+`/videos/import-capabilities` says `youtubeEnabled`), Automatic 1 / Automatic 2, 1–8 clips, one Generate button.
+Platform (default YouTube Shorts), clip shape, AI mode and an optional brief sit under "More options". No
+deployment/retriever wording reaches users; the only YouTube question is "I have the right to process this video."
+- No second pipeline. The form builds the exact clip-selection body the "Create clips" button posts
+  (`entryGenerationRequest`, same `generationPayload`/`requestOutputStyle` helpers) and sends it as
+  `generationRequest` (multipart JSON string on `POST /projects/:id/videos`, object on `POST /videos/import-url`).
+  `parseAutoGeneration` (`videos/auto-generation.ts`) validates it up front: `parseClipCreationRequest`, count
+  1..8 (`maxClipCountForDuration` floor), template AUTOMATIC_1/AUTOMATIC_2 only, no referenceId.
+- Persistence: `VideoImport.autoGeneration` → `ProcessingJob.autoGeneration` + `autoGenerationStatus`
+  (`PENDING → STARTING → STARTED | FAILED`, error in `autoGenerationError`) — migration
+  `20261004010000_one_step_generation`. A re-submitted link overwrites the import's request (latest choice wins);
+  if that video already exists, `VideosService.requestAutoGeneration` attaches it (starting now if analysed).
+- Handoff: `VideosService` listens to BullMQ `QueueEvents('completed')` on the video-processing queue (job id =
+  ProcessingJob id) plus a 15 s sweep (and a 2 min release of stale STARTING claims), claims PENDING→STARTING, then
+  calls the ordinary `ClipSelectionService.create()`. Analysis is untouched; create() remains idempotent.
+- Backend eligibility unchanged (`YOUTUBE_IMPORT_APPROVED`, URL parser, public/non-age-restricted/non-live
+  metadata, duration/size limits, ffprobe audio+video). Messages were reworded only; codes are unchanged.
+- Progress (one flow): import card "Importing YouTube video… N%" / "Preparing source…" → video card
+  `analysisProgressLabel` (Preparing source / Transcribing / Analyzing / Finding clips) with "Then N clips with
+  <template> will be created automatically" → "Finding clips…" → "Rendering i / N…" → "Applying Automatic 2…" →
+  "Ready". On auto-started videos the old setup panel is folded under "Change template or regenerate".
+- Failure: a refused/failed import shows "This YouTube video can't be imported automatically. You can upload the
+  video file instead." with "Upload file instead" (reopens the form in upload mode prefilled from the import's
+  stored request/settings) and "Try again". A synchronous refusal keeps the form state and offers the same switch.
+- Fixed while testing: the browser duration pre-check (`readDuration`) waited forever when the `<video>` never
+  loaded metadata (background tabs); it now gives up after 4 s — the backend still enforces the 2 h limit.
+- Verified 10-04 in Chrome (disposable project): upload 32 s podcast → Automatic 2 × 3 → auto-started on analysis
+  completion (`auto_generation_started` log) → honest PARTIAL 1/3 (INSUFFICIENT_DISTINCT_SOURCE_MOMENTS, short
+  source) with the Automatic 2 export ready; unavailable link `watch?v=AAAAAAAAAAA` → VIDEO_UNAVAILABLE fallback,
+  settings (Automatic 2, 5, brief) preserved into upload mode. E2E: `youtube-import-enabled/disabled.spec.ts`.
+- Stale before this change (not updated): `apps/backend/scripts/test-clip-ui.cjs` asserts pre-redesign strings.
+
+### YouTube import reliability pass (2026-10-04)
+
+- Root cause of "can't be imported automatically" for ordinary public videos: the metadata step ran
+  `yt-dlp --dump-single-json`, whose output carries every auto-caption table (2.8 MB for `idJOddK22kg`, a public
+  12-min 1080p video). The adapter killed the process at a 2 MB stdout cap and mapped the kill to
+  VIDEO_UNAVAILABLE. yt-dlp itself had exited 0 in 3 s. Metadata now prints only compact fields
+  (`-O '%(.{id,title,...})j'` + a slim formats list, ~8 KB); the runaway cap is 16 MB and reports its own reason.
+- Failure categories (`IMPORT_FAILURE_CODES`, persisted in `VideoImport.errorCode`, real reason in the
+  `external_video_import` log): VIDEO_NOT_FOUND, PRIVATE_VIDEO, LOGIN_REQUIRED, AGE_RESTRICTED,
+  REGION_RESTRICTED, LIVE_STREAM_UNSUPPORTED, NO_VIDEO_FORMAT, NO_AUDIO_FORMAT, RATE_LIMITED, BOT_CHALLENGE,
+  NETWORK_TIMEOUT, DOWNLOAD_FAILED, MEDIA_INVALID, STORAGE_FAILED, UNKNOWN_PROVIDER_ERROR (+ existing
+  DURATION_LIMIT, SIZE_LIMIT, IMPORT_UNAVAILABLE for a missing binary/disabled deployment, IMPORT_CANCELLED).
+  `classifyYtDlpError` reads yt-dlp's ERROR lines (private → bot → rate-limit → age → region → login order,
+  because those messages all contain "sign in"). Each code has a friendly message (`IMPORT_FAILURE_MESSAGES`).
+- Early refusal from metadata: live/upcoming/post_live, private, age_limit>0, availability other than
+  public/unlisted, no non-DRM video or audio format, duration over the limit. Archived streams (was_live) proceed.
+  Unlisted videos are allowed (reachable without sign-in). No cookies or credentials are ever used.
+- Format chain (`FORMAT_CHAIN`, no fixed format ids): 1) H.264≤1080p + AAC → MP4; 2) best video≤1080p + best
+  audio → MKV; 3) best single file; 4) anything, preferring HLS. Each step is a yt-dlp selector with its own `/`
+  fallbacks; a step that cannot be downloaded or yields a file without video/audio moves to the next. Then
+  `normalizeImportedMedia` makes the canonical H.264/AAC MP4 (+faststart): copy matching streams, transcode only
+  mismatches (libx264 veryfast crf20 / AAC 192k), re-probe, reject anything shorter than retrieved.
+- Validation: ffprobe has video+audio, duration>0, 16–8192 px, known codecs/container, size>0; the stored source
+  must cover ≥97% of the metadata duration (never truncated), then MinIO size is verified.
+- Retries: NETWORK_TIMEOUT and RATE_LIMITED only, `YOUTUBE_IMPORT_MAX_ATTEMPTS` (3) per step, backoff 2/4/8 s
+  (rate limit 15/30/60 s), capped 60 s; yt-dlp also gets `--retries 3 --fragment-retries 10`. Private, removed,
+  sign-in, age, region and bot-check failures are never retried.
+- Timeouts (env, seconds): YOUTUBE_IMPORT_CONNECT_TIMEOUT 30 (socket), YOUTUBE_IMPORT_TOTAL_TIMEOUT 10800 (whole
+  import; was 30 min per yt-dlp call), YOUTUBE_IMPORT_STALL_TIMEOUT 300 (no download progress → NETWORK_TIMEOUT,
+  retried), YOUTUBE_IMPORT_METADATA_TIMEOUT 180, YOUTUBE_IMPORT_MAX_DURATION 7200 (capped at the platform's 2 h),
+  YOUTUBE_IMPORT_MAX_BYTES 4 GiB. Old names are fallbacks. Orphaned IMPORTING rows are requeued at startup after
+  max(10 min, stall+5 min) of silence.
+- Startup log `event=youtube_import_config` records the resolved binary path and `yt-dlp --version`
+  (2026.08.19 from Alpine's repo at build time). Update = rebuild the image (see Dockerfile comment), never
+  `apk upgrade` in a running container.
+- Frontend: the failure card shows the specific message; "Try again" is the primary action for temporary
+  categories, "Upload file instead" otherwise. Input copy: "Paste a public YouTube link".
+- Tests: `scripts/test-youtube-import.cjs` (offline: URL parser, classifier against real yt-dlp wording, retry
+  policy, chain, messages, config); `scripts/test-youtube-import-fallbacks.cjs` (stub retriever + real FFmpeg:
+  chain fallback, WebM VP9/Opus → H.264/AAC MP4, audio-only step skipped, 503 retried, private not retried).
+- Restart safety (found 10-04 when a user's import sat at 0% forever): a shutdown used to abort in-flight imports
+  as IMPORT_CANCELLED, which left the row IMPORTING with no worker, and boot only reclaimed rows idle >10 min.
+  Shutdown now aborts with IMPORT_INTERRUPTED and requeues the row to PENDING; boot reclaims IMPORTING rows idle
+  >2 min (this process is the only import worker). Verified live: interrupted at 21:01:44, resumed and READY 21:02:49.
+- Imports run `YOUTUBE_IMPORT_CONCURRENCY` (default 2) at a time, so one import never waits behind another; the
+  progress estimate falls back to bitrate × duration when YouTube omits DASH sizes; FETCHING_INFO shows
+  "Checking video…".
+- Verified 10-04 (real import job, disposable project, all first-attempt via step 1, no transcode needed):
+  user URL `idJOddK22kg` 12 min 1080p (223 MB, 56 s) then Automatic 2 × 3 delivered; CC-BY 7.7 min 1080p60,
+  44 min 720p lecture, 38 min 4K podcast, 21 min tutorial (youtu.be), 8 min 4K drone landscape, 7 s Shorts URL.
+  Expected failures: invalid id → INVALID_URL, `AAAAAAAAAAA` → VIDEO_NOT_FOUND, private → PRIVATE_VIDEO,
+  age-gated → AGE_RESTRICTED. Members-only/sign-in-only not verified live (no example); covered by unit tests.
+
+### Results cards, styling reliability and editor view (2026-10-04)
+
+- Results: a pending Automatic 2 card no longer plays a "temporary preview" (it played the raw source, e.g.
+  4:48 / 12:06). It shows only progress in the Automatic 2 frame (hook + "Queued / Applying style / Rendering
+  the final video") and swaps to the finished export when ready (`data-testid=automatic-2-pending`;
+  `verify-automatic-2-e2e.cjs` updated). Status line: "Applying Automatic 2… i / N ready". (User request
+  10-04; supersedes the 10-03 "preview in the A2 frame" choice.)
+- Styling: `GenerationStylingService.ensureStyled` styles clips in a pool (`GENERATION_STYLE_CONCURRENCY`,
+  default 2) instead of one by one (3 clips: ~5 min -> ~2.6 min after render). A 60 s sweep
+  (`resumeUnstyled`, last 12 h) restarts styling for delivered clips that no live run owns and that are not
+  ready/failed - previously a restart between delivery and the first style write left cards pending forever.
+- Editor view: the export canvas sits on a pasteboard with a visible frame; card layouts (Automatic 2) default
+  to a "Focus" view zoom (hook + video window fill the stage, ~2x; view only, export unchanged) with a Fit/Focus
+  toggle; editor opens on the first caption frame instead of 0; projects <=120 s open with the whole timeline in
+  view (`FIT_ON_OPEN_MAX_SEC`); the timeline band is drag-resizable (remembered per browser, double-click resets;
+  default band unchanged). Fixed a preview/export mismatch: the Automatic 2 camera path made the video element
+  wider than the canvas and Tailwind's `video { max-width: 100% }` squeezed it (black strip, wrong framing);
+  `maxWidth: 'none'` now matches the export frame.
+
+### Raw look, clip limits and exact clip count (2026-10-04)
+
+- Third automatic look `AUTOMATIC_RAW` ("Raw"): the Automatic 1 edit (selection, start/end boundaries, trims,
+  speaker-following vertical framing, zoom in/out) with every presentation layer removed - `rawEditPlan`
+  (`editing/raw-edit-plan.ts`) disables hook, captions, word highlights, on-screen text and music; the executor
+  gets `sfxDisabled` + `gradeDisabled` (source colour kept; `resolveGradePreset` maps NO_CHANGE to CLEAN_SOCIAL,
+  so the opt-out is explicit). Applied in `prepare`, so the persisted plan (Edit / Ask AI) is raw too. Never
+  styled in EditMode (style words/components/reference are ignored; the brief still steers selection).
+  Offered in the entry form and the Create clips panel. Test: `scripts/test-raw-template.cjs`. Verified: 3/3 Raw
+  clips 1080x1920, hookRendered=false, subtitles off, zooms kept.
+- Limits: `maxClipCountForDuration` = 8 under 15 min, 20 up to 60 min, 30 up to 120 min (was 8/12/20) for every
+  look. Entry form allows up to 30 and caps by the chosen file's length; a YouTube request above its video's
+  limit fails to auto-start with "This video allows at most N clips" and keeps the choices.
+- Exact count: once every distinct, usable moment is used, selection escalates through fill tiers instead of
+  delivering PARTIAL: (1) weaker / <=60% overlapping analysed moments, (2) <=80% overlap, (3) sentence-aligned
+  windows slid over the transcript (<=92% overlap, never the same range). Fills keep the hard limits (15-120 s,
+  real speech), are only compared against delivered clips and other fills, are appended after every distinct
+  moment (`evidence.candidateFill`), and their renders accept a failed final pixel QA as DEGRADED
+  (`acceptDegradedQuality`, logged `edited_clip_quality_accepted_as_last_resort`) - first-choice clips stay fully
+  gated. PARTIAL now only happens when even fill windows are impossible (e.g. no speech). Telemetry:
+  `fillTierReached`, `fillCandidateCount`. Test: `scripts/test-exact-clip-count.cjs`. Verified on the 32 s
+  podcast (previously 1/3 PARTIAL): 3/3 COMPLETE via tiers 1-3, one clip accepted as DEGRADED.
+
+### Reliability + Raw layout follow-ups (2026-10-04, afternoon)
+
+- Transcription no longer OOM-kills the AI service on long sources: 16 kHz mono WAV is read in ~10-min windows
+  (`WHISPER_CHUNK_SEC`, cut at the quietest 100 ms within +/-8 s), language fixed by the first window, previous
+  tail as `initial_prompt`, timestamps offset back; one transcription at a time (`transcription_lock`).
+  2 h source: 19 min, AI-service peak 855 MB (was killed). The AI service now runs without `--reload` and every
+  app container has `restart: unless-stopped` (a dead worker used to leave a zombie reloader).
+  Backend retries transcription on dropped connections / 5xx after waiting for `/health`
+  (`AI_TRANSCRIPTION_ATTEMPTS`, default 3).
+- One-step requests above the video's limit (YouTube length unknown at submit) are clamped to the limit with a
+  visible notice (`autoGeneration.adjustedFrom`) instead of failing to start.
+- Raw layout (user decision): Automatic 1's centred card (video in the middle, on-screen information kept by the
+  normal FIT logic, speaker framing + switching + zoom) on a plain `DARK_NEUTRAL` (#15171C) surround - the
+  executor takes `backgroundMode` from the render context, and fitted shots fill with the same flat colour instead
+  of a blurred copy. Raw renders accept a still-failing final pixel QA as DEGRADED (like Automatic 2 skipping it).
+  An interim full-frame crop variant was tried and removed at the user's request.
+- Endings (all looks, `edit-boundaries.ts`): a usable (finished-sentence, non-continuation) ending always beats an
+  unfinished selected one regardless of the score margin; with none in the search windows, the end extends forward
+  to the next finished sentence (<= 120 s, never across a 2.5 s silence).
+- Clip render queue: `maxStalledCount` 5 (`CLIP_RENDER_MAX_STALLS`) so a restart mid-request resumes instead of
+  failing; leftover `/tmp/ai-content-clip-batch-*` source copies are removed when the worker starts.
+- Ops note: Docker Desktop's VM (~7.4 GB) can run out of memory with two 1080p renders of a 2 h source plus the
+  AI service's loaded models; raising its memory limit is recommended.
 
 ## Explicitly deferred
 

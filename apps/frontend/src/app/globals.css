@@ -45,3 +45,12 @@
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* Automatic 2 (street3 template) serif. Same face the export renderer uses (EB Garamond, OFL). */
+@font-face {
+  font-family: "EB Garamond";
+  src: url("/fonts/EBGaramond12-Regular.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}

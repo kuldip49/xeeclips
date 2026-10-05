@@ -1,34 +1,33 @@
 'use client';
 
-import { ChangeEvent, DragEvent, FormEvent, useRef, useState } from 'react';
+import { ChangeEvent, DragEvent, FormEvent, useEffect, useRef, useState } from 'react';
+import { RAW_LOOK } from '@/lib/automatic-looks';
 import { useRouter } from 'next/navigation';
-import { CheckCircle2, Circle, Cloud, Cpu, FolderOpen, ShieldCheck, Upload, X } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { CheckCircle2, Circle, FolderOpen, Link2, Loader2, Minus, Plus, Sparkles, Upload, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
-import { TARGET_PLATFORM_LABELS, uploadVideo, type AiProcessingMode,
-  type TargetPlatform } from '@/lib/api';
+import { TARGET_PLATFORM_LABELS, uploadVideo, importYouTubeVideo, getVideoImportCapabilities,
+  type AiProcessingMode, type OutputAspectRatio, type TargetPlatform } from '@/lib/api';
+import { getCreativeCatalog } from '@/lib/creative-generation';
+import { CLIP_LIMIT_HINT, DEFAULT_ENTRY_SETTINGS, ENTRY_MAX_CLIPS, entryGenerationRequest, maxClipsForDuration,
+  type EntrySettings, type EntrySource, type EntryTemplate } from '@/lib/entry-flow';
 import { cn } from '@/lib/utils';
 
-const modes: Array<{ value: AiProcessingMode; title: string; description: string; icon: typeof Cpu }> = [
-  { value: 'FALLBACK_ONLY', title: 'Fallback', description: 'Transcript, visual and audio analysis only. No AI model is used.', icon: ShieldCheck },
-  { value: 'OFFLINE', title: 'Local AI', description: 'Runs on a local AI model. Nothing is sent to the cloud.', icon: Cpu },
-  { value: 'ONLINE', title: 'Online AI', description: 'Uses cloud AI for the strongest understanding and editing.', icon: Cloud }
-];
-
-const platforms: Array<{ value: TargetPlatform; description: string }> = [
-  { value: 'INSTAGRAM_REELS', description: 'Vertical 9:16' },
-  { value: 'YOUTUBE_SHORTS', description: 'Vertical 9:16' },
-  { value: 'TIKTOK', description: 'Vertical 9:16' }
-];
-
 const MAX_VIDEO_SECONDS = 7200;
+const YOUTUBE_LINK = /^https:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?|shorts\/)|youtu\.be\/)/i;
+const FALLBACK_HINT = 'You can upload the video file instead.';
 
+/** Best-effort early length check; the backend enforces the limit, so a browser that never
+ * loads the metadata (background tabs can stall it) must not block the upload. */
 function readDuration(file: File) {
   return new Promise<number | null>((resolve) => {
     const url = URL.createObjectURL(file);
     const probe = document.createElement('video');
-    const done = (value: number | null) => { URL.revokeObjectURL(url); resolve(value); };
+    let settled = false;
+    const done = (value: number | null) => {
+      if (settled) return;
+      settled = true; window.clearTimeout(timer); URL.revokeObjectURL(url); resolve(value);
+    };
+    const timer = window.setTimeout(() => done(null), 4000);
     probe.preload = 'metadata';
     probe.onloadedmetadata = () => done(Number.isFinite(probe.duration) ? probe.duration : null);
     probe.onerror = () => done(null);
@@ -36,86 +35,247 @@ function readDuration(file: File) {
   });
 }
 
-export function UploadVideoForm({ projectId }: { projectId: string }) {
+/**
+ * One-step entry: a file or a YouTube link, a template and a clip count, then one Generate.
+ * The choices travel with the upload/import and the backend starts clip creation as soon as
+ * analysis completes - there is no second button. Whether a link can be imported stays a
+ * server decision; a refusal keeps every choice and offers the file upload instead.
+ */
+export function UploadVideoForm({ projectId, initialSettings, initialSource, initialNotice,
+  onSettingsChange }: {
+  projectId: string;
+  initialSettings?: EntrySettings;
+  /** Lets the workspace keep the last choices when this form remounts. */
+  onSettingsChange?: (settings: EntrySettings) => void;
+  initialSource?: EntrySource;
+  /** Shown above the form, e.g. why a YouTube import fell back to a file upload. */
+  initialNotice?: string | null;
+}) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
-  const [isUploading, setIsUploading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [aiMode, setAiMode] = useState<AiProcessingMode>('FALLBACK_ONLY');
-  // The platform deliberately persists across uploads in this session; everything else resets.
-  const [platform, setPlatform] = useState<TargetPlatform | null>(null);
+  const [settings, setSettings] = useState<EntrySettings>(initialSettings ?? DEFAULT_ENTRY_SETTINGS);
+  const [source, setSource] = useState<EntrySource>(initialSource ?? 'file');
   const [file, setFile] = useState<File | null>(null);
+  const [sourceUrl, setSourceUrl] = useState('');
+  const [rightsConfirmed, setRightsConfirmed] = useState(false);
+  const [youtubeEnabled, setYoutubeEnabled] = useState<boolean | null>(null);
+  const [automatic2, setAutomatic2] = useState<{ name: string; description: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [error, setError] = useState<{ message: string; fallback: boolean } | null>(null);
+  const [notice, setNotice] = useState<string | null>(initialNotice ?? null);
   const [dragging, setDragging] = useState(false);
+  // A chosen file's length decides how many clips it allows; a YouTube link is checked later.
+  const [fileDuration, setFileDuration] = useState<number | null>(null);
+  const maxClips = source === 'file' && fileDuration ? maxClipsForDuration(fileDuration) : ENTRY_MAX_CLIPS;
+
+  useEffect(() => {
+    let active = true;
+    void getVideoImportCapabilities().then((result) => {
+      if (active) setYoutubeEnabled(result.youtubeEnabled);
+    }).catch(() => undefined);
+    void getCreativeCatalog().then((catalog) => {
+      const template = catalog.templates.find((item) => item.id === 'AUTOMATIC_2');
+      if (active && template) setAutomatic2({ name: template.name, description: template.description });
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => { onSettingsChange?.(settings); }, [settings, onSettingsChange]);
+  const update = (patch: Partial<EntrySettings>) => setSettings((current) => ({ ...current, ...patch }));
+  useEffect(() => {
+    setSettings((current) => current.count > maxClips ? { ...current, count: maxClips } : current);
+  }, [maxClips]);
+  const templates: Array<{ value: EntryTemplate; title: string; description: string }> = [
+    { value: 'AUTOMATIC_1', title: 'Automatic 1', description: 'Clean modern automatic edit' },
+    { value: 'AUTOMATIC_2', title: automatic2?.name ?? 'Automatic 2',
+      description: automatic2?.description ?? 'Editorial black / serif / highlighted captions' },
+    RAW_LOOK
+  ];
 
   function clearFile() {
     setFile(null);
+    setFileDuration(null);
     if (inputRef.current) inputRef.current.value = '';
   }
-  function handleFile(event: ChangeEvent<HTMLInputElement>) { setFile(event.target.files?.[0] ?? null); setError(null); }
+  function chooseFile(next: File | null) {
+    setFile(next); setError(null); setNotice(null); setFileDuration(null);
+    if (next) void readDuration(next).then((seconds) => setFileDuration(seconds));
+  }
+  function handleFile(event: ChangeEvent<HTMLInputElement>) { chooseFile(event.target.files?.[0] ?? null); }
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault(); setDragging(false);
     const dropped = event.dataTransfer.files[0];
-    if (dropped?.type.startsWith('video/')) { setFile(dropped); setError(null); }
-    else setError('Choose a supported video file.');
+    if (dropped?.type.startsWith('video/')) chooseFile(dropped);
+    else setError({ message: 'Choose a supported video file.', fallback: false });
   }
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!platform) { setError('Choose a target platform first.'); return; }
-    if (!file) { setError('Select a video to upload.'); return; }
-    setError(null); setIsUploading(true);
-    try {
-      const duration = await readDuration(file);
-      if (duration != null && duration > MAX_VIDEO_SECONDS) {
-        setError('This video is longer than the 2-hour limit. Please upload a video shorter than 2 hours.');
-        return;
-      }
-      const formData = new FormData();
-      formData.set('file', file);
-      formData.set('aiMode', aiMode);
-      formData.set('targetPlatform', platform);
-      await uploadVideo(projectId, formData);
-      clearFile(); router.refresh();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Video could not be uploaded.');
-    } finally { setIsUploading(false); }
+  function switchToUpload() { setSource('file'); setError(null); }
+
+  async function submitFile() {
+    if (!file) { setError({ message: 'Select a video to upload.', fallback: false }); return; }
+    const duration = await readDuration(file);
+    if (duration != null && duration > MAX_VIDEO_SECONDS) {
+      setError({ message: 'This video is longer than the 2-hour limit. Please upload a video shorter than 2 hours.',
+        fallback: false });
+      return;
+    }
+    const formData = new FormData();
+    formData.set('file', file);
+    formData.set('aiMode', settings.aiMode);
+    formData.set('processingType', 'EDITED_CLIPS');
+    formData.set('aspectRatio', settings.aspectRatio);
+    formData.set('targetPlatform', settings.platform);
+    formData.set('generationRequest', JSON.stringify(entryGenerationRequest(settings)));
+    await uploadVideo(projectId, formData, (completed, total) => {
+      setUploadProgress(Math.round(completed * 100 / total));
+    });
+    clearFile();
   }
 
-  return <form className='grid gap-7' onSubmit={onSubmit}>
-    <div><p className='eyebrow'>Create short clips</p><h2 className='mt-2 text-2xl font-bold tracking-tight'>Create Short Clips</h2><p className='mt-2 text-sm leading-6 text-slate-400'>Pick where the clips will be posted, then upload your video. We analyze the whole video before you decide how many clips to create.</p></div>
-    <fieldset className='grid gap-3'><legend className='text-sm font-medium'>Target platform</legend>
-      <div className='grid gap-3 sm:grid-cols-3' role='radiogroup' aria-label='Target platform'>
-        {platforms.map((option) => {
-          const selected = platform === option.value;
-          const Indicator = selected ? CheckCircle2 : Circle;
-          return <button key={option.value} type='button' role='radio' aria-checked={selected}
-            onClick={() => { setPlatform(option.value); setError(null); }}
-            className={cn('rounded-2xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400',
-              selected ? 'border-violet-400 bg-violet-500/10' : 'border-white/10 bg-[#0d111c] hover:border-white/25')}>
-            <span className='flex items-center justify-between text-sm font-semibold'>{TARGET_PLATFORM_LABELS[option.value]}<Indicator size={18} className={selected ? 'text-violet-300' : 'text-slate-600'} aria-hidden /></span>
-            <span className='mt-1 block text-xs text-slate-400'>{option.description}</span>
-          </button>;
-        })}
-      </div>
-    </fieldset>
-    <fieldset className='grid gap-3'><legend className='text-sm font-medium'>AI mode</legend>
-      <div className='grid gap-3 sm:grid-cols-3' role='radiogroup' aria-label='AI mode'>
-        {modes.map((mode) => { const selected = aiMode === mode.value; const Indicator = selected ? CheckCircle2 : Circle; const Icon = mode.icon;
-          return <motion.button key={mode.value} type='button' role='radio' aria-checked={selected} onClick={() => setAiMode(mode.value)} whileHover={{ y: -2 }} className={cn('relative rounded-2xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400', selected ? 'border-violet-400/70 bg-violet-500/10' : 'border-white/[.08] bg-[#0d111c] hover:border-white/20 hover:bg-[#151d2e]')}>
-            <span className='flex items-start justify-between'><span className={cn('grid h-9 w-9 place-items-center rounded-xl', selected ? 'bg-violet-500/20 text-violet-300' : 'bg-white/5 text-slate-400')}><Icon size={17} aria-hidden /></span><Indicator className={cn('h-4 w-4', selected ? 'text-violet-300' : 'text-slate-600')} aria-hidden /></span>
-            <span className='mt-3 block text-sm font-semibold'>{mode.title}</span><span className='mt-1 block text-xs leading-5 text-slate-400'>{mode.description}</span>
-          </motion.button>;
-        })}
-      </div>
-    </fieldset>
-    <div className='grid gap-3'><Label htmlFor='file'>Video</Label>
-      <div onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { event.preventDefault(); setDragging(false); }} onDrop={handleDrop} className={cn('rounded-2xl border border-dashed p-7 text-center transition-colors sm:p-10', dragging ? 'border-violet-400 bg-violet-500/10' : 'border-white/15 bg-[#0d111c] hover:border-violet-400/50')}>
-        <span className='mx-auto grid h-14 w-14 place-items-center rounded-2xl bg-violet-500/10 text-violet-300'><Upload size={25} aria-hidden /></span><p className='mt-4 text-sm font-semibold'>Drag and drop your video here</p><p className='mt-1 text-xs text-slate-400'>Maximum video length: 2 hours</p>
-        <input ref={inputRef} id='file' name='file' type='file' accept='video/*' className='sr-only' onChange={handleFile} />
-        <Button type='button' variant='outline' className='mt-5' onClick={() => inputRef.current?.click()}><FolderOpen size={16} />Browse files</Button>
-      </div>
-      {file && <div className='flex min-w-0 items-center justify-between gap-3 rounded-xl border border-violet-400/20 bg-violet-500/5 px-4 py-3'><span className='min-w-0 truncate text-sm'>{file.name} <span className='text-slate-400'>· {(file.size / 1024 / 1024).toFixed(1)} MB</span></span><button type='button' aria-label='Remove selected file' onClick={clearFile} className='shrink-0 text-slate-400 hover:text-white'><X size={17} /></button></div>}
+  async function submitLink() {
+    if (!YOUTUBE_LINK.test(sourceUrl.trim())) {
+      setError({ message: 'Enter a YouTube video link.', fallback: false });
+      return;
+    }
+    if (!rightsConfirmed) {
+      setError({ message: 'Confirm you have the right to process this video.', fallback: false });
+      return;
+    }
+    await importYouTubeVideo({ projectId, url: sourceUrl.trim(), aiMode: settings.aiMode,
+      processingType: 'EDITED_CLIPS', aspectRatio: settings.aspectRatio, targetPlatform: settings.platform,
+      rightsConfirmed: true, generationRequest: entryGenerationRequest(settings) });
+    setSourceUrl('');
+    setRightsConfirmed(false);
+  }
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null); setNotice(null); setUploadProgress(null); setBusy(true);
+    try {
+      if (source === 'youtube') await submitLink(); else await submitFile();
+      // Settings stay as chosen; the new source and its progress appear below.
+      router.refresh();
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Clips could not be started.';
+      setError({ message, fallback: source === 'youtube' });
+    } finally { setBusy(false); }
+  }
+
+  const ready = source === 'youtube' ? !!sourceUrl.trim() && rightsConfirmed : !!file;
+  const linkDetected = YOUTUBE_LINK.test(sourceUrl.trim());
+
+  return <form className='grid gap-6' onSubmit={onSubmit} aria-label='Generate clips'>
+    <div><p className='eyebrow'>Create short clips</p><h2 className='mt-2 text-2xl font-bold tracking-tight'>Generate clips</h2>
+      <p className='mt-2 text-sm leading-6 text-slate-400'>Add a video, pick a template and how many clips you want. We handle the rest and show each clip as it is ready.</p></div>
+
+    {notice ? <p role='status' className='rounded-xl border border-amber-400/20 bg-amber-400/5 p-3 text-sm text-amber-100'>{notice}</p> : null}
+
+    <div className='grid gap-3'>
+      {youtubeEnabled ? <div className='inline-flex w-fit rounded-xl border border-white/10 bg-[#0d111c] p-1' role='tablist' aria-label='Video source'>
+        {([['file', 'Upload file', Upload], ['youtube', 'YouTube link', Link2]] as const).map(([value, label, Icon]) =>
+          <button key={value} type='button' role='tab' aria-selected={source === value}
+            onClick={() => { setSource(value); setError(null); }}
+            className={cn('flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400',
+              source === value ? 'bg-violet-500/20 text-white' : 'text-slate-400 hover:text-white')}>
+            <Icon size={14} aria-hidden />{label}</button>)}
+      </div> : null}
+
+      {source === 'youtube' && youtubeEnabled ? <div className='grid gap-3'>
+        <label htmlFor='youtube-url' className='text-sm font-medium'>Paste a public YouTube link</label>
+        <input id='youtube-url' type='url' value={sourceUrl} disabled={busy} onChange={(event) => {
+          setSourceUrl(event.target.value); setError(null); setNotice(null); }}
+          placeholder='https://www.youtube.com/watch?v=...'
+          className='rounded-lg border border-white/10 bg-[#0d111c] px-3 py-2.5 text-sm text-slate-100' />
+        {linkDetected ? <p className='text-xs text-violet-300'>YouTube video detected.</p>
+          : <p className='text-xs text-slate-500'>Private, members-only, age-restricted and live videos can't be imported.</p>}
+        <label className='flex items-center gap-2 text-sm text-slate-300'><input type='checkbox'
+          checked={rightsConfirmed} disabled={busy} onChange={(event) => setRightsConfirmed(event.target.checked)} />
+          I have the right to process this video.</label>
+      </div> : <div className='grid gap-3'>
+        <div onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { event.preventDefault(); setDragging(false); }} onDrop={handleDrop} className={cn('rounded-2xl border border-dashed p-7 text-center transition-colors', dragging ? 'border-violet-400 bg-violet-500/10' : 'border-white/15 bg-[#0d111c] hover:border-violet-400/50')}>
+          <span className='mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-violet-500/10 text-violet-300'><Upload size={22} aria-hidden /></span><p className='mt-3 text-sm font-semibold'>Drag and drop your video here</p><p className='mt-1 text-xs text-slate-400'>Maximum video length: 2 hours</p>
+          <input ref={inputRef} id='file' name='file' type='file' accept='video/*' className='sr-only' aria-label='Video file' onChange={handleFile} />
+          <Button type='button' variant='outline' className='mt-4' disabled={busy} onClick={() => inputRef.current?.click()}><FolderOpen size={16} />Browse files</Button>
+        </div>
+        {file && <div className='flex min-w-0 items-center justify-between gap-3 rounded-xl border border-violet-400/20 bg-violet-500/5 px-4 py-3'><span className='min-w-0 truncate text-sm'>{file.name} <span className='text-slate-400'>· {(file.size / 1024 / 1024).toFixed(1)} MB</span></span><button type='button' aria-label='Remove selected file' onClick={clearFile} className='shrink-0 text-slate-400 hover:text-white'><X size={17} /></button></div>}
+      </div>}
     </div>
-    {error && <div role='alert' className='rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200'>{error}</div>}
-    <Button disabled={isUploading || !file || !platform} type='submit' className='h-12 w-full text-sm'><Upload size={17} aria-hidden />{isUploading ? 'Uploading video...' : 'Upload Video'}</Button>
+
+    <fieldset className='grid gap-3' disabled={busy}>
+      <legend className='mb-2 text-sm font-medium'>Template</legend>
+      <div className='grid gap-3 sm:grid-cols-3'>
+        {templates.map((option) => {
+          const selected = settings.template === option.value;
+          const Indicator = selected ? CheckCircle2 : Circle;
+          return <label key={option.value} data-entry-template={option.value}
+            className={cn('block cursor-pointer rounded-xl border p-3 text-left transition-colors focus-within:ring-2 focus-within:ring-violet-400',
+              selected ? 'border-violet-400 bg-violet-500/10' : 'border-white/10 bg-[#0d111c] hover:border-white/25')}>
+            <input type='radio' className='sr-only' name={`entry-template-${projectId}`} value={option.value}
+              checked={selected} onChange={() => update({ template: option.value })} />
+            <span className='flex items-center justify-between gap-2 text-sm font-semibold'>{option.title}
+              <Indicator size={16} className={selected ? 'text-violet-300' : 'text-slate-600'} aria-hidden /></span>
+            <span className='mt-1 block text-xs leading-5 text-slate-400'>{option.description}</span>
+          </label>;
+        })}
+      </div>
+    </fieldset>
+
+    <div className='flex flex-wrap items-center gap-4'>
+      <span className='text-sm font-medium' id={`entry-count-${projectId}`}>Number of clips</span>
+      <div className='flex items-center gap-2' role='group' aria-labelledby={`entry-count-${projectId}`}>
+        <Button type='button' size='sm' variant='outline' aria-label='Fewer clips' disabled={busy || settings.count <= 1}
+          onClick={() => update({ count: Math.max(1, settings.count - 1) })}><Minus size={15} /></Button>
+        <span className='w-10 text-center text-lg font-semibold tabular-nums' aria-live='polite' data-testid='entry-clip-count'>{settings.count}</span>
+        <Button type='button' size='sm' variant='outline' aria-label='More clips' disabled={busy || settings.count >= maxClips}
+          onClick={() => update({ count: Math.min(maxClips, settings.count + 1) })}><Plus size={15} /></Button>
+      </div>
+      <span className='text-xs text-slate-500' title={CLIP_LIMIT_HINT}>1–{maxClips}
+        {source === 'file' && fileDuration ? ' for this video' : ''}</span>
+      <span className='basis-full text-xs text-slate-500'>{CLIP_LIMIT_HINT} You get exactly the number you choose.</span>
+    </div>
+
+    <details className='rounded-xl border border-white/10 bg-[#0d111c] p-4'>
+      <summary className='cursor-pointer text-sm font-medium'>More options
+        <span className='ml-2 font-normal text-slate-500'>· {TARGET_PLATFORM_LABELS[settings.platform]}, {settings.aspectRatio}{settings.brief.trim() ? ', with a description' : ''}</span></summary>
+      <div className='mt-4 grid gap-4 sm:grid-cols-3'>
+        <label className='grid gap-1 text-sm font-medium'>Platform
+          <select value={settings.platform} disabled={busy} onChange={(event) => update({ platform: event.target.value as TargetPlatform })}
+            className='rounded-lg border border-white/10 bg-[#111827] px-3 py-2 text-sm font-normal text-slate-100'>
+            {(Object.keys(TARGET_PLATFORM_LABELS) as TargetPlatform[]).map((value) =>
+              <option key={value} value={value}>{TARGET_PLATFORM_LABELS[value]}</option>)}
+          </select>
+        </label>
+        <label className='grid gap-1 text-sm font-medium'>Clip shape
+          <select value={settings.aspectRatio} disabled={busy} onChange={(event) => update({ aspectRatio: event.target.value as OutputAspectRatio })}
+            className='rounded-lg border border-white/10 bg-[#111827] px-3 py-2 text-sm font-normal text-slate-100'>
+            {(['9:16', '16:9', '4:5', '1:1'] as const).map((value) => <option key={value}>{value}</option>)}
+          </select>
+        </label>
+        <label className='grid gap-1 text-sm font-medium'>AI
+          <select value={settings.aiMode} disabled={busy} onChange={(event) => update({ aiMode: event.target.value as AiProcessingMode })}
+            className='rounded-lg border border-white/10 bg-[#111827] px-3 py-2 text-sm font-normal text-slate-100'>
+            <option value='ONLINE'>AI (OpenAI), rules if unavailable</option>
+            <option value='FALLBACK_ONLY'>Rules only</option>
+          </select>
+        </label>
+        <label className='grid gap-1 text-sm font-medium sm:col-span-3'>Describe what you want <span className='font-normal text-slate-500'>· optional</span>
+          <textarea data-testid='entry-brief' value={settings.brief} disabled={busy} maxLength={1500} rows={2}
+            onChange={(event) => update({ brief: event.target.value })}
+            placeholder='e.g. "find the funny moments"'
+            className='rounded-xl border border-white/10 bg-[#111827] p-3 text-sm font-normal text-slate-200 placeholder:text-slate-600' />
+        </label>
+      </div>
+    </details>
+
+    {error ? <div role='alert' className='grid gap-2 rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200'>
+      <p>{error.message}{error.fallback && !error.message.includes(FALLBACK_HINT) ? ` ${FALLBACK_HINT}` : ''}</p>
+      {error.fallback ? <Button type='button' size='sm' variant='outline' className='w-fit' onClick={switchToUpload}>
+        <Upload size={14} aria-hidden />Upload file instead</Button> : null}
+    </div> : null}
+
+    <Button disabled={busy || !ready} type='submit' className='h-12 w-full text-sm'>
+      {busy ? <><Loader2 className='animate-spin' size={17} aria-hidden />{source === 'youtube' ? 'Starting import...' : uploadProgress === 100 ? 'Finishing upload...' : uploadProgress == null ? 'Uploading video...' : `Uploading video... ${uploadProgress}%`}</>
+        : <><Sparkles size={17} aria-hidden />Generate {settings.count} Clip{settings.count === 1 ? '' : 's'}</>}
+    </Button>
   </form>;
 }

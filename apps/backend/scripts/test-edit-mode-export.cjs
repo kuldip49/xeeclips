@@ -21,6 +21,8 @@ const {
   EditModeRenderService
 } = require('../dist/modules/edit-mode/render/edit-mode-render.service.js');
 const fixtures = require('./test-edit-mode-render.cjs');
+const { adaptAutomaticEditPlan } =
+  require('../dist/modules/edit-mode/generated-clip-edit-plan-adapter.js');
 
 const BUCKET = 'test-bucket';
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,8 +44,9 @@ function createExportHarness(directory) {
   const harness = createHarness();
   const objects = new Map();
   const storage = {
-    uploaded: [],
+    uploaded: [], downloaded: [],
     async downloadToFile(bucket, objectKey, filePath) {
+      storage.downloaded.push(objectKey);
       const source = objects.get(objectKey);
       if (!source) throw new Error(`no such object: ${objectKey}`);
       fs.copyFileSync(source, filePath);
@@ -236,8 +239,109 @@ async function main() {
     assert.equal(audio.codec_name, 'aac');
     assert(Math.abs(Number(rendered.format.duration) - 7) < 0.35);
     assert.equal(Number(asset.sizeBytes), fs.statSync(harness.storage.localPath(asset.objectKey)).size);
+    const containerTags = JSON.stringify(rendered.format.tags ?? {});
+    assert.doesNotMatch(containerTags, /made with ai|openai|chatgpt|watermark|ai-content-platform/iu,
+      'the MP4 container must not carry app/provider branding or an AI watermark tag');
+    const streamTags = JSON.stringify(rendered.streams.map((stream) => stream.tags ?? {}));
+    assert.doesNotMatch(streamTags, /made with ai|openai|chatgpt|watermark|ai-content-platform/iu,
+      'video/audio stream metadata must not carry app/provider branding');
+    const watermarkRenderSource = fs.readdirSync(path.join(__dirname, '../src/modules/edit-mode/render'))
+      .filter((name) => name.endsWith('.ts'))
+      .map((name) => fs.readFileSync(path.join(__dirname, '../src/modules/edit-mode/render', name), 'utf8'))
+      .join('\n');
+    assert.doesNotMatch(watermarkRenderSource, /made with ai|openai|chatgpt|app watermark/iu,
+      'the render path contains no inserted provider/app branding');
     console.log(`  full export: 2 segments, hook, logo, ${metadata.subtitles} captions, ` +
       `music, 1 zoom -> ${metadata.qa.result}`);
+    console.log(`  watermark: none; container tags: ${containerTags || '{}'}`);
+
+    // --- 1a. Step 4 reconstructed AI_EDITED canonical export ----------------
+    const automaticTranscript = [{ start: 1, end: 12,
+      text: 'One useful idea survives the automatic cut and remains editable', words: [
+        { start: 1, end: 1.4, text: 'One' }, { start: 1.4, end: 1.9, text: 'useful' },
+        { start: 1.9, end: 2.3, text: 'idea' }, { start: 2.3, end: 2.8, text: 'survives' },
+        { start: 8, end: 8.4, text: 'the' }, { start: 8.4, end: 9, text: 'automatic' },
+        { start: 9, end: 9.4, text: 'cut' }, { start: 9.4, end: 9.8, text: 'and' },
+        { start: 9.8, end: 10.4, text: 'remains' }, { start: 10.4, end: 11, text: 'editable' }
+      ] }];
+    let automaticId = 0;
+    const reconstructed = adaptAutomaticEditPlan({ sourceAssetId: 'auto-src',
+      sourceDuration: 20, transcriptSegments: automaticTranscript,
+      idFactory: (kind) => `auto-${kind}-${automaticId++}`,
+      editPlan: { version: 1, clipStartSec: 1, clipEndSec: 12, aspectRatio: '9:16',
+        openingStrategy: { hookStartSec: 1, removeWeakLeadIn: false, reason: 'Context' },
+        endingStrategy: { payoffEndSec: 12, reason: 'Payoff' }, musicMood: 'NONE',
+        preserveInformation: false,
+        onScreenHook: { enabled: true, text: 'One useful idea', startSec: 1, endSec: 3,
+          position: 'TOP', style: 'CLEAN' }, operations: [], retentionMoments: [],
+        onScreenText: [], subtitleStyle: { enabled: true, template: 'EDUCATION_CLEAN',
+          position: 'BOTTOM', maxWordsPerLine: 4, highlightCurrentWord: true,
+          animationStyle: 'WORD_HIGHLIGHT' }, subtitleTheme: 'CLEAN_WHITE',
+        subtitleEmphasis: [], platformPreset: 'YOUTUBE_SHORTS', gradePreset: 'CLEAN_SOCIAL',
+        audio: { normalize: false, removeLongPauses: true }, pacingNotes: [] },
+      editTelemetry: { timelineSegments: [
+        { sourceStart: 1, sourceEnd: 4, finalStart: 0, finalEnd: 3 },
+        { sourceStart: 8, sourceEnd: 12, finalStart: 3, finalEnd: 7 }
+      ], zoomEvents: [{ startSec: 3.25, endSec: 5.1, peakScale: 1.1,
+        focusX: 0.5, focusY: 0.45, triggerText: 'automatic', semanticReason: 'Key claim' }],
+      grading: { selectedPreset: 'CLEAN_SOCIAL' }, reframeSource: 'FACE' } });
+    assert.equal(reconstructed.mode, 'CANONICAL');
+    const reconstructedProject = seedProject(harness, { revision: 1,
+      settings: reconstructed.settingsPatch,
+      assets: [source({ id: 'auto-src', transcript: { segments: automaticTranscript } })],
+      elements: reconstructed.elements });
+    await harness.service.startExport(reconstructedProject, 1);
+    const reconstructedDone = await settle(harness.service, reconstructedProject);
+    assert.equal(reconstructedDone.phase, 'COMPLETED',
+      `reconstructed export failed: ${reconstructedDone.errorCode} ${reconstructedDone.message}`);
+    const reconstructedExport = (await harness.service.listExports(reconstructedProject))[0];
+    assert(Math.abs(reconstructedExport.metadata.durationSec - 7) < 0.1);
+    assert.equal(reconstructedExport.metadata.segments, 2);
+    assert.equal(reconstructedExport.metadata.textElements, 1);
+    assert(reconstructedExport.metadata.subtitles >= 2);
+    assert.equal(reconstructedExport.metadata.subtitlesFromTranscript, false,
+      'stored canonical captions, not a render-time transcript path, own the export');
+    assert(['PASS', 'DEGRADED_ACCEPTABLE'].includes(reconstructedExport.metadata.qa.result));
+    const reconstructedProbe = probe(harness.storage.localPath(reconstructedExport.objectKey));
+    assert.equal(reconstructedProbe.streams.find((stream) => stream.codec_type === 'video').width,
+      1080);
+    assert(Math.abs(Number(reconstructedProbe.format.duration) - 7) < 0.35);
+    console.log(`  Step 4 reconstructed AI_EDITED: 2 canonical cuts, hook, captions, zoom/color ` +
+      `state -> ${reconstructedExport.metadata.qa.result}`);
+
+    // --- 1b. Step 3 shared original source + updated generated range --------
+    // The editor identity key deliberately does not exist in storage. A NORMAL
+    // generated project must resolve the shared original Video key and render
+    // the post-boundary range (initial 1..6, start moved +2 => 3..6).
+    const sharedDownloadStart = harness.storage.downloaded.length;
+    const shared = seedProject(harness, {
+      revision: 2,
+      settings: { selectedPreset: 'SOURCE_MANUAL', aspectRatio: 'SOURCE',
+        reframePolicy: 'SOURCE', gradingPolicy: 'NONE', subtitlePolicy: 'OFF',
+        hookPolicy: 'OFF', zoomPolicy: 'OFF', musicPolicy: 'KEEP_EXISTING',
+        origin: { schemaVersion: 1, originKind: 'GENERATED_CLIP',
+          sourceMode: 'ORIGINAL_VIDEO', generatedClipId: 'normal-real-export',
+          originalVideoId: 'video-real-export', clipCandidateId: null,
+          generatedStart: 1, generatedEnd: 6, generatedDuration: 5,
+          currentSourceStart: 3, currentSourceEnd: 6, processingType: 'NORMAL_CLIPS',
+          variantKey: 'NORMAL_CLIPS:SOURCE', aspectRatio: 'SOURCE', targetPlatform: null } },
+      assets: [source({ id: 'shared-src', objectKey: 'logical/shared-source.mp4', storageObjectKey: 'src.mp4',
+        storageOwnership: 'SHARED', sourceVideoId: 'video-real-export' })],
+      elements: [{ id: 'shared-v1', assetId: 'shared-src', type: 'VIDEO', track: 0,
+        position: 0, startTime: 0, duration: 3, trimStart: 3, trimEnd: 6,
+        properties: {} }]
+    });
+    await harness.service.startExport(shared, 2);
+    const sharedDone = await settle(harness.service, shared);
+    assert.equal(sharedDone.phase, 'COMPLETED');
+    const sharedExport = (await harness.service.listExports(shared))[0];
+    assert(Math.abs(sharedExport.metadata.durationSec - 3) < 0.08,
+      `updated source range should export ~3s, got ${sharedExport.metadata.durationSec}`);
+    const sharedDownloads = harness.storage.downloaded.slice(sharedDownloadStart);
+    assert(sharedDownloads.includes('src.mp4'), 'export must read the original Video object');
+    assert(!sharedDownloads.includes('logical/shared-source.mp4'),
+      'export must not treat the editor identity key as stored media');
+    console.log('  Step 3 shared source: updated 3..6s original interval -> 3s real export');
 
     // --- 2. Repeated exports accumulate; a stale one is detectable -----------
     harness.rows.editProjects.get(full).revision = 7;   // the timeline moved on

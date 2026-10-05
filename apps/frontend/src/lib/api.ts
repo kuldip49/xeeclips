@@ -5,6 +5,7 @@ export type ProcessingStageName = 'UPLOADED' | 'INSPECT_MEDIA' | 'EXTRACT_AUDIO'
   'CRITIC_VALIDATION' |
   'VISUAL_ANALYSIS' | 'COMPLETED' | 'FAILED';
 
+/** OFFLINE only appears on legacy jobs; the backend treats it as FALLBACK_ONLY. */
 export type AiProcessingMode = 'ONLINE' | 'OFFLINE' | 'FALLBACK_ONLY';
 export type ProcessingType = 'NORMAL_CLIPS' | 'EDITED_CLIPS';
 export type OutputAspectRatio = '9:16' | '16:9' | '4:5' | '1:1';
@@ -18,9 +19,9 @@ export const TARGET_PLATFORM_LABELS: Record<TargetPlatform, string> = {
 };
 
 export const AI_PROCESSING_MODE_LABELS: Record<AiProcessingMode, string> = {
-  ONLINE: 'Online AI',
-  OFFLINE: 'Offline AI',
-  FALLBACK_ONLY: 'Fallback Only'
+  ONLINE: 'AI (OpenAI)',
+  OFFLINE: 'Rules only',
+  FALLBACK_ONLY: 'Rules only'
 };
 
 export type VideoProcessingStage = {
@@ -84,6 +85,10 @@ export class ApiError extends Error {
   }
 }
 
+export function isProcessingServerUnavailableStatus(status: number) {
+  return [502, 503, 504, 520, 521, 522, 523, 524, 530].includes(status);
+}
+
 export function retryVideo(videoId: string) {
   return apiFetch<ProcessingJob>('/videos/' + encodeURIComponent(videoId) + '/retry', { method: 'POST' });
 }
@@ -98,6 +103,9 @@ export type Video = {
   id: string;
   projectId: string;
   originalName: string;
+  sourceType?: 'UPLOAD' | 'YOUTUBE';
+  sourceUrl?: string | null;
+  externalVideoId?: string | null;
   objectKey: string;
   bucket: string;
   mimeType: string;
@@ -140,6 +148,10 @@ export type ProcessingJob = {
   outputStyle?: OutputStyle | null;
   requestedClipCount?: number | null;
   clipRenderStatus?: ClipRenderStatus | null;
+  /** One-step entry: the clip request chosen before upload/import, started after analysis. */
+  autoGeneration?: ClipCreationBody | null;
+  autoGenerationStatus?: 'PENDING' | 'STARTING' | 'STARTED' | 'FAILED' | null;
+  autoGenerationError?: string | null;
   error?: string | null;
   errorCode?: MediaErrorCode | string | null;
   retryable?: boolean;
@@ -182,25 +194,51 @@ export type Project = {
   updatedAt: string;
 };
 
+export function getPublicApiBaseUrl() {
+  const configured = process.env.NEXT_PUBLIC_API_URL;
+  if (configured) return configured.replace(/\/+$/u, "");
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("NEXT_PUBLIC_API_URL must be set for a production frontend build.");
+  }
+  return "http://localhost:4000";
+}
+
 export function getApiBaseUrl() {
   if (typeof window !== "undefined") {
-    return process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+    return getPublicApiBaseUrl();
   }
 
   return (
     process.env.SERVER_API_URL ??
-    process.env.NEXT_PUBLIC_API_URL ??
-    "http://localhost:4000"
+    getPublicApiBaseUrl()
   );
 }
 
-async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * The base for URLs that end up in the DOM (<video src>, <img>, download links). During SSR
+ * getApiBaseUrl() is SERVER_API_URL - inside Docker `http://backend:4000`, which the browser
+ * cannot resolve - and React does not patch attributes on hydration, so a DOM URL built from it
+ * silently never loads. Same rule as getEditModePublicApiBaseUrl in edit-mode-api.ts.
+ */
+export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${getApiBaseUrl()}${path}`, {
+    credentials: "include",
     ...init,
     cache: "no-store"
+  }).catch((error: unknown) => {
+    if (error instanceof TypeError) {
+      throw new Error("Processing server is currently unavailable.", { cause: error });
+    }
+    throw error;
   });
 
   if (!response.ok) {
+    if (isProcessingServerUnavailableStatus(response.status)) {
+      throw new ApiError("Processing server is currently unavailable.", response.status);
+    }
+    if (response.status === 413) {
+      throw new ApiError("This file exceeds the public upload size limit.", 413);
+    }
     let body: unknown;
     try {
       body = await response.json();
@@ -219,8 +257,8 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function listProjects() {
-  return apiFetch<Project[]>("/projects");
+export function listProjects(init?: RequestInit) {
+  return apiFetch<Project[]>("/projects", init);
 }
 
 export function createProject(input: { name: string; description?: string }) {
@@ -231,16 +269,93 @@ export function createProject(input: { name: string; description?: string }) {
   });
 }
 
-export function listVideos(projectId?: string) {
+export function listVideos(projectId?: string, init?: RequestInit) {
   const query = projectId ? '?projectId=' + encodeURIComponent(projectId) : '';
-  return apiFetch<Video[]>('/videos' + query);
+  return apiFetch<Video[]>('/videos' + query, init);
 }
 
-export function uploadVideo(projectId: string, body: FormData) {
-  return apiFetch<Video>('/projects/' + encodeURIComponent(projectId) + '/videos', {
-    method: 'POST',
-    body
+export async function uploadVideo(projectId: string, body: FormData,
+  onProgress?: (completed: number, total: number) => void) {
+  const file = body.get('file');
+  if (!(file instanceof File)) throw new Error('Choose a video file to upload.');
+
+  // Keep each proxied request well below Cloudflare Free/Pro's 100 MB body limit.
+  // The original multipart route remains useful for small uploads and local clients.
+  if (file.size <= 20 * 1024 * 1024) {
+    return apiFetch<Video>('/projects/' + encodeURIComponent(projectId) + '/videos', {
+      method: 'POST', body
+    });
+  }
+
+  const session = await apiFetch<{ id: string; chunkBytes: number; chunks: number }>(
+    '/projects/' + encodeURIComponent(projectId) + '/videos/upload-sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: file.name, mimeType: file.type, size: file.size,
+        aiMode: body.get('aiMode'), processingType: body.get('processingType'),
+        aspectRatio: body.get('aspectRatio'), targetPlatform: body.get('targetPlatform'),
+        generationRequest: body.get('generationRequest')
+      })
+    }
+  );
+  for (let index = 0; index < session.chunks; index++) {
+    const chunk = file.slice(index * session.chunkBytes,
+      Math.min(file.size, (index + 1) * session.chunkBytes));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await apiFetch<{ index: number; size: number }>(
+          '/upload-sessions/' + encodeURIComponent(session.id) + '/chunks/' + index, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: chunk
+          });
+        break;
+      } catch (error) {
+        if (attempt === 2 || (error instanceof ApiError && error.status < 500)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+      }
+    }
+    onProgress?.(index + 1, session.chunks);
+  }
+  return apiFetch<Video>('/upload-sessions/' + encodeURIComponent(session.id) + '/complete', {
+    method: 'POST'
   });
+}
+
+export type VideoImportJob = {
+  id: string; projectId: string; videoId: string | null; sourceUrl: string;
+  externalVideoId: string; status: 'PENDING' | 'IMPORTING' | 'READY' | 'IMPORT_FAILED' | 'CANCELLED';
+  stage: string; progress: number; errorCode: string | null; error: string | null;
+  title: string | null; durationSec: number | null; thumbnailUrl: string | null;
+  aiMode?: AiProcessingMode; outputAspectRatio?: OutputAspectRatio | null;
+  targetPlatform?: TargetPlatform | null; autoGeneration?: ClipCreationBody | null;
+  createdAt: string; updatedAt: string;
+};
+
+export function getVideoImportCapabilities() {
+  return apiFetch<{ youtubeEnabled: boolean }>('/videos/import-capabilities');
+}
+
+export function importYouTubeVideo(input: { projectId: string; url: string; aiMode: AiProcessingMode;
+  processingType: ProcessingType; aspectRatio: OutputAspectRatio; targetPlatform: TargetPlatform;
+  rightsConfirmed: true; generationRequest: ClipCreationBody }) {
+  return apiFetch<VideoImportJob>('/videos/import-url', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+}
+
+export function listVideoImports(projectId: string) {
+  return apiFetch<VideoImportJob[]>('/videos/import-jobs?projectId=' + encodeURIComponent(projectId));
+}
+
+export function retryVideoImport(id: string) {
+  return apiFetch<VideoImportJob>('/videos/import-jobs/' + encodeURIComponent(id) + '/retry',
+    { method: 'POST' });
+}
+
+export function cancelVideoImport(id: string) {
+  return apiFetch<VideoImportJob>('/videos/import-jobs/' + encodeURIComponent(id) + '/cancel',
+    { method: 'POST' });
 }
 
 export function getTranscript(videoId: string) {
@@ -418,6 +533,9 @@ export type GeneratedClip = {
   aspectRatio?: OutputAspectRatio | 'SOURCE';
   editTelemetry?: { editQualityStatus?: 'PASSED' | 'DEGRADED'; editQualityDegradedChecks?: string[] } | null;
   playbackUrl: string;
+  editProjectId: string | null;
+  isEditable: boolean;
+  editUrl: string | null;
   createdAt: string;
   updatedAt: string;
   candidate?: ClipCandidate | null;
@@ -440,14 +558,53 @@ export type ClipAnalysis = {
     outputStyle: OutputStyle | null;
     requestedClipCount: number | null;
     returnedClipCount: number;
+    deliveryStatus?: 'IN_PROGRESS' | 'COMPLETE' | 'PARTIAL' | 'FAILED' | null;
+    requestedTemplate?: string | null;
+    effectiveTemplate?: string | null;
     error: string | null;
+    /** The optional style/brief/reference the request was served with. */
+    generation?: StoredGeneration | null;
   } | null;
+};
+
+/** Optional unified-generation inputs sent with a clip request. */
+export type GenerationRequest = {
+  templateId: string | null;
+  components: Record<string, string>;
+  brief: string;
+  referenceId: string | null;
+  /** The top-level look the user SELECTED (AI_EDITED, NORMAL or a template id). */
+  look?: string | null;
+};
+
+export type StoredGeneration = GenerationRequest & {
+  requestedTemplate?: string;
+  effectiveTemplate?: string;
+  interpreted?: { intent?: { modes?: string[]; topics?: string[]; strict?: boolean } | null;
+    source?: string; aiState?: string };
+};
+
+/** Canonical styling of one delivered clip (its editable project's export). */
+export type ClipStyleState = {
+  status: 'BASE_READY' | 'STYLE_APPLYING' | 'STYLE_READY' | 'STYLE_FAILED' | 'EXPORT_READY' |
+    'STYLING' | 'RENDERING' | 'READY' | 'FAILED' | 'SKIPPED' |
+    // Backward-compatibility statuses resolveGenerationStyleReadiness() can also return: a
+    // historical clip whose styled export was independently verified despite predating recorded
+    // template identity, or a style record whose status this client does not recognize.
+    'LEGACY_STYLE_READY' | 'STYLE_UNKNOWN';
+  playbackUrl: string | null;
+  applied: string[];
+  skipped: string[];
+  error: string | null;
 };
 
 export type ClipCard = {
   id: string;
   position: number;
   playbackUrl: string;
+  editProjectId: string | null;
+  isEditable: boolean;
+  editUrl: string | null;
   /** Designed cover carrying the clip's own hook; null when none was rendered. */
   posterUrl: string | null;
   outputStyle: OutputStyle;
@@ -459,12 +616,23 @@ export type ClipCard = {
   caption: string;
   hashtags: string[];
   aiModeUsed: AiModeUsed;
+  generationJobId: string | null;
+  templateId: string | null;
+  styleVariant: string | null;
+  requestedClipIndex: number;
+  sourceRange: { startTime: number; endTime: number };
+  /** Present when a style was requested; null for plain automatic/clean clips. */
+  style?: ClipStyleState | null;
 };
 
 export type ClipResults = {
   status: ClipRenderStatus | null;
   outputStyle: OutputStyle | null;
   requestedClipCount: number | null;
+  deliveredClipCount?: number;
+  deliveryStatus?: 'IN_PROGRESS' | 'COMPLETE' | 'PARTIAL' | 'FAILED' | null;
+  requestedTemplate?: string | null;
+  effectiveTemplate?: string | null;
   error: string | null;
   clips: ClipCard[];
 };
@@ -477,16 +645,23 @@ export function getClipResults(videoId: string) {
   return apiFetch<ClipResults>('/videos/' + encodeURIComponent(videoId) + '/clip-results');
 }
 
-export function createClips(videoId: string, request: {
-  requestedClipCount: number; outputStyle: OutputStyle;
-}) {
+/** The body of a clip-selection request; also what one-step entry sends ahead of analysis. */
+export type ClipCreationBody = {
+  requestedClipCount: number; outputStyle: OutputStyle; generation?: GenerationRequest | null;
+  /** Re-run a finished request with identical settings instead of returning it as-is. */
+  regenerate?: boolean;
+  /** Set by the backend when a one-step request asked for more clips than the video allows. */
+  adjustedFrom?: number;
+};
+
+export function createClips(videoId: string, request: ClipCreationBody) {
   return apiFetch<ClipAnalysis>('/videos/' + encodeURIComponent(videoId) + '/clip-selection', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request)
   });
 }
 
-export function getGeneratedClips(videoId: string) {
-  return apiFetch<GeneratedClip[]>('/videos/' + encodeURIComponent(videoId) + '/generated-clips');
+export function getGeneratedClips(videoId: string, init?: RequestInit) {
+  return apiFetch<GeneratedClip[]>('/videos/' + encodeURIComponent(videoId) + '/generated-clips', init);
 }
 
 export type VisualAnalysis = {
@@ -510,6 +685,6 @@ export function getVisualAnalysis(videoId: string) {
   return apiFetch<VisualAnalysis[]>('/videos/' + encodeURIComponent(videoId) + '/visual-analysis');
 }
 
-export function getProject(id: string) {
-  return apiFetch<Project>(`/projects/${id}`);
+export function getProject(id: string, init?: RequestInit) {
+  return apiFetch<Project>(`/projects/${id}`, init);
 }

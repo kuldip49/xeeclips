@@ -202,8 +202,8 @@ async function main() {
     'DETERMINISTIC_FALLBACK');
   assert.equal(llmCalls, 0);
   assert.equal((await service.create({ ...context, aiMode: 'ONLINE' })).source, 'LUNA');
-  // Two Luna calls now: the edit plan, then the headline candidate set to score.
-  assert.equal(llmCalls, 2);
+  // A grounded in-plan or deterministic hook avoids a second model call.
+  assert.equal(llmCalls, 1);
 
   // A rejected in-plan hook is replaced by the best scored candidate.
   let repairCalls = 0;

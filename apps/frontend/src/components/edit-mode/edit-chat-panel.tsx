@@ -1,36 +1,31 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, CornerDownLeft, LoaderCircle, RefreshCw, Sparkles, TriangleAlert,
-  X } from 'lucide-react';
+import { ArrowRight, Check, CornerDownLeft, Crosshair, LoaderCircle, Pencil, RefreshCw,
+  Sparkles, TriangleAlert, X } from 'lucide-react';
 import {
   applyEditChat, cancelEditChat, EditModeApiError, getEditChatThread, planEditChat
 } from '@/lib/edit-mode-api';
-import type { ChatApplyResult, ChatMessage, ChatProposal, EditTimeRange } from '@/lib/edit-mode-types';
-
-/** Concrete openers, so the panel teaches its own vocabulary. */
-const SUGGESTIONS = [
-  'Remove the first 3 seconds',
-  'Make the logo smaller',
-  'Mute the music',
-  'Make it 9:16'
-];
+import { changeAction, changeRows, CHAT_SUGGESTIONS, contextLine } from '@/lib/edit-mode-chat';
+import type { ChatApplyResult, ChatMessage, ChatProposal, EditElement,
+  EditTimeRange } from '@/lib/edit-mode-types';
 
 /**
  * The AI editor panel.
  *
- * Every turn is proposal-first: the assistant explains what it would change in
- * plain sentences and waits. Nothing is applied until Apply is pressed, and the
- * raw commands are never shown or sent from here - the browser only ever holds
- * a proposal id.
+ * Every turn is proposal-first: the assistant shows exactly what it would
+ * change - "Music 20% -> 14%", the current hook beside the proposed one - and
+ * waits. Nothing is applied until Apply is pressed, and the raw commands are
+ * never shown or sent from here: the browser only ever holds a proposal id.
  */
 export function EditChatPanel({ projectId, revision, hasSource, disabled, selectedElementId,
-  selectedTimeRange, playheadSec, onApplied, onError }: {
+  selected, selectedTimeRange, playheadSec, onApplied, onError }: {
   projectId: string;
   revision: number;
   hasSource: boolean;
   disabled: boolean;
   selectedElementId: string | null;
+  selected?: EditElement;
   selectedTimeRange: EditTimeRange | null;
   playheadSec: number;
   onApplied: (result: ChatApplyResult) => void;
@@ -45,6 +40,7 @@ export function EditChatPanel({ projectId, revision, hasSource, disabled, select
   const [lastInstruction, setLastInstruction] = useState('');
   const [loaded, setLoaded] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -95,13 +91,25 @@ export function EditChatPanel({ projectId, revision, hasSource, disabled, select
     } finally { setBusy(null); }
   }, [busy, onApplied, onError, projectId, proposal, revision]);
 
-  const cancel = useCallback(async () => {
+  const cancel = useCallback(async (quiet = false) => {
     if (!proposal) return;
     const pending = proposal;
     setProposal(null);
-    try { setMessages((await cancelEditChat(projectId, pending.proposalId)).messages); }
-    catch { /* cancelling is local-safe: nothing was applied either way */ }
+    try {
+      const result = await cancelEditChat(projectId, pending.proposalId);
+      if (!quiet) setMessages(result.messages);
+    } catch { /* cancelling is local-safe: nothing was applied either way */ }
   }, [projectId, proposal]);
+
+  /** "Change": another version of written wording, or hand the request back. */
+  const change = useCallback(async () => {
+    if (!proposal || busy) return;
+    const next = changeAction(proposal);
+    await cancel(true);
+    if (next.kind === 'ANOTHER') { void send(next.message); return; }
+    setDraft(next.draft);
+    composer.current?.focus();
+  }, [busy, cancel, proposal, send]);
 
   const idle = !busy && !disabled && hasSource;
 
@@ -115,7 +123,8 @@ export function EditChatPanel({ projectId, revision, hasSource, disabled, select
     <div ref={scroller} className='grid max-h-[320px] content-start gap-2 overflow-y-auto pr-1'>
       {!loaded && <p className='text-xs text-slate-500'>Loading conversation…</p>}
       {loaded && !messages.length && <p className='text-xs leading-relaxed text-slate-400'>
-        Tell me what to change and I&apos;ll show you the edit before anything happens.
+        Tell me what to change in your own words - &ldquo;the music is too loud&rdquo;, &ldquo;move
+        my logo down&rdquo; - and I&apos;ll show you the edit before anything happens.
       </p>}
       {messages.map((message) => <ChatBubble key={message.id} message={message} />)}
       {busy === 'planning' && <p className='flex items-center gap-2 text-xs text-slate-400'>
@@ -123,27 +132,30 @@ export function EditChatPanel({ projectId, revision, hasSource, disabled, select
     </div>
 
     {proposal && <ProposalCard proposal={proposal} busy={busy === 'applying'}
-      onApply={() => void apply()} onCancel={() => void cancel()}
+      onApply={() => void apply()} onCancel={() => void cancel()} onChange={() => void change()}
       onRegenerate={lastInstruction ? () => void send(lastInstruction) : undefined} />}
 
-    {selectedTimeRange && <p className='rounded-lg border border-amber-300/20 bg-amber-300/5 px-2.5 py-1.5 text-[11px] text-amber-200'>
-      Acting on the selected {selectedTimeRange.startSec.toFixed(1)}s–
-      {selectedTimeRange.endSec.toFixed(1)}s. Try &ldquo;delete this section&rdquo;.</p>}
+    {/* What "this", "it" and "here" will mean for the next message. */}
+    <p data-testid='chat-context' className='flex items-start gap-1.5 text-[11px] text-slate-500'>
+      <Crosshair size={12} className='mt-0.5 shrink-0 text-slate-600' />
+      <span>AI sees: {contextLine({ selected, range: selectedTimeRange, playheadSec })}</span>
+    </p>
 
     {loaded && !messages.length && <div className='flex flex-wrap gap-1.5'>
-      {SUGGESTIONS.map((suggestion) => <button key={suggestion} type='button' disabled={!idle}
+      {CHAT_SUGGESTIONS.map((suggestion) => <button key={suggestion} type='button' disabled={!idle}
         onClick={() => setDraft(suggestion)}
         className='rounded-full border border-white/10 px-2.5 py-1 text-[11px] text-slate-300 transition hover:border-violet-300/40 hover:text-white disabled:opacity-40'>
         {suggestion}</button>)}
     </div>}
 
     <div className='grid gap-2'>
-      <textarea value={draft} rows={2} disabled={!idle}
+      <textarea ref={composer} value={draft} rows={2} disabled={!idle}
+        aria-label='Tell the AI editor what to change'
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void send(); }
         }}
-        placeholder={hasSource ? 'e.g. "remove the first 3 seconds and make the logo smaller"'
+        placeholder={hasSource ? 'e.g. "make the hook shorter and lower the music"'
           : 'Attach a source video first'}
         className='w-full resize-none rounded-xl border border-white/10 bg-slate-950/60 px-3 py-2 text-xs text-slate-100 placeholder:text-slate-600 focus:border-violet-300/40 focus:outline-none disabled:opacity-40' />
       <button type='button' disabled={!idle || !draft.trim()} onClick={() => void send()}
@@ -171,24 +183,51 @@ function ChatBubble({ message }: { message: ChatMessage }) {
   return <div className='mr-6 grid gap-1 rounded-xl rounded-bl-sm border border-white/10 px-3 py-2'>
     <p className='text-xs text-slate-200'>{message.text}</p>
     {!!message.plannedChanges?.length && <ul className='grid gap-0.5 text-[11px] text-slate-400'>
-      {message.plannedChanges.map((line, index) => <li key={index}>· {line}</li>)}
+      {message.plannedChanges.slice(0, 6).map((line, index) => <li key={index}>· {line}</li>)}
     </ul>}
   </div>;
 }
 
-/** The decision point. Plain sentences only - no command JSON. */
-function ProposalCard({ proposal, busy, onApply, onCancel, onRegenerate }: {
+/**
+ * The decision point: what is there now, what it would become. Plain values
+ * only - no command JSON, no handles, no ids.
+ */
+export function ProposalCard({ proposal, busy, onApply, onCancel, onChange, onRegenerate }: {
   proposal: ChatProposal; busy: boolean; onApply: () => void; onCancel: () => void;
-  onRegenerate?: () => void;
+  onChange: () => void; onRegenerate?: () => void;
 }) {
   const stale = proposal.state === 'STALE' || proposal.state === 'FAILED';
-  return <div className='grid gap-2 rounded-xl border border-violet-300/25 bg-violet-400/5 p-3'>
-    <p className='text-[11px] font-semibold uppercase tracking-[.14em] text-violet-300'>
-      Planned changes</p>
-    <ul className='grid gap-1 text-xs text-slate-200'>
-      {proposal.plannedChanges.map((line, index) => <li key={index} className='flex gap-1.5'>
-        <span className='text-violet-300'>·</span>{line}</li>)}
-    </ul>
+  const rows = changeRows(proposal);
+  const creative = proposal.route === 'CREATIVE_LLM' || proposal.route === 'CREATIVE_DETERMINISTIC';
+  return <div data-testid='chat-proposal'
+    className='grid gap-2 rounded-xl border border-violet-300/25 bg-violet-400/5 p-3'>
+    <p className='text-xs font-semibold text-slate-100'>{proposal.summary}</p>
+    {rows.length ? <dl className='grid gap-2'>
+      {rows.map((row, index) => row.wording
+        ? <div key={index} className='grid gap-1 text-[11px]'>
+          <dt className='font-semibold uppercase tracking-[.12em] text-violet-300'>{row.label}</dt>
+          <dd className='grid gap-1'>
+            <span className='rounded-md bg-black/30 px-2 py-1 text-slate-400'>
+              <span className='mr-1 text-[10px] uppercase tracking-wider text-slate-500'>Current</span>
+              {row.before}</span>
+            <span className='rounded-md bg-violet-400/10 px-2 py-1 text-slate-100'>
+              <span className='mr-1 text-[10px] uppercase tracking-wider text-violet-300'>Proposed</span>
+              {row.after}</span>
+          </dd>
+        </div>
+        : <div key={index} className='flex items-center gap-2 text-xs'>
+          <dt className='min-w-0 flex-1 truncate text-slate-300'>{row.label}</dt>
+          <dd className='flex shrink-0 items-center gap-1.5 tabular-nums'>
+            <span className='text-slate-500'>{row.before}</span>
+            <ArrowRight size={11} className='text-violet-300' />
+            <span className='font-semibold text-slate-100'>{row.after}</span>
+          </dd>
+        </div>)}
+    </dl>
+      : <ul className='grid gap-1 text-xs text-slate-200'>
+        {proposal.plannedChanges.map((line, index) => <li key={index} className='flex gap-1.5'>
+          <span className='text-violet-300'>·</span>{line}</li>)}
+      </ul>}
     {!!proposal.warnings.length && <ul className='grid gap-1'>
       {proposal.warnings.map((warning, index) => <li key={index}
         className='flex items-start gap-1.5 text-[11px] text-amber-200'>
@@ -204,9 +243,14 @@ function ProposalCard({ proposal, busy, onApply, onCancel, onRegenerate }: {
         className='flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-400 px-3 py-1.5 text-xs font-bold text-slate-950 disabled:opacity-40'>
         {busy ? <LoaderCircle size={13} className='animate-spin' /> : <Check size={13} />}
         {busy ? 'Applying…' : 'Apply'}</button>
-      {stale && onRegenerate && <button type='button' disabled={busy} onClick={onRegenerate}
-        className='flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-amber-300/30 px-3 py-1.5 text-xs font-semibold text-amber-100 disabled:opacity-40'>
-        <RefreshCw size={13} />Regenerate proposal</button>}
+      {stale && onRegenerate
+        ? <button type='button' disabled={busy} onClick={onRegenerate}
+          className='flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-amber-300/30 px-3 py-1.5 text-xs font-semibold text-amber-100 disabled:opacity-40'>
+          <RefreshCw size={13} />Regenerate</button>
+        : <button type='button' disabled={busy} onClick={onChange}
+          title={creative ? 'Suggest a different version' : 'Edit the request'}
+          className='flex items-center justify-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold text-slate-200 disabled:opacity-40'>
+          {creative ? <RefreshCw size={13} /> : <Pencil size={13} />}Change</button>}
       <button type='button' disabled={busy} onClick={onCancel}
         className='flex items-center justify-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold text-slate-300 disabled:opacity-40'>
         <X size={13} />Cancel</button>

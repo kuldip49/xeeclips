@@ -1,3 +1,6 @@
+import { readdir, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
@@ -31,7 +34,15 @@ export class ClipRenderQueueService implements ClipRenderDispatcher, OnModuleDes
     this.worker = new Worker<ClipRenderRequest>(CLIP_RENDER_QUEUE, async (job) => {
       if (job.name === RENDER_CLIPS_JOB) await handlers.process(job.data);
     }, { connection: this.connection,
-      concurrency: Math.max(1, Number(process.env.CLIP_RENDER_CONCURRENCY) || 1) });
+      concurrency: Math.max(1, Number(process.env.CLIP_RENDER_CONCURRENCY) || 1),
+      // A restart or crash mid-request stalls the job; it resumes (finished clips are reused),
+      // so a couple of stalls must not fail a long request outright (BullMQ's default is 1).
+      maxStalledCount: Math.max(1, Number(process.env.CLIP_RENDER_MAX_STALLS) || 5) });
+    // Batch source copies (one per request, ~source size) left behind by a killed process.
+    void readdir(tmpdir()).then((names) => Promise.all(names
+      .filter((name) => name.startsWith('ai-content-clip-batch-'))
+      .map((name) => rm(join(tmpdir(), name), { recursive: true, force: true }))))
+      .catch(() => undefined);
     this.worker.on('failed', (job, error) => {
       if (job?.name === RENDER_CLIPS_JOB) void handlers.failed(job.data, error).catch((failure) =>
         this.logger.error('Could not persist clip render failure', failure));

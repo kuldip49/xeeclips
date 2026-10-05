@@ -389,13 +389,18 @@ export class EditPlanService {
         candidates.push({ text: validated.plan.onScreenHook.text, source: 'LUNA_PLAN' });
       let hookRepairAttempted = false;
       let hookRepairSucceeded = false;
-      try {
-        const generated = await this.hookCandidates(context);
-        if (generated.length) {
-          hookRepairAttempted = Boolean(validated.hookValidationFailureReason);
-          for (const text of generated) candidates.push({ text, source: 'LUNA_CANDIDATE' });
-        }
-      } catch { /* the deterministic hook below still guarantees a headline */ }
+      // The edit plan and content package already supply grounded hook options.
+      // Ask a second model only when those options fail the same hook scorer.
+      const preliminary = this.applyHook(validated.plan, context, candidates);
+      if (validated.hookValidationFailureReason || (preliminary.hookScore ?? 0) < 4) {
+        try {
+          const generated = await this.hookCandidates(context);
+          if (generated.length) {
+            hookRepairAttempted = Boolean(validated.hookValidationFailureReason);
+            for (const text of generated) candidates.push({ text, source: 'LUNA_CANDIDATE' });
+          }
+        } catch { /* the deterministic hook below still guarantees a headline */ }
+      }
       const hook = this.applyHook(validated.plan, context, candidates);
       hookRepairSucceeded = hookRepairAttempted && hook.hookSource === 'LUNA_CANDIDATE';
       // The chosen line still has to satisfy the plan validator's timing/style

@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils';
 const navigation = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { label: 'Projects', href: '/dashboard#projects', icon: FolderKanban },
-  { label: 'EditMode', href: '/edit-mode', icon: PenTool },
+  { label: 'Editor', href: '/edit-mode', icon: PenTool },
   { label: 'Generated Clips', href: '/dashboard#clips', icon: Scissors },
   { label: 'Analytics', href: '/dashboard#analytics', icon: BarChart3 },
   { label: 'Settings', href: '/dashboard#settings', icon: Settings }

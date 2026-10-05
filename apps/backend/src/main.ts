@@ -4,8 +4,13 @@ import { AppModule } from "./modules/app/app.module";
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableShutdownHooks();
+  const frontendOrigins = (process.env.FRONTEND_ORIGIN ?? "http://localhost:3000")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
   app.enableCors({
-    origin: process.env.FRONTEND_ORIGIN ?? "http://localhost:3000",
+    origin: frontendOrigins,
+    credentials: true,
     // A cross-origin <video> can only seek a ranged response when the browser is
     // allowed to read these, so without them EditMode's source preview and its
     // rendered export preview both refuse to load.
