@@ -159,9 +159,9 @@ export function EditAgentPanel({ projectId, revision, hasSource, disabled, selec
           </div>}
           <details className='group rounded-xl border border-white/[.07] text-sm'>
             <summary className='flex min-h-[44px] cursor-pointer list-none items-center gap-2 px-3 text-slate-300 [&::-webkit-details-marker]:hidden'>
-              <ShieldCheck size={15} className='shrink-0 text-emerald-300/80' />Rules for the AI
+              <ShieldCheck size={15} className='shrink-0 text-emerald-300/80' />Editing preferences
               {guards.length ? <span className='rounded-full bg-emerald-400/15 px-2 text-xs text-emerald-200'>{guards.length}</span> : null}</summary>
-            <div className='flex flex-wrap gap-2 px-3 pb-3' role='group' aria-label='Rules for the AI'>
+            <div className='flex flex-wrap gap-2 px-3 pb-3' role='group' aria-label='Editing preferences'>
               {GUARDS.map((guard) => { const on = guards.includes(guard.type); return <button key={guard.type}
                 type='button' aria-pressed={on}
                 onClick={() => setGuards((current) => on ? current.filter((item) => item !== guard.type)
@@ -235,7 +235,7 @@ export function EditAgentPanel({ projectId, revision, hasSource, disabled, selec
         <X size={13} />Skip</button>
     </div>}
 
-    <div className='flex flex-wrap gap-1.5' role='group' aria-label='Rules for the AI'>
+    <div className='flex flex-wrap gap-1.5' role='group' aria-label='Editing preferences'>
       {GUARDS.map((guard) => { const on = guards.includes(guard.type); return <button key={guard.type}
         type='button' aria-pressed={on}
         onClick={() => setGuards((current) => on ? current.filter((item) => item !== guard.type)
