@@ -79,6 +79,7 @@ export type AgentRun = {
 
 export type AgentRunInput = {
   message?: unknown;
+  aiConsent?: unknown;
   revision?: unknown;
   selectedElementId?: unknown;
   selectedTimeRange?: unknown;

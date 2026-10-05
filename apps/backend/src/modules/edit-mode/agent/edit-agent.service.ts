@@ -13,7 +13,7 @@
 // the same typed commands, constraint enforcement, validation and history the
 // manual editor uses. It never runs a shell, FFmpeg, raw SQL or DOM clicks.
 
-import { BadRequestException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
@@ -22,6 +22,7 @@ import { aiAvailable, aiUnavailable, type AiAvailability } from '../../ai/ai-ava
 import { EditModeService, type AssistantBundleCommand } from '../edit-mode.service';
 import { EditTemplateService } from '../edit-template.service';
 import { EditChatService } from '../chat/edit-chat.service';
+import { chatPlannerAiMode } from '../chat/edit-chat-planner';
 import type { ChatContext } from '../chat/edit-chat-context';
 import { parseNaturalRequest, splitClauses, type ClauseLedgerEntry } from '../chat/edit-chat-intents';
 import { planDeterministicChat } from '../chat/edit-chat-deterministic';
@@ -113,8 +114,7 @@ export class EditAgentService {
 
   private aiConfigured(): AiAvailability {
     // A cheap, call-free check used for UI state; a real call can still fail.
-    const mode = (process.env.EDIT_MODE_CHAT_AI_MODE || process.env.AI_PROCESSING_MODE || '')
-      .trim().toUpperCase() || 'FALLBACK_ONLY';
+    const mode = chatPlannerAiMode().toUpperCase();
     if (mode !== 'ONLINE') return aiUnavailable('DISABLED');
     return process.env.OPENAI_API_KEY?.trim() ? aiAvailable() : aiUnavailable('NOT_CONFIGURED');
   }
@@ -124,6 +124,9 @@ export class EditAgentService {
   // ===========================================================================
 
   async run(id: string, input: AgentRunInput): Promise<AgentRun> {
+    if (chatPlannerAiMode().toUpperCase() === 'ONLINE' && input.aiConsent !== true) {
+      throw new ForbiddenException('Allow Ask AI before sending a request.');
+    }
     const message = typeof input.message === 'string' ? input.message.trim() : '';
     if (!message && !input.confirmRunId) throw new BadRequestException({ code: 'EMPTY_MESSAGE',
       message: 'Tell the editor what to change' });

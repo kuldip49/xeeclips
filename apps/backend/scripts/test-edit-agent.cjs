@@ -31,7 +31,8 @@ async function agentFor(options = {}) {
     render, llm);
   const run = async (message, extra = {}) => {
     const project = await s.refresh();
-    return agent.run(s.id, { message, revision: project.revision, playheadSec: 14, ...extra });
+    return agent.run(s.id, { message, revision: project.revision, playheadSec: 14,
+      aiConsent: true, ...extra });
   };
   return { s, agent, run, exports };
 }
@@ -165,12 +166,19 @@ async function main() {
             { tool: 'not.a.tool', args: [] }] })) },
         metadata: { provider: 'openai', model: 'test' } };
       } };
-    const { s, run } = await agentFor({ llm });
+    const { s, run, agent } = await agentFor({ llm });
+    await assert.rejects(agent.run(s.id, { message: 'make it premium',
+      revision: s.project.revision }), /Allow Ask AI before sending a request/u);
+    ok('online Ask AI rejects a request without accepted consent');
     const result = await run('professional bana do, cinematic but natural');
     const after = await s.refresh();
     ok('vague/Hinglish clauses go to OpenAI with a bounded context and the tool catalogue',
       seen.length === 1 && seen[0].tools.length === agentTools().length &&
-      JSON.stringify(seen[0].project).length < 20000 && !JSON.stringify(seen[0]).includes('asset-source'));
+      JSON.stringify(seen[0].clip).length < 20000 && !JSON.stringify(seen[0]).includes('asset-source'));
+    ok('AI context omits unrelated history, storage metadata and transcript for a visual request',
+      !('recent' in seen[0].clip) && !('notes' in seen[0].clip) &&
+      !('templates' in seen[0].clip) &&
+      !('transcript' in seen[0].clip) && !JSON.stringify(seen[0].clip).includes('objectKey'));
     ok('the model plan is executed through canonical tools and verified',
       result.ledger[0].planSource === 'OPENAI' && result.ledger[0].status === 'DONE' &&
       result.ledger[0].verification === 'VERIFIED' &&
@@ -182,8 +190,8 @@ async function main() {
       throw new LlmProviderError('RATE_LIMIT_FAILURE', 'slow down', 429); } };
     const { run: run429 } = await agentFor({ llm: failing });
     const limited = await run429('make it more energetic');
-    ok('OpenAI 429 -> honest RATE_LIMITED message, nothing faked', limited.ledger[0].status === 'UNSUPPORTED' &&
-      /rate-limited/u.test(limited.ledger[0].detail) && limited.ai.state !== 'AVAILABLE');
+    ok('OpenAI 429 -> simple unavailable message, nothing faked', limited.ledger[0].status === 'UNSUPPORTED' &&
+      /AI editor is busy/u.test(limited.ledger[0].detail) && limited.ai.state !== 'AVAILABLE');
     const mixed = await run429('make captions yellow and make it more energetic');
     ok('with AI down, simple clauses still execute deterministically',
       mixed.ledger[0].status === 'DONE' && mixed.ledger[1].status === 'UNSUPPORTED');

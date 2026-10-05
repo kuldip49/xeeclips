@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ManualEditCommand } from '@/lib/edit-mode-api';
 import type { AgentRun, ChatApplyResult, EditAsset, EditElement, EditHistory, EditPresetApplyResult,
   EditProject, EditProjectStyle, EditTimeRange } from '@/lib/edit-mode-types';
@@ -14,6 +14,8 @@ import { EditPresetPanel } from '../edit-preset-panel';
 
 export type RightTab = 'INSPECTOR' | 'AI';
 export type AiMode = 'CHAT' | 'REVIEW' | 'BRIEF';
+const ASK_AI_CONSENT_KEY = 'xeeclip-ask-ai-consent-v1';
+const ASK_AI_DISCLOSURE = 'Ask AI uses an AI service to understand your request and relevant clip content.';
 
 export type EditPanelContentProps = {
   project: EditProject;
@@ -60,9 +62,30 @@ export function EditAiContent({ project, source, selected, style, busy, selected
   /** Optional controlled mode, so a parent can keep it across tab switches. */
   mode?: AiMode; onModeChange?: (mode: AiMode) => void }) {
   const [ownMode, setOwnMode] = useState<AiMode>('CHAT');
+  const [consent, setConsent] = useState<'loading' | 'needed' | 'declined' | 'granted'>('loading');
+  useEffect(() => {
+    try { setConsent(localStorage.getItem(ASK_AI_CONSENT_KEY) === 'allowed' ? 'granted' : 'needed'); }
+    catch { setConsent('needed'); }
+  }, []);
   const aiMode = mode ?? ownMode;
   const setAiMode = (next: AiMode) => { setOwnMode(next); onModeChange?.(next); };
   const sheet = layout === 'sheet';
+  if (consent !== 'granted') return <section className='grid content-start gap-4 rounded-2xl border border-white/10 bg-[#111827] p-4 sm:p-5'>
+    <h2 className='text-lg font-semibold'>Ask AI</h2>
+    <p className='text-sm leading-6 text-slate-300'>{ASK_AI_DISCLOSURE}</p>
+    {consent === 'declined' ? <p className='text-sm text-slate-400'>Ask AI is off. You can keep editing manually.</p>
+      : <p className='text-sm text-slate-300'>Allow Ask AI to process your prompt and relevant clip content?</p>}
+    <div className='flex flex-wrap gap-2'>
+      {consent === 'declined' ? <button type='button' onClick={() => setConsent('needed')}
+        className='h-10 rounded-xl bg-violet-500 px-4 text-sm font-semibold'>Enable Ask AI</button> : <>
+        <button type='button' onClick={() => setConsent('declined')}
+          className='h-10 rounded-xl border border-white/10 px-4 text-sm'>Cancel</button>
+        <button type='button' onClick={() => { try { localStorage.setItem(ASK_AI_CONSENT_KEY, 'allowed'); }
+          catch { /* Keep consent for this open editor only when storage is unavailable. */ }
+          setConsent('granted'); }} className='h-10 rounded-xl bg-violet-500 px-4 text-sm font-semibold'>Allow Ask AI</button>
+      </>}
+    </div>
+  </section>;
   const tabs = <div role='tablist' aria-label='AI mode' className={`grid shrink-0 grid-cols-3 gap-1 rounded-lg bg-black/30 p-1 ${sheet ? 'rounded-xl' : ''}`}>
     {([['CHAT', 'Chat'], ['REVIEW', 'Review'], ['BRIEF', 'Edit plan']] as const).map(([value, label]) =>
       <button key={value} role='tab' aria-selected={aiMode === value}
@@ -82,11 +105,13 @@ export function EditAiContent({ project, source, selected, style, busy, selected
     playheadSec={playheadSec} onProject={onChatApplied}
     onError={(message) => onError(`PREVIEW_LAYOUT_FAILED: ${message}`)} />;
   if (sheet) return <div className='flex h-full min-h-0 min-w-0 flex-col gap-3'>
+    <p className='text-xs leading-5 text-slate-400'>{ASK_AI_DISCLOSURE}</p>
     {tabs}
     {aiMode === 'CHAT' ? <div className='flex min-h-0 flex-1 flex-col'>{chat}</div>
       : <div className='min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[max(.75rem,var(--safe-bottom))]'>{aiMode === 'REVIEW' ? review : brief}</div>}
   </div>;
   return <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3'>
+    <p className='text-xs leading-5 text-slate-400'>{ASK_AI_DISCLOSURE}</p>
     {tabs}
     {aiMode === 'CHAT' && chat}
     {aiMode === 'REVIEW' && review}

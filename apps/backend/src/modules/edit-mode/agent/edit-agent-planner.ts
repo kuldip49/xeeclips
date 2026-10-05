@@ -64,8 +64,26 @@ const SYSTEM_PROMPT = [
   '- Every clause index you were given must appear exactly once in your answer.'
 ].join('\n');
 
-/** A compact, bounded description of the project for the model. No ids, no dumps. */
-export function compactProjectView(context: ChatContext) {
+/** Only the clip state needed to interpret this request. No ids, storage details or history dump. */
+export function compactProjectView(context: ChatContext, request: string) {
+  const wants = {
+    video: /\b(video|clip|trim|cut|crop|frame|framing|zoom|speed|filter|colour|color|contrast|brightness)\b/iu.test(request),
+    captions: /\b(caption|captions|subtitle|subtitles)\b/iu.test(request),
+    text: /\b(text|title|headline|hook|wording|font|cta)\b/iu.test(request),
+    audio: /\b(audio|music|sound|voice|volume|mute|loud)\b/iu.test(request),
+    overlay: /\b(overlay|image|logo|sticker|media)\b/iu.test(request)
+  };
+  const broad = /\b(style|look|template|preset|premium|cinematic|professional|polish|energetic)\b/iu.test(request)
+    || !Object.values(wants).some(Boolean);
+  const needsWords = /\b(rewrite|write|wording|what.*say|said|spoken|speech|transcript|quote|topic|about|mention|hook)\b/iu.test(request);
+  const needsHistory = /\b(again|same|previous|last change|more|less)\b/iu.test(request);
+  const needsTemplates = /\b(template|style|look|preset)\b/iu.test(request);
+  const relevant = context.elements.filter((view) => view.selected || broad ||
+    (wants.video && ['SOURCE_VIDEO', 'ZOOM'].includes(view.semantic)) ||
+    (wants.captions && view.semantic === 'CAPTION') ||
+    (wants.text && ['HOOK', 'CTA', 'TITLE', 'LOWER_THIRD', 'TEXT'].includes(view.semantic)) ||
+    (wants.audio && view.semantic === 'MUSIC') ||
+    (wants.overlay && ['LOGO', 'IMAGE'].includes(view.semantic)));
   const pick = (properties: Record<string, unknown>, keys: string[]) => Object.fromEntries(keys
     .filter((key) => properties[key] !== undefined).map((key) => [key, properties[key]]));
   return {
@@ -73,18 +91,20 @@ export function compactProjectView(context: ChatContext) {
     style: { aspectRatio: context.project.style.aspectRatio, reframePolicy: context.project.style.reframePolicy,
       zoomPolicy: context.project.style.zoomPolicy, gradingPolicy: context.project.style.gradingPolicy },
     tracks: context.tracks,
-    elements: context.elements.slice(0, 40).map((view) => ({ handle: view.handle, semantic: view.semantic,
-      label: view.label, startSec: view.startSec, endSec: view.endSec, selected: view.selected || undefined,
-      properties: pick(view.properties, ['content', 'fontSize', 'color', 'x', 'y', 'width', 'height',
+    elements: relevant.slice(0, 16).map((view) => ({ handle: view.handle, semantic: view.semantic,
+      startSec: view.startSec, endSec: view.endSec, selected: view.selected || undefined,
+      properties: pick(view.properties, [...(needsWords ? ['content'] : []), 'fontSize', 'color', 'x', 'y', 'width', 'height',
         'volume', 'scale', 'colorAdjustments', 'colorFilterId', 'frameLayout', 'sourceVolume', 'sourceMuted']) })),
     selection: context.selection,
-    templates: context.templates.slice(0, 16).map((template) => template.name),
-    transcriptOpening: context.transcript.opening.slice(0, 400),
-    analysis: { faceShotRatio: context.analysis.faceShotRatio,
-      informationShotRatio: context.analysis.informationShotRatio },
-    recent: { lastAppliedSummary: context.recent.lastAppliedSummary,
-      messages: context.recent.messages.slice(-4) },
-    notes: context.notes
+    ...(needsTemplates ? { templates: context.templates.slice(0, 12).map((template) => template.name) } : {}),
+    ...(needsWords ? { transcript: {
+      windows: context.transcript.windows.slice(0, 2).map((window) => ({
+        startSec: window.startSec, endSec: window.endSec, text: window.text.slice(0, 240) })),
+      ...(/\bhook\b/iu.test(request) ? { opening: context.transcript.opening.slice(0, 300) } : {})
+    } } : {}),
+    ...(broad || wants.video ? { analysis: { faceShotRatio: context.analysis.faceShotRatio,
+      informationShotRatio: context.analysis.informationShotRatio } } : {}),
+    ...(needsHistory ? { recent: { lastAppliedSummary: context.recent.lastAppliedSummary.slice(0, 160) } } : {})
   };
 }
 
@@ -118,8 +138,8 @@ export async function planClausesWithOpenAi(input: { llm: LlmRouterService; logg
         role: AGENT_PLANNER_ROLE,
         request: { schemaName: 'edit_agent_plan', schema: AGENT_PLAN_SCHEMA, role: AGENT_PLANNER_ROLE,
           systemPrompt: SYSTEM_PROMPT,
-          userPrompt: JSON.stringify({ fullRequest: input.message.slice(0, 1000),
-            clausesToPlan: input.clauses, project: compactProjectView(input.context),
+          userPrompt: JSON.stringify({ clausesToPlan: input.clauses, clip: compactProjectView(input.context,
+            input.clauses.map((clause) => clause.clause).join(' ')),
             tools: toolCatalog() }),
           options: { temperature: 0.2,
             maxOutputTokens: Number(process.env.EDIT_AGENT_MAX_OUTPUT_TOKENS) || 3000 } } });

@@ -89,15 +89,15 @@ export function EditAgentPanel({ projectId, revision, hasSource, disabled, selec
     if (!text) setDraft('');
     try {
       const constraints: EditConstraintInput[] = guards.map((type) => ({ type }));
-      const result = await runEditAgent(projectId, { message, revision, selectedElementId,
+      const result = await runEditAgent(projectId, { message, revision, aiConsent: true, selectedElementId,
         selectedTimeRange, playheadSec, autonomy, constraints });
       setRun(result);
       setAiNote(result.ai.state === 'AVAILABLE' ? '' : result.ai.message);
       const thread = await getEditChatThread(projectId).catch(() => null);
       if (thread) setMessages(thread.messages);
       if (result.revisions.length) onEdited(result);
-    } catch (caught) {
-      onError(caught instanceof Error ? caught.message : 'The AI editor could not run that');
+    } catch {
+      onError('Ask AI is temporarily unavailable.');
     } finally { setBusy(false); }
   }, [autonomy, busy, draft, guards, onEdited, onError, playheadSec, projectId, revision,
     selectedElementId, selectedTimeRange]);

@@ -350,6 +350,7 @@ export const getEditAgent = (id: string) =>
   request<AgentState>(`/edit-mode/projects/${encodeURIComponent(id)}/agent`);
 
 export const runEditAgent = (id: string, input: { message: string; revision: number;
+  aiConsent: true;
   selectedElementId?: string | null; selectedTimeRange?: AgentTimeRange | null;
   playheadSec?: number; autonomy?: AgentAutonomy; constraints?: EditConstraintInput[] }) =>
   request<AgentRun>(`/edit-mode/projects/${encodeURIComponent(id)}/agent/run`, {
