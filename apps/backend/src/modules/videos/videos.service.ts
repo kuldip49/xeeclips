@@ -13,6 +13,8 @@ import { randomUUID } from "crypto";
 import { extname } from "path";
 import { PrismaService } from "../database/prisma.service";
 import { generatedClipEditLink } from '../edit-mode/generated-clip-edit-link';
+import { editAssetOwnsStorage, editAssetStorageLocation } from '../edit-mode/edit-asset-storage';
+import { resolveGenerationStyleReadiness, toClipCard } from './clip-selection.service';
 import { StorageService } from "../storage/storage.service";
 import { ProcessingQueueService } from "../processing/processing-queue.service";
 
@@ -463,6 +465,78 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
       include: { candidate: true, editProject: { select: { id: true } } }
     });
     return clips.map(serializeGeneratedClip);
+  }
+
+  /** Public product view of persisted renders. Internal project and job identities stay server-side. */
+  async getHistory() {
+    const clips = await this.prisma.generatedClip.findMany({
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      include: {
+        candidate: true,
+        editProject: { select: { id: true, settings: true } },
+        video: { select: { originalName: true,
+          processingJobs: { orderBy: { createdAt: 'desc' }, take: 1,
+            select: { aiMode: true, telemetry: true } } } }
+      }
+    });
+    return clips.map((clip) => {
+      const job = clip.video.processingJobs[0];
+      const telemetry = job?.telemetry && typeof job.telemetry === 'object' &&
+        !Array.isArray(job.telemetry) ? job.telemetry as Record<string, unknown> : {};
+      const card = toClipCard(clip, telemetry.effectiveAiMode ?? job?.aiMode, 1);
+      const style = clip.requestedTemplate ?? clip.templateId;
+      const requiresStyle = style === 'AUTOMATIC_2';
+      const styledReady = !!card.style?.playbackUrl &&
+        ['EXPORT_READY', 'READY', 'LEGACY_STYLE_READY'].includes(card.style.status);
+      return {
+        id: clip.id,
+        title: card.hook || `Clip from ${clip.video.originalName}`,
+        createdAt: clip.createdAt,
+        duration: card.durationSec,
+        thumbnailUrl: card.posterUrl,
+        playbackUrl: requiresStyle ? styledReady ? card.style!.playbackUrl : null : card.playbackUrl,
+        style: style === 'AUTOMATIC_2' ? 'StyleOne' : style === 'AUTOMATIC_RAW' ||
+          clip.processingType === 'NORMAL_CLIPS' ? 'No Edit' : 'StyleZero',
+        mode: String(telemetry.effectiveAiMode ?? job?.aiMode ?? '') === 'ONLINE' ? 'XeePro' : 'XeeFree',
+        status: requiresStyle && !styledReady
+          ? card.style?.status === 'STYLE_FAILED' ? 'Something went wrong' : 'Applying style' : 'Ready',
+        sourceLabel: clip.video.originalName,
+        editUrl: card.editUrl,
+        editable: card.isEditable,
+        exportable: !requiresStyle || styledReady
+      };
+    });
+  }
+
+  async deleteGeneratedClip(clipId: string) {
+    const clip = await this.prisma.generatedClip.findUnique({
+      where: { id: clipId },
+      include: { candidate: true, editProject: { include: { assets: true } } }
+    });
+    if (!clip) throw new NotFoundException('Clip not found');
+    const generation = clip.generationJobId ? await this.prisma.processingJob.findUnique({
+      where: { id: clip.generationJobId }, select: { clipRenderStatus: true } }) : null;
+    if (generation && ['QUEUED', 'RENDERING'].includes(generation.clipRenderStatus ?? '')) {
+      throw new ConflictException('This clip is still being created. Try again when it is ready.');
+    }
+    const style = resolveGenerationStyleReadiness(clip);
+    if (style && ['STYLE_APPLYING', 'STYLE_READY', 'STYLING', 'RENDERING'].includes(style.status)) {
+      throw new ConflictException('This clip is still being created. Try again when it is ready.');
+    }
+    const owned = clip.editProject?.assets.filter(editAssetOwnsStorage)
+      .map(editAssetStorageLocation) ?? [];
+    const objects = [
+      { bucket: clip.bucket, objectKey: clip.objectKey },
+      ...(clip.thumbnailObjectKey ? [{ bucket: clip.bucket, objectKey: clip.thumbnailObjectKey }] : []),
+      ...owned
+    ];
+    // Removing storage first means a failed removal leaves a durable record for a safe retry.
+    for (const object of objects) await this.storage.removeObject(object.bucket, object.objectKey);
+    await this.prisma.$transaction(async (tx) => {
+      if (clip.editProject) await tx.editProject.delete({ where: { id: clip.editProject.id } });
+      await tx.generatedClip.delete({ where: { id: clipId } });
+    });
+    return { id: clipId, deleted: true };
   }
 
   /** Step 9.1: the uploaded source itself, range-served for the preview player. */

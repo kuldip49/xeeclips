@@ -95,12 +95,16 @@ that server, and keep the frontend API URL unchanged.
 
 Test from another network while the laptop and tunnel are running. Confirm
 `https://xeeclip.me` loads and `https://api.xeeclip.me/health` returns 200.
-Check that browser Network requests use the HTTPS API hostname. Create a test
-project and exercise file upload, an eligible YouTube URL import, Automatic 1,
-Automatic 2, Edit, Ask AI, Export, and reload/resume. Seek through a source
+Check that browser Network requests use the HTTPS API hostname. Open the Create
+homepage and exercise file upload, an eligible YouTube URL import, StyleZero,
+StyleOne, No Edit, Edit, Ask AI, Export, History persistence, and reload/resume.
+The API still creates an internal Project record for each creation session; the
+interface does not ask users to create or manage one. Seek through a source
 and generated video. A range request to a real video ID should return 206,
 `Accept-Ranges: bytes`, and a valid `Content-Range` and video content type.
 Test the offline message by stopping the backend briefly, then restore it.
+Deleting one History clip removes its generated file and owned edit assets,
+while shared source media remains available to other clips.
 
 On 2026-10-05, `xeeclip.me` and `api.xeeclip.me/health` both returned 200 over
 HTTPS. The dashboard and local development frontend returned 200. The public

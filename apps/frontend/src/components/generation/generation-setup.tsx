@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
 /** Automatic 1 is the untouched golden automatic editor. Automatic 2 arrives
  * from the server as the one public style variant. */
 export const BASE_LOOKS = [
-  { value: 'AUTOMATIC_1', title: 'Automatic 1', description: 'Clean modern automatic edit' }
+  { value: 'AUTOMATIC_1', title: 'StyleZero', description: 'Clean framing, captions and subtle zooms.' }
 ] as const;
 
 export type GenerationChoices = {
@@ -25,7 +25,7 @@ export type GenerationChoices = {
   reference: ReferenceAsset | null;
 };
 
-const BRIEF_EXAMPLES = 'e.g. "find the funny moments", "only the AI and jobs discussion, keep full context", ' +
+const BRIEF_EXAMPLES = 'e.g. "find the funny moments", "keep the full conversation in context", ' +
   '"clean podcast look, captions lower, warm colour"';
 
 export function GenerationSetup({ videoId, catalog, savedStyles, choices, onChange, resolution, resolving,
@@ -74,7 +74,7 @@ export function GenerationSetup({ videoId, catalog, savedStyles, choices, onChan
   const previewStyle = choices.look === 'NORMAL' && !resolved?.styled ? null : resolved;
   const looks = [...BASE_LOOKS.map((look) => ({ value: look.value as string, title: look.title, description: look.description })),
     ...(catalog?.templates ?? []).filter((template) => template.id === 'AUTOMATIC_2')
-      .map((template) => ({ value: template.id, title: template.name, description: template.description })),
+      .map((template) => ({ value: template.id, title: 'StyleOne', description: 'Editorial black canvas, serif headline and red highlights.' })),
     { value: RAW_LOOK.value as string, title: RAW_LOOK.title, description: RAW_LOOK.description }];
   const intent = resolution?.interpreted.intent;
   const derived = choices.reference?.derivedStyle;
@@ -84,7 +84,7 @@ export function GenerationSetup({ videoId, catalog, savedStyles, choices, onChan
     <div className='grid min-w-0 content-start gap-6'>
       {/* Native radios: the whole card is the label, so clicks, Enter/Space and arrow keys all work. */}
       <fieldset className='grid gap-3' disabled={disabled}>
-        <legend className='mb-2 text-sm font-medium'>Automatic template</legend>
+        <legend className='mb-2 text-sm font-medium'>Style</legend>
         <div className='grid gap-2 sm:grid-cols-3 sm:gap-3'>
           {looks.map((option) => {
             const selected = choices.look === option.value;

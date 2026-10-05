@@ -20,7 +20,7 @@ export function EditInspector({ project, source, selected, playheadSec, onPrevie
   onPreview: (element: EditElement) => void; onCommit: (command: ManualEditCommand) => void;
   onDebounced: (command: ManualEditCommand) => void; onDuplicate: () => void; onDelete: () => void;
 }) {
-  if (!selected) return <section className='rounded-2xl border border-white/10 bg-[#0d111c] p-4'><h2 className='text-sm font-semibold'>Inspector</h2><p className='mt-3 text-xs text-slate-500'>Select an element in the timeline or preview.</p><p className='mt-4 text-[11px] text-slate-600'>Revision {project.revision}</p></section>;
+  if (!selected) return <section className='rounded-2xl border border-white/10 bg-[#0d111c] p-4'><h2 className='text-sm font-semibold'>Inspector</h2><p className='mt-3 text-xs text-slate-500'>Select an element in the timeline or preview.</p></section>;
   const sourceAspect = source?.width && source?.height ? source.width / source.height : null;
   const origin = project.settings.origin && typeof project.settings.origin === 'object'
     ? project.settings.origin as Record<string, unknown> : null;

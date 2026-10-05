@@ -151,7 +151,7 @@ export function EditTemplatesPanel({ projectId, revision, busy, hasSource, hasLo
         <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-500'>
           Will change</p>
         {proposal.changes.length === 0
-          ? <p className='text-[10px] text-slate-600'>Nothing — this project already looks like
+          ? <p className='text-[10px] text-slate-600'>Nothing — this clip already looks like
             this template.</p>
           : <ul data-testid='template-changes' className='grid gap-1'>
             {proposal.changes.map((change) => <li key={`${change.facet}-${change.label}`}
@@ -226,11 +226,11 @@ export function EditTemplatesPanel({ projectId, revision, busy, hasSource, hasLo
           <label className='flex items-center gap-1.5 text-[10px] text-slate-400'>
             <input type='checkbox' checked={includeLogo} disabled={!hasLogo}
               onChange={(event) => setIncludeLogo(event.target.checked)} />
-            Include current logo{!hasLogo && ' (none in this project)'}</label>
+            Include current logo{!hasLogo && ' (none in this clip)'}</label>
           <label className='flex items-center gap-1.5 text-[10px] text-slate-400'>
             <input type='checkbox' checked={includeMusic} disabled={!hasMusic}
               onChange={(event) => setIncludeMusic(event.target.checked)} />
-            Include current music{!hasMusic && ' (none in this project)'}</label>
+            Include current music{!hasMusic && ' (none in this clip)'}</label>
           <p className='text-[9px] leading-snug text-slate-600'>
             Without these, the template is portable: it saves your styling, not your files, your
             caption wording or your cuts.</p>
@@ -249,8 +249,8 @@ export function EditTemplatesPanel({ projectId, revision, busy, hasSource, hasLo
 
         {library.user.length === 0
           ? <p className='text-[10px] leading-snug text-slate-600'>
-            Nothing saved yet. Style a project the way you like it, then save it here and apply it
-            to any other project.</p>
+            Nothing saved yet. Style a clip the way you like it, then save it here and apply it
+            to any other clip.</p>
           : <div className='grid min-w-0 gap-2'>
             {library.user.map((template) => <TemplateCard key={template.id} template={template}
               busy={locked} onChoose={() => choose(template)}

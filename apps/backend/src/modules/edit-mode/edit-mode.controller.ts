@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   Res,
   StreamableFile,
   UploadedFile,
@@ -517,6 +518,7 @@ export class EditModeController {
   async assetFile(
     @Param('assetId') assetId: string,
     @Headers('range') range: string | undefined,
+    @Query('download') download: string | undefined,
     @Res({ passthrough: true }) response: Response
   ) {
     let file;
@@ -535,6 +537,8 @@ export class EditModeController {
     response.setHeader('Accept-Ranges', 'bytes');
     response.setHeader('Content-Type', file.mimeType);
     response.setHeader('Content-Length', file.end - file.start + 1);
+    if (download === '1') response.setHeader('Content-Disposition',
+      `attachment; filename="xeeclip-${assetId.replace(/[^a-z0-9-]/giu, '')}.mp4"`);
     if (file.partial) {
       response.status(206);
       response.setHeader('Content-Range', `bytes ${file.start}-${file.end}/${file.size}`);

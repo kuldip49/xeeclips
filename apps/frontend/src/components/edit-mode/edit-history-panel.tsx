@@ -15,9 +15,9 @@ const stamp = (value: string) => {
 };
 
 const labels: Record<string, string> = {
-  PROJECT_CREATED: 'Project created', SOURCE_ATTACHED: 'Source attached',
+  PROJECT_CREATED: 'Edit started', SOURCE_ATTACHED: 'Source attached',
   SOURCE_ANALYZED: 'Source analyzed', ELEMENTS_UPDATED: 'Timeline updated',
-  PROJECT_UPDATED: 'Project updated', APPLY_PRESET: 'Preset applied',
+  PROJECT_UPDATED: 'Edit updated', APPLY_PRESET: 'Preset applied',
   UNDO: 'Undo', REDO: 'Redo'
 };
 

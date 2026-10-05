@@ -116,6 +116,16 @@ export class VideosController {
     return this.videosService.getGeneratedClips(id);
   }
 
+  @Get('history/clips')
+  getHistory() {
+    return this.videosService.getHistory();
+  }
+
+  @Delete('generated-clips/:clipId')
+  deleteGeneratedClip(@Param('clipId') clipId: string) {
+    return this.videosService.deleteGeneratedClip(clipId);
+  }
+
   /** Step 9.1: play the uploaded source before configuring generation. */
   @Get('videos/:id/file')
   async getVideoFile(
@@ -147,12 +157,15 @@ export class VideosController {
   async getGeneratedClipFile(
     @Param('clipId') clipId: string,
     @Headers('range') range: string | undefined,
+    @Query('download') download: string | undefined,
     @Res({ passthrough: true }) response: Response
   ) {
     const file = await this.videosService.getGeneratedClipFile(clipId, range);
     response.setHeader('Accept-Ranges', 'bytes');
     response.setHeader('Content-Type', file.mimeType);
     response.setHeader('Content-Length', file.end - file.start + 1);
+    if (download === '1') response.setHeader('Content-Disposition',
+      `attachment; filename="xeeclip-${clipId.replace(/[^a-z0-9-]/giu, '')}.mp4"`);
     if (file.partial) {
       response.status(206);
       response.setHeader('Content-Range', `bytes ${file.start}-${file.end}/${file.size}`);

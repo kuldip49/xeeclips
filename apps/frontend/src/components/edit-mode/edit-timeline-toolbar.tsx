@@ -83,7 +83,7 @@ export const EditTimelineToolbar = memo(function EditTimelineToolbar({
       {zoomPercent}%</span>
     <Button label='Zoom in' hint='Zoom in (+)' disabled={!canZoomIn} onClick={onZoomIn}>
       <ZoomIn size={14} /></Button>
-    <Button label='Fit' hint='Fit the whole project in view' onClick={onFit}>
+    <Button label='Fit' hint='Fit the whole clip in view' onClick={onFit}>
       <Maximize2 size={13} />Fit</Button>
     <Divider />
     <Button label='Undo' hint='Undo (Ctrl+Z)' disabled={disabled || !canUndo} onClick={onUndo}>

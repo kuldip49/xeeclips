@@ -21,7 +21,7 @@ const ASPECT_RATIOS: Array<{ id: EditAspectRatio; label: string }> = [
  * two competing spinners, the more specific local action wins and the export
  * phase is shown only when nothing local is in flight.
  */
-function SaveStatus({ busy, exportPhase, revision }: {
+function SaveStatus({ busy, exportPhase }: {
   busy: EditBusyKind; exportPhase: string | null; revision: number;
 }) {
   const label = busy === 'saving' ? 'Saving…'
@@ -34,8 +34,8 @@ function SaveStatus({ busy, exportPhase, revision }: {
                 : exportPhase === 'QA' ? 'Checking quality…'
                   : exportPhase === 'UPLOADING' ? 'Finalizing export…'
                     : exportPhase === 'FAILED' ? 'Export failed'
-                      : exportPhase === 'COMPLETED' ? `Exported · r${revision}`
-                        : `Saved · r${revision}`;
+                    : exportPhase === 'COMPLETED' ? 'Exported'
+                        : 'Saved';
   const working = !!busy || (!!exportPhase && exportPhase !== 'COMPLETED' && exportPhase !== 'FAILED');
   const failed = !busy && exportPhase === 'FAILED';
   return <span role='status' className={`flex shrink-0 items-center gap-1.5 text-xs ${
@@ -69,12 +69,12 @@ export function EditTopBar({ projectName, revision, busy, exportPhase, canUndo, 
 }) {
   return <header className='pt-safe shrink-0 border-b border-white/10 bg-[#0d111c]'>
     <div className='flex h-12 items-center gap-2 px-1.5 sm:gap-3 sm:px-3'>
-    <Link href='/edit-mode' aria-label='Back to your edits'
+    <Link href='/history' aria-label='Back to History'
       className='flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-slate-300 hover:bg-white/10 max-md:h-11 max-md:w-11 max-md:justify-center max-md:rounded-full max-md:p-0'>
-      <ArrowLeft size={15} className='max-md:h-5 max-md:w-5' /><span className='hidden md:inline'>Projects</span>
+      <ArrowLeft size={15} className='max-md:h-5 max-md:w-5' /><span className='hidden md:inline'>History</span>
     </Link>
     <span className='hidden h-5 w-px shrink-0 bg-white/10 sm:block' />
-    <h1 className='min-w-0 flex-1 truncate text-sm font-semibold tracking-tight'>{projectName}</h1>
+    <h1 className='min-w-0 flex-1 truncate text-sm font-semibold tracking-tight'>Edit clip</h1>
     <SaveStatus busy={busy} exportPhase={exportPhase} revision={revision} />
     <span className='hidden h-5 w-px shrink-0 bg-white/10 sm:block' />
     <div className='flex shrink-0 items-center gap-0.5'>

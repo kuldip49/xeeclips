@@ -7,8 +7,7 @@ import { CheckCircle2, ChevronDown, Circle, ClipboardPaste, FileVideo, FolderOpe
   SlidersHorizontal, Sparkles, Upload, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TARGET_PLATFORM_LABELS, uploadVideo, importYouTubeVideo, getVideoImportCapabilities,
-  type AiProcessingMode, type OutputAspectRatio, type TargetPlatform } from '@/lib/api';
-import { getCreativeCatalog } from '@/lib/creative-generation';
+  type OutputAspectRatio, type TargetPlatform } from '@/lib/api';
 import { CLIP_LIMIT_HINT, DEFAULT_ENTRY_SETTINGS, ENTRY_MAX_CLIPS, entryGenerationRequest, maxClipsForDuration,
   type EntrySettings, type EntrySource, type EntryTemplate } from '@/lib/entry-flow';
 import { clipDuration, formatBytes } from '@/lib/format';
@@ -81,12 +80,11 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
   const createdProject = useRef<string | null>(projectId ?? null);
   const formKey = projectId ?? 'new';
   const [settings, setSettings] = useState<EntrySettings>(initialSettings ?? DEFAULT_ENTRY_SETTINGS);
-  const [source, setSource] = useState<EntrySource>(initialSource ?? 'file');
+  const [source, setSource] = useState<EntrySource>(initialSource ?? 'youtube');
   const [file, setFile] = useState<File | null>(null);
   const [sourceUrl, setSourceUrl] = useState('');
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [youtubeEnabled, setYoutubeEnabled] = useState<boolean | null>(null);
-  const [automatic2, setAutomatic2] = useState<{ name: string; description: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [error, setError] = useState<{ message: string; fallback: boolean } | null>(null);
@@ -100,11 +98,7 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
   useEffect(() => {
     let active = true;
     void getVideoImportCapabilities().then((result) => {
-      if (active) setYoutubeEnabled(result.youtubeEnabled);
-    }).catch(() => undefined);
-    void getCreativeCatalog().then((catalog) => {
-      const template = catalog.templates.find((item) => item.id === 'AUTOMATIC_2');
-      if (active && template) setAutomatic2({ name: template.name, description: template.description });
+      if (active) { setYoutubeEnabled(result.youtubeEnabled); if (!result.youtubeEnabled) setSource('file'); }
     }).catch(() => undefined);
     setCanPaste(typeof navigator !== 'undefined' && typeof navigator.clipboard?.readText === 'function');
     return () => { active = false; abortRef.current?.abort(); };
@@ -116,9 +110,9 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
     setSettings((current) => current.count > maxClips ? { ...current, count: maxClips } : current);
   }, [maxClips]);
   const templates: Array<{ value: EntryTemplate; title: string; description: string }> = [
-    { value: 'AUTOMATIC_1', title: 'Automatic 1', description: 'Clean modern automatic edit' },
-    { value: 'AUTOMATIC_2', title: automatic2?.name ?? 'Automatic 2',
-      description: automatic2?.description ?? 'Editorial black / serif / highlighted captions' },
+    { value: 'AUTOMATIC_1', title: 'StyleZero', description: 'Clean framing, captions and subtle zooms.' },
+    { value: 'AUTOMATIC_2', title: 'StyleOne',
+      description: 'Editorial black canvas, serif headline and red highlights.' },
     RAW_LOOK
   ];
 
@@ -230,16 +224,17 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
     {notice ? <p role='status' className='rounded-xl border border-amber-400/20 bg-amber-400/5 p-3 text-sm text-amber-100'>{notice}</p> : null}
 
     <section className='grid gap-3' aria-label='Video source'>
-      {youtubeEnabled ? <div className='grid w-full grid-cols-2 rounded-2xl border border-white/10 bg-[#0b0f1a] p-1 sm:inline-grid sm:w-fit' role='tablist' aria-label='Video source'>
+      <p className='eyebrow'>Source</p>
+      <div className='grid w-full grid-cols-2 rounded-2xl border border-white/10 bg-[#0b0f1a] p-1 sm:inline-grid sm:w-fit' role='tablist' aria-label='Video source'>
         {([['file', 'Upload file', Upload], ['youtube', 'YouTube link', Link2]] as const).map(([value, label, Icon]) =>
-          <button key={value} type='button' role='tab' aria-selected={source === value} disabled={busy}
+          <button key={value} type='button' role='tab' aria-selected={source === value} disabled={busy || (value === 'youtube' && youtubeEnabled === false)}
             onClick={() => { setSource(value); setError(null); }}
             className={cn('flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 sm:h-9',
               source === value ? 'bg-violet-500/20 text-white shadow-inner shadow-violet-400/10' : 'text-slate-400 hover:text-white')}>
             <Icon size={16} aria-hidden />{label}</button>)}
-      </div> : null}
+      </div>
 
-      {source === 'youtube' && youtubeEnabled ? <div className='grid gap-3'>
+      {source === 'youtube' && youtubeEnabled !== false ? <div className='grid gap-3'>
         <label htmlFor={`youtube-url-${formKey}`} className='text-sm font-medium'>Paste a public YouTube link</label>
         <div className='relative'>
           <Link2 size={18} aria-hidden className='pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500' />
@@ -282,7 +277,7 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
     </section>
 
     <fieldset className='grid gap-2.5' disabled={busy}>
-      <legend className='mb-2 text-sm font-medium'>Template</legend>
+      <legend className='mb-2 text-sm font-medium'>Style</legend>
       <div className='grid gap-2 sm:grid-cols-3 sm:gap-3'>
         {templates.map((option) => {
           const selected = settings.template === option.value;
@@ -300,6 +295,19 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
             </span>
           </label>;
         })}
+      </div>
+    </fieldset>
+
+    <fieldset className='grid gap-2.5' disabled={busy}>
+      <legend className='mb-2 text-sm font-medium'>Mode</legend>
+      <div className='grid gap-2 sm:grid-cols-2'>
+        {([{ value: 'FALLBACK_ONLY', title: 'XeeFree', description: "Fast clip creation using XeeClip's built-in editing intelligence." },
+          { value: 'ONLINE', title: 'XeePro', description: 'Advanced AI understanding for stronger moment selection and creative decisions.' }] as const).map((option) =>
+          <label key={option.value} className={cn('cursor-pointer rounded-2xl border p-3 text-sm', settings.aiMode === option.value ? 'border-violet-400 bg-violet-500/10' : 'border-white/10 bg-[#0b0f1a]')}>
+            <input type='radio' className='sr-only' name={`entry-mode-${formKey}`} checked={settings.aiMode === option.value}
+              onChange={() => update({ aiMode: option.value })} />
+            <span className='block font-semibold'>{option.title}</span><span className='mt-1 block text-xs leading-5 text-slate-400'>{option.description}</span>
+          </label>)}
       </div>
     </fieldset>
 
@@ -335,13 +343,6 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
           <select value={settings.aspectRatio} disabled={busy} onChange={(event) => update({ aspectRatio: event.target.value as OutputAspectRatio })}
             className='h-11 rounded-xl border border-white/10 bg-[#111827] px-3 text-sm font-normal text-slate-100 md:h-10'>
             {(['9:16', '16:9', '4:5', '1:1'] as const).map((value) => <option key={value}>{value}</option>)}
-          </select>
-        </label>
-        <label className='grid gap-1.5 text-sm font-medium'>AI
-          <select value={settings.aiMode} disabled={busy} onChange={(event) => update({ aiMode: event.target.value as AiProcessingMode })}
-            className='h-11 rounded-xl border border-white/10 bg-[#111827] px-3 text-sm font-normal text-slate-100 md:h-10'>
-            <option value='ONLINE'>AI (OpenAI), rules if unavailable</option>
-            <option value='FALLBACK_ONLY'>Rules only</option>
           </select>
         </label>
         <label className='grid gap-1.5 text-sm font-medium sm:col-span-3'>Describe what you want <span className='-mt-1 font-normal text-slate-500'>Optional</span>

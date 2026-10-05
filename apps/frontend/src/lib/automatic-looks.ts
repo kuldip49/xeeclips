@@ -10,6 +10,6 @@ export const isAutomaticLook = (value: unknown): value is AutomaticLook =>
   typeof value === 'string' && (AUTOMATIC_LOOKS as readonly string[]).includes(value);
 
 export const RAW_LOOK = {
-  value: 'AUTOMATIC_RAW' as const, title: 'Raw',
-  description: 'Best moments, auto-framed with speaker switching and zoom. No captions, hook or music'
+  value: 'AUTOMATIC_RAW' as const, title: 'No Edit',
+  description: 'Minimal editing. Keep the selected moment without automatic styling.'
 };

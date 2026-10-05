@@ -19,10 +19,34 @@ export const TARGET_PLATFORM_LABELS: Record<TargetPlatform, string> = {
 };
 
 export const AI_PROCESSING_MODE_LABELS: Record<AiProcessingMode, string> = {
-  ONLINE: 'AI (OpenAI)',
-  OFFLINE: 'Rules only',
-  FALLBACK_ONLY: 'Rules only'
+  ONLINE: 'XeePro',
+  OFFLINE: 'XeeFree',
+  FALLBACK_ONLY: 'XeeFree'
 };
+
+export type HistoryClip = {
+  id: string;
+  title: string;
+  createdAt: string;
+  duration: number;
+  thumbnailUrl: string | null;
+  playbackUrl: string | null;
+  style: 'StyleZero' | 'StyleOne' | 'No Edit';
+  mode: 'XeeFree' | 'XeePro';
+  status: string;
+  sourceLabel: string;
+  editUrl: string | null;
+  editable: boolean;
+  exportable: boolean;
+};
+
+export function listHistory() {
+  return apiFetch<HistoryClip[]>('/history/clips', { cache: 'no-store' });
+}
+
+export function deleteHistoryClip(id: string) {
+  return apiFetch<{ id: string; deleted: true }>(`/generated-clips/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
 
 export type VideoProcessingStage = {
   stage: ProcessingStageName;

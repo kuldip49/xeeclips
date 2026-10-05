@@ -71,7 +71,7 @@ export function EditExportPanel({ projectId, revision, hasSource, disabled, onSt
       // very differently to a user, so they are worded differently. Both end in
       // the same place: press Export again, nothing in the timeline was lost.
       setError(progress.errorCode === 'INTERRUPTED'
-        ? progress.message ?? 'The backend restarted while this export was running, so it did ' +
+        ? progress.message ?? 'Clip export was interrupted, so it did ' +
           'not finish. Your timeline is unchanged - press Export again.'
         : progress.message ?? 'The export failed.');
     }
@@ -88,7 +88,7 @@ export function EditExportPanel({ projectId, revision, hasSource, disabled, onSt
       onStatusChange?.();
     } catch (caught) {
       setError(caught instanceof EditModeApiError && caught.code === 'EXPORT_ALREADY_RUNNING'
-        ? 'An export is already running for this project.'
+        ? 'An export is already running for this clip.'
         : caught instanceof Error ? caught.message : 'The export could not be started.');
     } finally { setStarting(false); }
   };

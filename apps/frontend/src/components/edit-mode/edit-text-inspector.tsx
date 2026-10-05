@@ -314,7 +314,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
       </div>
       <p className='text-[10px] leading-4 text-slate-600'>
         ASS has no independent shadow blur; the export softens the border and shadow together,
-        which is the closest deterministic match.</p>
+        which is the closest visual match.</p>
     </Section>
 
     <Section title='Background' defaultOpen={false}>

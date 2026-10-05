@@ -13,9 +13,7 @@ export function CreateClipsFlow() {
   const create = useCallback(async (name: string) => (await createProject({ name })).id, []);
   return <div className='grid gap-5'>
     {offline ? <OfflineNotice onRetry={recheck} detail='Choose your video and settings now; Generate unlocks as soon as it is back.' /> : null}
-    <div className='rounded-[24px] border border-white/[.08] bg-[#0d111c] p-4 sm:p-6'>
-      <UploadVideoForm createProject={create} showHeading={false} stickyCta offline={offline}
-        onStarted={(projectId) => router.push(`/projects/${projectId}`)} />
-    </div>
+    <UploadVideoForm createProject={create} showHeading={false} stickyCta offline={offline}
+      onStarted={(projectId) => router.push(`/?session=${encodeURIComponent(projectId)}`)} />
   </div>;
 }

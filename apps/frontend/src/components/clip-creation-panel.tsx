@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { isAutomaticLook } from '@/lib/automatic-looks';
 import { useRouter } from 'next/navigation';
-import { Bot, ChevronDown, Download, Expand, Loader2, Minus, Pencil, Plus, Sparkles } from 'lucide-react';
+import { Bot, ChevronDown, Download, Expand, Loader2, Minus, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GenerationSetup, type GenerationChoices } from '@/components/generation/generation-setup';
 import { ClipPlayerSheet, LazyVideo } from '@/components/generation/lazy-video';
@@ -12,6 +12,7 @@ import { clipDuration } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import {
   createClips,
+  deleteHistoryClip,
   getPublicApiBaseUrl,
   getClipAnalysis,
   getClipResults,
@@ -91,7 +92,7 @@ const A2_HOOK_TEXT = '#FFFFFF';
 const A2_HOOK_HIGHLIGHT = '#E53935';
 
 const A2_STAGE: Record<string, string> = {
-  STYLE_APPLYING: 'Applying Automatic 2 style…', STYLING: 'Applying Automatic 2 style…',
+  STYLE_APPLYING: 'Applying StyleOne…', STYLING: 'Applying StyleOne…',
   STYLE_READY: 'Rendering the final video…', RENDERING: 'Rendering the final video…'
 };
 
@@ -101,7 +102,7 @@ const A2_STAGE: Record<string, string> = {
  * stands in for the clip: the card plays the finished video once, as soon as it is ready.
  */
 function Automatic2Pending({ clip }: { clip: ClipCard }) {
-  const stage = A2_STAGE[clip.style?.status ?? ''] ?? 'Queued for Automatic 2…';
+  const stage = A2_STAGE[clip.style?.status ?? ''] ?? 'Applying StyleOne…';
   return <div data-testid='automatic-2-pending' role='status' aria-label={`Clip ${clip.position}: ${stage}`}
     className='relative mx-auto aspect-[9/16] max-h-[72svh] w-full max-w-[calc(72svh*9/16)] overflow-hidden rounded-xl bg-black md:max-h-[560px] md:max-w-[315px]'
     style={{ containerType: 'inline-size' }}>
@@ -128,6 +129,7 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
   const [opening, setOpening] = useState<'EDIT' | 'AI' | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [retryingStyle, setRetryingStyle] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [playerOpen, setPlayerOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const styled = STYLE_READY_STATUSES.has(clip.style?.status ?? '') &&
@@ -164,7 +166,7 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
     <div className='bg-[#090c15] p-2'>
       {styleFailed
         ? <div className='mx-auto grid aspect-[9/16] max-h-[72svh] w-full max-w-[calc(72svh*9/16)] place-items-center rounded-xl bg-black px-6 text-center text-sm text-slate-400 md:max-h-[560px] md:max-w-[315px]'>
-          Automatic 2 styling failed. The Automatic 1 base is not being substituted.
+          StyleOne could not be applied. Try again when the clip is ready.
         </div>
         : styleBlocked ? <Automatic2Pending clip={clip} />
           : <LazyVideo src={src} poster={poster} vertical={vertical} label={`Preview clip ${clip.position}`} />}
@@ -190,12 +192,19 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
         </Button>
         {styleBlocked ? <Button type='button' className={cn(action, 'col-span-2')} disabled><Download size={15} />Export</Button>
           : <Button asChild className={cn(action, 'col-span-2')} aria-disabled={styleBusy}>
-            <a href={src} download aria-label={`Export clip ${clip.position}`}><Download size={15} />Export</a>
+            <a href={`${src}${src.includes('?') ? '&' : '?'}download=1`} download aria-label={`Export clip ${clip.position}`}><Download size={15} />Export</a>
           </Button>}
       </div>
+      <Button type='button' variant='ghost' className='h-10 w-fit justify-start px-2 text-red-200 hover:bg-red-400/10'
+        disabled={deleting || styleBusy} onClick={() => {
+          if (!window.confirm('Delete this clip?\n\nThis removes the clip from your history and cannot be undone.')) return;
+          setDeleting(true); setEditError(null);
+          void deleteHistoryClip(clip.id).then(onRetry).catch(() => setEditError('This clip could not be deleted. Try again.'))
+            .finally(() => setDeleting(false));
+        }}><Trash2 size={15} />{deleting ? 'Deleting…' : 'Delete'}</Button>
       {clip.style && !STYLE_READY_STATUSES.has(clip.style.status) ? <div className='flex flex-wrap items-center gap-2'>
         <p role='status' className={`flex items-center gap-2 text-xs ${['FAILED', 'STYLE_FAILED'].includes(clip.style.status) ? 'text-amber-300' : 'text-slate-400'}`}>
-          {styleBusy ? <Loader2 className='animate-spin' size={12} /> : null}{STYLE_STATUS[clip.style.status] ?? clip.style.status}</p>
+          {styleBusy ? <Loader2 className='animate-spin' size={12} /> : null}{STYLE_STATUS[clip.style.status] ?? 'Applying style…'}</p>
         {['FAILED', 'STYLE_FAILED'].includes(clip.style.status) ? <Button type='button' size='sm' variant='outline' className='h-10'
           disabled={retryingStyle} onClick={() => { setRetryingStyle(true); setEditError(null);
             void retryGeneratedClipStyle(clip.id).then(onRetry).catch((error) =>
@@ -224,7 +233,7 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
           <p className='break-words text-sm text-violet-300'>{clip.hashtags.join(' ')}</p>
         </CardSection>
       </div>
-      <p className='mt-auto border-t border-white/[.06] pt-3 text-xs text-slate-500'>AI mode used: {clip.aiModeUsed}</p>
+      <p className='mt-auto border-t border-white/[.06] pt-3 text-xs text-slate-500'>{clip.aiModeUsed === 'Online' ? 'XeePro' : 'XeeFree'}</p>
     </div>
     {playable ? <ClipPlayerSheet open={playerOpen} onClose={() => setPlayerOpen(false)} src={src} poster={poster}
       title={`Clip ${clip.position}`} /> : null}
@@ -370,7 +379,7 @@ export function ClipCreationPanel({ video }: { video: Video }) {
     return <div className='grid gap-3 rounded-2xl border border-violet-400/15 bg-[#0b0f1a] p-4 sm:p-5' data-testid='entry-progress'>
       <p role='status' className='flex items-center gap-2 text-sm font-semibold'>
         <Loader2 className='animate-spin text-violet-300' size={16} aria-hidden />{label}</p>
-      <StageSteps stage={stageFromAnalysisLabel(label)} styleName={autoTemplate === 'AUTOMATIC_2' ? 'Automatic 2' : null} />
+      <StageSteps stage={stageFromAnalysisLabel(label)} styleName={autoTemplate === 'AUTOMATIC_2' ? 'StyleOne' : null} />
       <div className='h-1.5 w-full overflow-hidden rounded-full bg-white/[.08]'><div className='h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-all duration-500'
         style={{ width: `${Math.max(3, Math.min(100, job.progress ?? 0))}%` }} /></div>
       <p className='text-xs leading-5 text-slate-400'>Then {requested} clip{requested === 1 ? '' : 's'}{autoTemplateLabel ? ` with ${autoTemplateLabel}` : ''} will be created automatically. You can leave this page — progress is saved.</p>
@@ -404,8 +413,8 @@ export function ClipCreationPanel({ video }: { video: Video }) {
   // Auto-started videos show one continuous flow; the setup stays available, folded away.
   const autoFlow = !!autoRequest && autoStatus !== 'FAILED';
   const requestedTotal = request?.requestedClipCount ?? Number(autoRequest?.requestedClipCount ?? count);
-  const styleName = request?.generation?.templateId === 'AUTOMATIC_2' ? 'Automatic 2'
-    : request?.generation?.templateId === 'AUTOMATIC_RAW' ? 'Raw'
+  const styleName = request?.generation?.templateId === 'AUTOMATIC_2' ? 'StyleOne'
+    : request?.generation?.templateId === 'AUTOMATIC_RAW' ? 'No Edit'
     : autoTemplateLabel ?? 'the template';
   const flowLabel = !autoFlow ? null
     : autoWaiting || (autoStatus === 'STARTED' && !request) ? 'Finding clips...'
@@ -446,13 +455,13 @@ export function ClipCreationPanel({ video }: { video: Video }) {
       <p role='status' data-testid='entry-flow-status' className='flex items-center gap-2 text-sm font-semibold'>
         {flowLabel === 'Ready' ? <Sparkles className='text-violet-300' size={16} aria-hidden />
           : <Loader2 className='animate-spin text-violet-300' size={16} aria-hidden />}{flowLabel}</p>
-      {flowLabel !== 'Ready' ? <StageSteps styleName={request?.generation?.templateId === 'AUTOMATIC_2' || autoTemplate === 'AUTOMATIC_2' ? 'Automatic 2' : null}
+      {flowLabel !== 'Ready' ? <StageSteps styleName={request?.generation?.templateId === 'AUTOMATIC_2' || autoTemplate === 'AUTOMATIC_2' ? 'StyleOne' : null}
         stage={flowLabel.startsWith('Finding') ? 'FINDING' : flowLabel.startsWith('Applying') ? 'STYLING' : 'CREATING'} /> : null}
     </div> : null}
     {autoRequest?.adjustedFrom ? <p role='status' className='rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100'>
       You asked for {autoRequest.adjustedFrom} clips. This video allows up to {String(autoRequest.requestedClipCount)}, so {String(autoRequest.requestedClipCount)} are being made.</p> : null}
     {autoStatus === 'FAILED' && job?.autoGenerationError ? <p role='alert' className='rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100'>
-      Clips could not start automatically: {job.autoGenerationError} Your choices are kept below.</p> : null}
+      Clips could not start automatically. Your choices are kept below so you can try again.</p> : null}
     {autoFlow ? <details className='group rounded-2xl border border-white/[.08] bg-[#0b0f1a]'>
       <summary className='flex min-h-[48px] cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-slate-300 sm:px-5 [&::-webkit-details-marker]:hidden'>Change template or regenerate
         <ChevronDown size={16} className='shrink-0 transition-transform group-open:rotate-180' aria-hidden /></summary>
