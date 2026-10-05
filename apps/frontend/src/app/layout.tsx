@@ -6,6 +6,7 @@ export const metadata: Metadata = {
   title: { default: "XeeClip — Turn long videos into short clips", template: "%s · XeeClip" },
   description: "Turn long videos into ready-to-post short clips with AI: hooks, captions and hashtags included.",
   applicationName: "XeeClip",
+  icons: { icon: "/xeeclip-logo.png", apple: "/xeeclip-logo.png" },
   appleWebApp: { capable: true, title: "XeeClip", statusBarStyle: "black-translucent" },
   formatDetection: { telephone: false }
 };
