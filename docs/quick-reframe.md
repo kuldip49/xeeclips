@@ -204,6 +204,18 @@ string lists are still read). Sessions from V1 open on the Crop step with their 
 - Regression: canonical editor scripts as before (only the pre-existing phase7 and ai-objects failures);
   generated-clip edit-project, unified generation, Quick Reframe StyleOne scripts pass.
 
+## Deployment
+
+V3 (commit `b97874b` on `main`): backend hot-deployed to the laptop Docker stack (`https://api.xeeclip.me`; no
+migration, existing sessions kept, V2 sessions open on the Crop step with their crop as the draft). Static
+frontend deployed to Cloudflare (Worker version `157bd95c-33a8-4f36-aee3-946a09ba975b`). Against production:
+`e2e/quick-reframe-flow.spec.ts` 3/3 (both full journeys with real downloads, phone widths),
+`e2e/quick-reframe.spec.ts` 9/9, and the Create Clips journeys `e2e/workflows.spec.ts` 5 passed (YouTube
+skipped: no authorized URL). Disposable sessions were deleted.
+
+V2 (commit `7a39bc2`): additive migration `20261007010000_quick_reframe_v2` applied on restart; Worker version
+`ed1a1bb0-5aa3-4327-8f19-b15158d2a3cb`; production flow spec 3/3.
+
 ## Limits
 
 - Caption detection (after the mode choice) samples one frame per second and is confidence-based; moving or
