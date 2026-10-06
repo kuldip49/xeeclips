@@ -18,7 +18,8 @@ import { postAiServiceJson } from '../processing/ai-service-http';
 import { LlmRouterService } from '../processing/llm-router.service';
 import { performanceContext, createPerformanceTelemetry } from '../processing/performance-telemetry';
 import { analyzeRegions, proposePlan, record, validatePlan, type ReframeAnalysis, type ReframePlan } from './quick-reframe-plan';
-import { quickRender } from './quick-reframe-render';
+import { quickCleanRender, quickStyleOneCommands, quickStyleOneRender, cleanFingerprint, styleFingerprint, QUICK_REFRAME_PIPELINE } from './quick-reframe-render';
+import { wordsFromCache } from '../edit-mode/presets/edit-preset-evidence';
 import { downloadSocial, MAX_REFRAME_BYTES, socialSource } from './social-source';
 const exec=promisify(execFile);
 const json=(v:unknown):Prisma.InputJsonValue=>JSON.parse(JSON.stringify(v));
@@ -51,9 +52,10 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
   private view(q:Awaited<ReturnType<QuickReframeService['load']>>){
     const project=q.editProject;const source=project.assets.find(a=>a.role==='SOURCE');
     const latest=(kind:string)=>project.assets.filter(a=>record(a.metadata).quickReframeKind===kind).sort((a,b)=>b.createdAt.getTime()-a.createdAt.getTime())[0];
-    const preview=latest('PREVIEW'),output=latest('EXPORT');const url=(a:typeof source)=>a?`/edit-mode/assets/${a.id}/file`:null;
+    const preview=latest('PREVIEW'),output=latest('EXPORT'),clean=latest('CLEAN');const url=(a:typeof source)=>a?`/edit-mode/assets/${a.id}/file`:null;
+    const cleanCurrent=!!source&&!!clean&&!!q.plan&&record(clean.metadata).cleanKey===cleanFingerprint(source.id,q.plan as unknown as ReframePlan);
     return {id:q.id,revision:project.revision,name:source?.originalName||'Quick Reframe',duration:source?.duration||0,width:source?.width||0,height:source?.height||0,
-      sourceUrl:url(latest('SOURCE_PLAYBACK')||source),previewUrl:url(preview),exportUrl:url(output),previewRevision:preview?record(preview.metadata).sourceRevision:null,exportRevision:output?record(output.metadata).sourceRevision:null,
+      sourceUrl:url(latest('SOURCE_PLAYBACK')||source),cleanUrl:cleanCurrent?url(clean):null,previewUrl:url(preview),exportUrl:url(output),previewRevision:preview&&record(preview.metadata).pipeline===QUICK_REFRAME_PIPELINE?record(preview.metadata).sourceRevision:null,exportRevision:output&&record(output.metadata).pipeline===QUICK_REFRAME_PIPELINE?record(output.metadata).sourceRevision:null,
       status:q.status,progress:q.progress,message:q.message,error:q.error,analysis:q.analysis,plan:q.plan,hooks:q.hooks,createdAt:q.createdAt.toISOString()};
   }
   async get(id:string){return this.view(await this.load(id));}
@@ -102,6 +104,11 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const update=await this.prisma.quickReframe.updateMany({where:{id:task.id,operationId:task.operationId},data:{message,progress,...data}});
     if(!update.count)throw new Error('Canceled');
   }
+  private async retryWriteConflict<T>(write:()=>Promise<T>):Promise<T>{
+    for(let attempt=0;;attempt++)try{return await write();}catch(error){
+      if(!(error instanceof Prisma.PrismaClientKnownRequestError)||error.code!=='P2034'||attempt>=2)throw error;
+    }
+  }
   private async post(path:string,body:Record<string,unknown>,signal?:AbortSignal){const response=await postAiServiceJson(`${process.env.AI_SERVICE_URL||'http://localhost:8000'}${path}`,body,600000,signal);if(!response.ok)throw new Error('Local analysis unavailable');return response.json();}
   private async run(task:Task){
     const controller=new AbortController();this.aborts.set(task.id,controller);const dir=await mkdtemp(join(tmpdir(),'quick-reframe-'));let uploaded:{bucket:string;objectKey:string}|null=null;
@@ -134,20 +141,47 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
         await this.stage(task,'Review detected overlays, then Auto Clean',100,{analysis:json(analysis),hooks:json(hooks),status:'ANALYZED',operationId:null});return;
       }
       const p=validatePlan(q.plan,source.duration!,q.analysis as unknown as ReframeAnalysis);
-      const path=join(dir,'source.mp4'),out=join(dir,'output.mp4');await this.storage.downloadToFile(source.bucket,source.objectKey,path);
-      await this.stage(task,task.kind==='PREVIEW'?'Creating preview':'Exporting',25);
-      const rendered=quickRender({project:q.editProject,assets:q.editProject.assets,elements:q.editProject.elements,hasSourceAudio:record(source.metadata).hasAudio===true,fps:Math.min(30,source.fps||30)},p,path,out,task.kind==='PREVIEW');
+      const path=join(dir,'source.mp4'),cleanPath=join(dir,'clean.mp4'),out=join(dir,'output.mp4');
+      const cleanKey=cleanFingerprint(source.id,p);
+      let clean=q.editProject.assets.find(a=>record(a.metadata).quickReframeKind==='CLEAN'&&record(a.metadata).cleanKey===cleanKey);
+      await this.stage(task,'Stage 1: cleaning the original video',15);
+      if(!clean){
+        await this.storage.downloadToFile(source.bucket,source.objectKey,path);
+        const prepared=quickCleanRender({project:q.editProject,assets:q.editProject.assets,elements:q.editProject.elements,hasSourceAudio:record(source.metadata).hasAudio===true,fps:Math.min(30,source.fps||30)},p,path,cleanPath);
+        await exec('ffmpeg',prepared.args,{cwd:dir,timeout:600000,maxBuffer:10*1024*1024,signal:controller.signal});
+        const media=await this.validateOutput(cleanPath,source.duration!,prepared.plan.canvas,record(source.metadata).hasAudio===true,controller.signal);
+        await this.stage(task,'Stage 1: clean original validated',50);
+        const assetId=randomUUID();uploaded=await this.storage.uploadFile({filePath:cleanPath,objectKey:`quick-reframe/${task.id}/${assetId}/clean.mp4`,mimeType:'video/mp4'});
+        clean=await this.prisma.$transaction(async tx=>{
+          const current=await tx.quickReframe.findUniqueOrThrow({where:{id:task.id}});if(current.operationId!==task.operationId)throw new Error('Canceled');
+          return tx.editAsset.create({data:{id:assetId,editProjectId:q.editProjectId,...uploaded!,role:'REFERENCE',originalName:'Clean original.mp4',mimeType:'video/mp4',sizeBytes:BigInt((await stat(cleanPath)).size),width:media.width,height:media.height,duration:media.durationSec,fps:media.fps,metadata:{quickReframeKind:'CLEAN',cleanKey,pipeline:QUICK_REFRAME_PIPELINE,hasAudio:media.hasAudio}}});
+        });uploaded=null;
+        // Keep only the current clean intermediate; exports remain independently owned.
+        for(const old of q.editProject.assets.filter(a=>record(a.metadata).quickReframeKind==='CLEAN')){await this.storage.removeObject(old.bucket,old.objectKey);await this.prisma.editAsset.deleteMany({where:{id:old.id}});}
+      }else{
+        await this.storage.downloadToFile(clean.bucket,clean.objectKey,cleanPath);
+        await this.validateOutput(cleanPath,source.duration!,{width:clean.width!,height:clean.height!},record(source.metadata).hasAudio===true,controller.signal);
+      }
+      // No StyleOne compilation or pixel composition can run before Stage 1 succeeds.
+      await this.stage(task,'Stage 2: applying StyleOne',55);
+      if(record(q.editProject.settings).quickReframeStyleKey!==styleFingerprint(p)){
+        const compiled=quickStyleOneCommands({project:q.editProject,assets:q.editProject.assets,elements:q.editProject.elements},p);
+        await this.retryWriteConflict(()=>this.editor.applyAssistantBundle(q.editProjectId,q.editProject.revision,{proposalId:task.operationId,summary:'Apply StyleOne to the validated clean original',userMessage:'Quick Reframe: Clean → StyleOne',commands:compiled.commands,actor:'TEMPLATE_ACTION',onInvalid:'ABORT'}));
+        q=await this.load(task.id);
+      }
+      await this.stage(task,'Stage 2: rendering StyleOne',65);
+      // The canonical SOURCE identity/timeline stays intact; this render reads the
+      // validated intermediate's pixels, with original transcript timing and user audio edits.
+      const renderSource={...source,width:clean.width,height:clean.height,fps:clean.fps,analysis:null};
+      const rendered=quickStyleOneRender({project:q.editProject,assets:[renderSource],elements:q.editProject.elements,hasSourceAudio:record(source.metadata).hasAudio===true,fps:Math.min(30,source.fps||30)},cleanPath,out,task.kind==='PREVIEW');
       if(rendered.ass)await writeFile(join(dir,'captions.ass'),rendered.ass);
       await exec('ffmpeg',rendered.args,{cwd:dir,timeout:600000,maxBuffer:10*1024*1024,signal:controller.signal});
-      const media=await probeMedia(out,{timeoutMs:15000,localOnly:true});
-      if(!media.hasVideo||media.videoCodec!=='h264'||Math.abs((media.durationSec||0)-source.duration!)>.2||media.width!==rendered.plan.canvas.width||media.height!==rendered.plan.canvas.height||(!p.audio.muted&&p.audio.volume>0&&record(source.metadata).hasAudio&&!media.hasAudio)||media.hasAudio&&media.audioCodec!=='aac')throw new Error('Output validation failed');
-      // Decode the entire short output to catch corrupt packets/frames, in addition to probing streams.
-      await exec('ffmpeg',['-v','error','-xerror','-i',out,'-f','null','-'],{timeout:180000,maxBuffer:1024*1024,signal:controller.signal});
+      const media=await this.validateOutput(out,source.duration!,rendered.plan.canvas,!p.audio.muted&&p.audio.volume>0&&record(source.metadata).hasAudio===true,controller.signal);
       await this.stage(task,task.kind==='PREVIEW'?'Creating preview':'Exporting',90);
       const assetId=randomUUID();uploaded=await this.storage.uploadFile({filePath:out,objectKey:`quick-reframe/${task.id}/${assetId}/${task.kind.toLowerCase()}.mp4`,mimeType:'video/mp4'});
       await this.prisma.$transaction(async tx=>{
         const current=await tx.quickReframe.findUniqueOrThrow({where:{id:task.id}});if(current.operationId!==task.operationId)throw new Error('Canceled');
-        await tx.editAsset.create({data:{id:assetId,editProjectId:q.editProjectId,...uploaded!,role:task.kind==='EXPORT'?'EXPORT':'REFERENCE',originalName:'Quick Reframe.mp4',mimeType:'video/mp4',sizeBytes:BigInt((await stat(out)).size),width:media.width,height:media.height,duration:media.durationSec,fps:media.fps,metadata:{quickReframeKind:task.kind,sourceRevision:q.editProject.revision,operationId:task.operationId}}});
+        await tx.editAsset.create({data:{id:assetId,editProjectId:q.editProjectId,...uploaded!,role:task.kind==='EXPORT'?'EXPORT':'REFERENCE',originalName:'Quick Reframe.mp4',mimeType:'video/mp4',sizeBytes:BigInt((await stat(out)).size),width:media.width,height:media.height,duration:media.durationSec,fps:media.fps,metadata:{quickReframeKind:task.kind,sourceRevision:q.editProject.revision,operationId:task.operationId,pipeline:QUICK_REFRAME_PIPELINE,cleanAssetId:clean.id,cleanKey}}});
         await tx.quickReframe.update({where:{id:task.id},data:{status:task.kind==='PREVIEW'?'READY':'COMPLETE',message:task.kind==='PREVIEW'?'Ready to export':'Complete',progress:100,operationId:null,error:null}});
       });uploaded=null;
       // Preview assets are owned and bounded; final exports persist until deletion.
@@ -157,9 +191,14 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       await this.prisma.quickReframe.updateMany({where:{id:task.id,operationId:task.operationId},data:{status:'FAILED',error:message,message,operationId:null}});
     }finally{if(uploaded)await this.storage.removeObject(uploaded.bucket,uploaded.objectKey).catch(()=>undefined);this.aborts.delete(task.id);await rm(dir,{recursive:true,force:true});}
   }
+  private async validateOutput(path:string,duration:number,canvas:{width:number;height:number},requireAudio:boolean,signal:AbortSignal){
+    const media=await probeMedia(path,{timeoutMs:15000,localOnly:true});
+    if(!media.hasVideo||media.videoCodec!=='h264'||Math.abs((media.durationSec||0)-duration)>.2||media.width!==canvas.width||media.height!==canvas.height||(requireAudio&&!media.hasAudio)||media.hasAudio&&media.audioCodec!=='aac')throw new Error('Output validation failed');
+    await exec('ffmpeg',['-v','error','-xerror','-i',path,'-f','null','-'],{timeout:180000,maxBuffer:1024*1024,signal});return media;
+  }
   async autoClean(id:string,body:Record<string,unknown>){const q=await this.load(id);const source=q.editProject.assets.find(a=>a.role==='SOURCE');if(!q.analysis||!source)throw new BadRequestException('Analyze your video first.');
     const aspect=['SOURCE','9:16','1:1','16:9','CUSTOM'].includes(String(body.aspect))?body.aspect as ReframePlan['aspect']:'SOURCE';
-    const p=proposePlan(q.analysis as unknown as ReframeAnalysis,source.width!,source.height!,source.transcript,aspect);
+    const p=proposePlan(q.analysis as unknown as ReframeAnalysis,source.width!,source.height!,source.transcript,aspect,source.duration!);
     if(body.cleanupAuthorized===true){const analysis=q.analysis as unknown as ReframeAnalysis;
       for(const r of analysis.regions.filter(r=>r.kind==='DECORATIVE'&&r.confidence>=.8)){
         if(p.cleanup.length>=24)break;
@@ -179,19 +218,24 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     return this.get(id);
   }
   private async commitPlan(q:Awaited<ReturnType<QuickReframeService['load']>>,p:ReframePlan,undo:unknown[],redo:unknown[]){
-    const source=q.editProject.assets.find(a=>a.role==='SOURCE')!;const duration=source.duration!;
-    await this.prisma.$transaction(async tx=>{
-      const claim=await tx.editProject.updateMany({where:{id:q.editProjectId,revision:q.editProject.revision},data:{revision:{increment:1},status:'READY'}});if(!claim.count)throw new ConflictException('Your edits changed. Refresh and retry.');
+    const source=q.editProject.assets.find(a=>a.role==='SOURCE')!;const duration=source.duration!;const transcript=wordsFromCache(source.transcript);
+    await this.retryWriteConflict(()=>this.prisma.$transaction(async tx=>{
+      const claim=await tx.editProject.updateMany({where:{id:q.editProjectId,revision:q.editProject.revision},data:{revision:{increment:1},status:'READY',settings:json({...record(q.editProject.settings),quickReframeStyleKey:null})}});if(!claim.count)throw new ConflictException('Your edits changed. Refresh and retry.');
       const current=await tx.quickReframe.findUniqueOrThrow({where:{id:q.id}});if(activeStatuses.includes(current.status))throw new ConflictException('Processing is in progress.');
       await tx.editElement.deleteMany({where:{editProjectId:q.editProjectId}});
       // Project every edit onto the canonical timeline; no separate timeline or media engine.
       await tx.editElement.create({data:{editProjectId:q.editProjectId,assetId:source.id,type:'VIDEO',track:0,position:0,startTime:0,duration,trimEnd:duration,properties:{sourceVolume:p.audio.volume,sourceMuted:p.audio.muted,colorAdjustments:{exposure:p.color.exposure,contrast:p.color.contrast-1,saturation:p.color.saturation-1,temperature:p.color.temperature,sharpness:p.color.sharpness}}}});
       const textStyle={fontFamily:p.captions.font,fontSize:p.captions.size,color:p.captions.color,fontWeight:700,textAlign:'center',x:.08,width:.84,height:.14,stroke:{enabled:true,color:'#000000',width:2}};
-      if(p.hook.enabled && p.hook.text)await tx.editElement.create({data:{editProjectId:q.editProjectId,type:'TEXT',track:1,position:0,startTime:0,duration:Math.min(5,duration),properties:{...textStyle,content:p.hook.text,y:p.hook.y,fontSize:40,presetRole:'HOOK'}}});
-      if(p.captions.enabled)await tx.editElement.createMany({data:p.captions.cues.map((cue,i)=>({editProjectId:q.editProjectId,type:'SUBTITLE' as const,track:2,position:i,startTime:cue.start,duration:cue.end-cue.start,properties:json({...textStyle,content:cue.text,y:p.captions.y})}))});
+      if(p.hook.enabled && p.hook.text)await tx.editElement.create({data:{editProjectId:q.editProjectId,type:'TEXT',track:1,position:0,startTime:0,duration,properties:{content:p.hook.text,presetRole:'HOOK'}}});
+      if(p.captions.enabled && p.captions.cues.length)await tx.editElement.createMany({data:p.captions.cues.map((cue,i)=>{
+        const spoken=transcript.words.filter(w=>w.start>=cue.start-1e-6&&w.end<=cue.end+1e-6);
+        const exact=spoken.map(w=>w.text).join(' ').trim().replace(/\s+/gu,' ')===cue.text.trim().replace(/\s+/gu,' ');
+        const words=transcript.wordTimings&&exact?spoken.map(w=>({...w,start:Math.max(0,w.start-cue.start),end:w.end-cue.start})):[];
+        return {editProjectId:q.editProjectId,type:'SUBTITLE' as const,track:2,position:i,startTime:cue.start,duration:cue.end-cue.start,properties:json({...textStyle,content:cue.text,y:p.captions.y,words})};
+      })});
       await tx.quickReframe.update({where:{id:q.id},data:{plan:json(p),undo:json(undo),redo:json(redo),status:'EDITING',message:'Create a preview to review your changes',error:null}});
       await tx.editHistory.create({data:{editProjectId:q.editProjectId,revision:q.editProject.revision+1,actor:'USER',action:'QUICK_REFRAME_EDIT',beforeState:json({plan:q.plan}),afterState:json({plan:p})}});
-    },{isolationLevel:'Serializable'});
+    },{isolationLevel:'Serializable'}));
   }
   async undo(id:string,redo=false){const q=await this.load(id);if(activeStatuses.includes(q.status))throw new ConflictException('Wait for processing to finish.');const from=(redo?q.redo:q.undo) as unknown[];const to=(redo?q.undo:q.redo) as unknown[];
     if(!Array.isArray(from)||!from.length)throw new BadRequestException('No more edits to undo.');const p=validatePlan(from[from.length-1],q.editProject.assets.find(a=>a.role==='SOURCE')!.duration!,q.analysis as unknown as ReframeAnalysis);

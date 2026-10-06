@@ -17,7 +17,7 @@ export type ReframePlan = { version: 1; aspect: 'SOURCE' | '9:16' | '1:1' | '16:
   color: { exposure: number; contrast: number; saturation: number; temperature: number; sharpness: number; denoise: boolean };
   audio: { muted: boolean; volume: number }; resolution: 720 | 1080; reasons: string[] };
 export type ReframeSession = { id: string; revision: number; name: string; duration: number;
-  width: number; height: number; sourceUrl: string | null; previewUrl: string | null; exportUrl: string | null;
+  width: number; height: number; sourceUrl: string | null; cleanUrl: string | null; previewUrl: string | null; exportUrl: string | null;
   previewRevision: number | null; exportRevision: number | null;
   status: string; progress: number; message: string; error: string | null;
   analysis: ReframeAnalysis | null; plan: ReframePlan | null; hooks: string[]; createdAt: string };

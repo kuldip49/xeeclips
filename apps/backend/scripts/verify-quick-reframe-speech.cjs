@@ -37,11 +37,15 @@ async function main() {
     await api('/'+s.id+'/analyze','POST',{externalAiAuthorized:false}); s = await wait(s.id);
     s = await api('/'+s.id+'/auto-clean','POST',{revision:s.revision});
     assert.equal(s.analysis.subtitleState,'MISSING'); assert.ok(s.plan.captions.enabled); assert.ok(s.plan.captions.cues.length);
+    assert.ok(s.plan.captions.cues.length>3,'Use the canonical short-phrase caption grouper');
+    assert.ok(s.plan.captions.cues.every(c=>c.text.split(/\s+/).length<=6),'Bounded original-word captions');
     assert.match(s.plan.captions.cues.map(c=>c.text).join(' '),/speaker|visible|caption|original/i);
     for(const c of s.plan.captions.cues) assert.ok(c.start>=0 && c.end<=s.duration && c.end>c.start);
     s.plan.hook={enabled:true,text:'Keep the speaker clearly visible',y:.04};
     s=await api('/'+s.id+'/plan','PUT',{revision:s.revision,plan:s.plan});
     for(const kind of ['preview','export']) { await api('/'+s.id+'/'+kind,'POST',{revision:s.revision}); s=await wait(s.id); }
+    assert.ok(s.cleanUrl);
+    const clean=join(dir,'clean.mp4');await writeFile(clean,Buffer.from(await (await fetch(base+s.cleanUrl)).arrayBuffer()));
     const output = join(dir,'speech-output.mp4');
     const response=await fetch(base+s.exportUrl); await writeFile(output,Buffer.from(await response.arrayBuffer()));
     const blackCheck=await exec('ffmpeg',['-v','info','-i',output,'-vf','blackdetect=d=0.1:pix_th=0.02','-an','-f','null','-'],{maxBuffer:1000000});
@@ -51,6 +55,8 @@ async function main() {
     const n=Math.min(before.length,after.length)/2; let aa=0,bb=0,ab=0;
     for(let i=0;i<n;i++){const a=before.readInt16LE(i*2),b=after.readInt16LE(i*2);aa+=a*a;bb+=b*b;ab+=a*b;}
     const correlation=ab/Math.sqrt(aa*bb); assert.ok(correlation>.97, `Original audio correlation ${correlation}`);
+    const cleanPcm=await pcm(clean);let cc=0,ac=0;for(let i=0;i<Math.min(before.length,cleanPcm.length)/2;i++){const a=before.readInt16LE(i*2),c=cleanPcm.readInt16LE(i*2);cc+=c*c;ac+=a*c;}assert.ok(ac/Math.sqrt(aa*cc)>.97);
+    const {stdout:exportProbe}=await exec('ffprobe',['-v','error','-show_streams','-of','json',output]);const exportStreams=JSON.parse(exportProbe).streams;assert.equal(exportStreams[0].width,1080);assert.equal(exportStreams[0].height,1920);
     console.log(JSON.stringify({name:'spoken-tip',duration:s.duration,cues:s.plan.captions.cues.length,audioCorrelation:correlation,previewRevision:s.previewRevision,exportRevision:s.exportRevision,result:'PASS'}));
     keep={id:s.id,exportUrl:s.exportUrl};
     const silent=join(dir,'silent.webm'); await exec('ffmpeg',['-v','error','-y','-f','lavfi','-i','color=c=0x436f84:size=320x180:rate=10:duration=4','-c:v','libvpx-vp9',silent]);
@@ -63,7 +69,7 @@ async function main() {
     await api('/'+w.id+'/export','POST',{revision:w.revision});w=await wait(w.id);assert.equal(w.status,'COMPLETE');
     const movie=join(dir,'silent-output.mp4');const r=await fetch(base+w.exportUrl);await writeFile(movie,Buffer.from(await r.arrayBuffer()));
     const {stdout}=await exec('ffprobe',['-v','error','-show_streams','-of','json',movie]);const streams=JSON.parse(stdout).streams;
-    assert.equal(streams.find(s=>s.codec_type==='video').width,180);assert.equal(streams.find(s=>s.codec_type==='video').height,180);assert.equal(streams.some(s=>s.codec_type==='audio'),false);
+    assert.equal(streams.find(s=>s.codec_type==='video').width,1080);assert.equal(streams.find(s=>s.codec_type==='video').height,1920);assert.equal(streams.some(s=>s.codec_type==='audio'),false);
     console.log(JSON.stringify({name:'silent-webm-tracked-square-localized-blur-cover',result:'PASS'}));
     if(process.env.REFRAME_KEEP==='true') { await writeFile('/tmp/quick-reframe-persistence.json',JSON.stringify(keep)); ids.splice(ids.indexOf(keep.id),1);console.log('Spoken test session retained only for backend restart validation.'); }
   } finally { for(const id of ids) await api('/'+id,'DELETE').catch(()=>undefined);await rm(dir,{recursive:true,force:true}); }

@@ -2,54 +2,59 @@
 
 Implementation and acceptance report, 2026-10-07.
 
-## Product and architecture
+## Processing order
 
-1. **Navigation:** `/quick-reframe` is a standalone static-compatible page. Desktop navigation is Create, Quick Reframe, History, Settings. Mobile exposes Quick Reframe at the top while retaining the four existing bottom tabs.
-2. **Isolation:** `QuickReframeModule`, `/quick-reframe` API routes, a dedicated BullMQ queue with concurrency one, and persisted operation tokens orchestrate imports, analysis, previews and exports. Sources and edits belong to canonical `EditProject`, `EditAsset`, `EditElement` and revision history records. No Quick Reframe operation creates long-video `Video`, `ProcessingJob`, `ClipCandidate`, or `GeneratedClip` records.
-3. **Inputs:** MP4, MOV, M4V and WebM use the extracted existing disk-backed 20 MiB upload transport with retries, progress and cancellation. Actual local FFprobe results enforce 180 seconds, 1 GiB and supported resolution. Incompatible playback codecs receive a derived browser-compatible preview; the original source remains immutable.
-4. **Social adapters:** Strict public Instagram Reel/video and X/Twitter status URL validation; explicit source rights; deployment flag `QUICK_REFRAME_SOCIAL_IMPORT_APPROVED`; public yt-dlp metadata without cookies or login; platform CDN allowlists; validated HTTPS redirects; pinned public IPv4 DNS; bounded download, socket, file and probe limits. Unsupported, private, restricted and unavailable media receive an upload alternative. Query tracking parameters are removed.
-5. **Analysis:** Local OpenCV, MediaPipe/YOLO and PaddleOCR reuse the established visual engine. Subject sampling is bounded at one frame per second, with full-decode scene boundaries. OCR stores per-time wording, confidence and normalized geometry. Adjacent regions merge only when wording and position match. Verified text-layout reuse reduces repeated recognition; uncertain geometric regions remain explicitly unknown. Dense text/edges protect charts and screen content conservatively.
-6. **Crop:** Full-frame, black-bar and decorative-edge candidates are scored against subject, caption, attribution, information, zoom and resolution constraints. Original, 9:16, square, 16:9 and custom framing are supported. Smooth tracked framing is used only when every sampled subject/information constraint and movement bound passes; otherwise the planner retains content using fit. Manual four-edge controls and pointer dragging/pinch remain available.
-7. **Cleanup:** Timed source-local blur and dark covers, limited to localized regions. Auto Clean requires overlay-removal authorization before applying masks. Attribution remains protected automatically; manually selected own branding requires a separate ownership declaration. No background reconstruction is advertised or implemented.
-8. **Hooks:** Optional three suggestions use the existing server-side OpenAI routing policy and an authorized transcript excerpt of at most 8,000 characters. Video pixels and credentials are never sent to the browser/provider for this feature. Suggestions can be selected, edited, positioned or disabled. Hook/face and hook/generated-caption collisions are rejected. Manual hooks work locally.
-9. **Captions:** Local Whisper uses `transcribe` to preserve the original language; existing long-video requests retain their default `translate` behavior. `EXISTING_READABLE` retains the original layer; `MISSING` enables synchronized transcript captions; `PARTIAL_OR_UNREADABLE` requires explicit replacement and removal/coverage of detected old captions. Font, size, position, color and text are editable.
-10. **Preview/export:** Original/Edited playback, synchronized comparison slider, scrubbing/fullscreen, crop and detected-region overlays. Rendered preview and final export use the same typed plan and proportional text geometry. Canonical FFmpeg/ASS utilities produce H.264 MP4 and AAC when the source contains audible audio. Output never gains genuine resolution by upscaling. Source timing, sequence and audio are kept at 1x; optional gain/mute are explicit. FFprobe checks duration, streams, dimensions and codecs; full output decoding rejects corruption.
-11. **History:** Existing `/history` adds a Quick Reframe section with preview, re-edit, download and deletion. PostgreSQL, Redis and MinIO hold durable progress, plans and owned media. Deletion uses the canonical owned-asset removal path. Preview revisions prevent stale media from appearing as current edits; earlier exports remain labeled as earlier exports.
-12. **Mobile:** The full tool set uses touch-sized controls and the existing safe-area/keyboard-aware bottom sheet, with accessible sticky export controls and no mobile desktop inspector.
+**Input → Analyze → Clean → StyleOne → Preview → Edit → Export → History.**
 
-## Verification
+Quick Reframe remains a separate top-navigation button and /quick-reframe page. It owns a concurrency-one BullMQ queue and canonical EditProject/asset/element/history records. It never invokes candidate discovery, clip ranking, highlight selection, or multi-clip generation, and never creates Video, ProcessingJob, ClipCandidate or GeneratedClip records.
 
-Focused tests: `scripts/test-quick-reframe.cjs`; Python nested OCR geometry and black-bar tests; shared/backend/frontend typechecks; backend and Cloudflare builds. Regression checks cover existing upload assembly, canonical render planning, color/audio, unified generation (86 checks), YouTube import, and FFprobe/extraction/retry classification.
+Stage 1 analyzes the entire source (maximum 180 seconds) locally with the existing face/person, scene-boundary, OCR and Whisper services. Safe edge/black-bar crops protect detected faces, important visuals, captions and attribution throughout tracked movement. Authorized timed blur or dark covers address localized overlays; masks overlapping detected faces or information are rejected. Third-party attribution stays protected; selected own branding needs the existing explicit ownership declaration. No content-aware reconstruction is implemented.
 
-Chrome responsive checks passed at **320, 360, 375, 390, 412, 430, 768, 1024 and 1440 px** with no horizontal overflow or page errors, all editing tools available, and the mobile bottom navigation unchanged.
+The clean renderer consumes only the original VIDEO segment at 1×, with source audio at its original level. It strips all generated TEXT/SUBTITLE elements, style layout, zoom and grading. Cleanup, safe source crop and optional denoise produce a separate owned CLEAN reference asset. FFprobe verifies duration, dimensions, H.264/AAC and audio presence, followed by a complete decode. **A failure here prevents StyleOne compilation and composition.**
 
-| Real-media case | Result |
-| --- | --- |
-| 30 s portrait / decorative top title | Passed upload, OCR, preview, H.264/AAC export, ranges, History, undo/redo |
-| 60 s landscape / side text | Passed the same full media workflow |
-| Center overlay with explicit localized blur | Passed |
-| Moving graphics | Passed; this procedural fixture is not evidence of moving-face accuracy |
-| Embedded readable captions | Detected `EXISTING_READABLE`; original captions retained |
-| Missing captions | Detected `MISSING`; optional manual hook rendered |
-| Chart/grid content | Passed conservative analysis and export |
-| Actual spoken tip, 13.05–13.15 s fixtures | Two synchronized caption cues; audio correlation **0.999618**; matching preview/export revision; visual geometry inspected; no unexpected black interval in the final export |
-| Silent VP9 WebM | Derived H.264 playback, smooth tracked square export, timed blur/cover, no fabricated audio |
-| 180 s / 181 s limit | 180 s passed full export; 181 s rejected without trimming |
-| User-authorized Instagram Reel `Dddut7lMvl7` | 139.109 s imported, analyzed, previewed and exported; 37 timed regions, 135 face samples, `EXISTING_READABLE`; full-frame plan preserved faces and original captions; no external AI |
-| Backend restart | Persisted export, plan, captions, History and ranged playback passed after restart and image update |
-| Owned deletion | Deleted the disposable session; source/export URLs and session then returned 404 |
-| Public Chrome | Real edited MP4 playback, comparison, History/re-edit, browser reload and mobile caption controls passed on `xeeclip.me` |
+Stage 2 consumes those validated clean pixels. It calls the actual resolveCreativeStyle(AUTOMATIC_2), compileCreativeStyle, canonical editor command bundle, buildRenderPlan, buildEditModeAss and buildFfmpegArgs. AUTOMATIC_2_STREET3_LAYOUT remains the single geometry source: black 1080×1920 canvas; media window x=0, y=610, width=1080, height=700; existing EB Garamond serif hook with white/red semantic emphasis; existing white/lime active-word subtitle style and safe area. StyleOne’s existing full-frame fit branch keeps the entire cleaned source inside that fixed media window. A second face crop or semantic zoom does not alter the clean result.
 
-Reproducible real-media runners: `scripts/verify-quick-reframe.cjs`, `scripts/verify-quick-reframe-speech.cjs`, `scripts/verify-quick-reframe-persistence.cjs`. Run them inside the backend container with the live stack. Fixtures are disposable and removed; the speech session can be explicitly retained temporarily for a controlled backend restart check. Instagram/X tests require an authorized eligible link. A passing URL parser is never reported as a passing import.
+Exports are one full-sequence 1080×1920 H.264 MP4 with AAC when applicable. Rendered previews are 540×960 with the exact same normalized layout, text rules and fixed card. A larger canvas does not create new source detail. User color and gain/mute edits apply once during composition; the intermediate retains original audio.
+
+## Editing, captions and persistence
+
+Original, Clean original and StyleOne are separate review modes. The editor retains source-crop/pinch controls, localized cleanup, optional hook wording, caption text, restrained color and original-audio controls. StyleOne’s canvas, media window, serif hook placement and caption style remain fixed. Hooks use the existing template’s whole-video timing. Small sources shorter than one second retain their actual duration.
+
+Readable embedded subtitles stay in the cleaned source and suppress new subtitles. Missing subtitles can use local transcription. Partial/unreadable layers require explicit replacement; each detected old caption must be fully cropped out or covered before a new layer can be added. Blur alone does not qualify as removal. When recognition cannot locate uncertain subtitles, automatic replacement is blocked for review. The canonical generateCaptions grouper produces short original-word phrases. Real word timings are stored relative to each caption and drive the existing active-word highlights. No timings are invented; edited captions exceeding StyleOne’s two-line area are rejected for correction.
+
+Clean assets are cached by source ID, crop/tracking, masks and denoise. The hash sorts object keys because PostgreSQL JSONB changes their order. Hook, caption, color and audio changes can reuse the clean pixels. A changed cleanup invalidates the clean review URL and renders Stage 1 again. Current previews/exports carry pipeline version, clean asset identity and project revision; exports from the previous processing version remain downloadable in History but are stale for the new workflow.
+
+Owned previews and intermediates are bounded; final exports persist until deletion. History supports re-edit, download and canonical owned-media deletion. Operation tokens and cancellation guard worker writes. Serialization conflicts have bounded retries without bypassing revision checks. Existing PostgreSQL, Redis and MinIO volumes are preserved.
+
+## Inputs and local AI
+
+Uploads accept MP4, MOV, M4V and WebM up to 1 GiB, with existing disk-backed chunks, progress, retries and cancellation. Actual FFprobe duration rejects sources over 180 seconds without trimming. Incompatible codecs receive derived H.264 browser playback; the original remains immutable.
+
+Public Instagram Reel/video and X/Twitter adapters retain strict URL validation, rights confirmation, the deployment approval flag, no cookies/login, platform CDN allowlists, HTTPS redirect validation, public DNS pinning and bounded downloads. Private, restricted, unavailable or unsupported links receive an upload alternative. X importing has security/parser checks; a real authorized X acceptance video remains unavailable.
+
+Local analysis and transcription do not send video or transcripts to an external AI provider. Optional three hook suggestions use the configured OpenAI router only after separate explicit consent to send up to 8,000 transcript characters. **All acceptance tests use externalAiAuthorized=false**, following the user’s local-only preference. Manual hooks remain available.
+
+## Verification of the two-stage update
+
+- Shared/backend/frontend typechecks; backend and Cloudflare static builds.
+- test-quick-reframe.cjs: conservative crops, moving-subject protection, charts, captions, attribution, URL validation and source-local render filters.
+- test-quick-reframe-styleone.cjs: no generated clean overlays, actual StyleOne compiler/editor, canonical geometry/serif emphasis/caption styles, preview/export parity, source-only timeline, cache key order independence, short-source hook timing, and no Stage 2 after a clean read failure.
+- Existing canonical render/text/Automatic 2 camera suites and unified-generation regressions (86 checks) passed.
+- Chrome: all tools at 320, 360, 375, 390, 412, 430, 768, 1024 and 1440 px; no horizontal overflow or page errors; original four mobile bottom tabs preserved. Separate clean/StyleOne review and fixed portrait preview passed (4 tests).
+- Live 8-second fixtures with readable embedded captions and missing captions passed both stages, preview, 1080×1920 export, ranged playback, History and undo/redo. Embedded captions were retained.
+- A 180-second fixture passed full local analysis, clean, StyleOne preview/export, History and revision edits. Existing long-video pipeline row counts stayed unchanged. The initial implementation also tested rejection at 181 seconds.
+- Final synthetic speech: 15.35 seconds, eight bounded caption cues, original/export audio correlation **0.999506**. A rendered late word at 2.72 seconds produced 5,400 lime pixels, verifying active-word timing beyond the first caption.
+- Silent VP9 WebM: derived browser playback, tracked source crop and timed blur/cover passed Clean → StyleOne, with one 1080×1920 output and no fabricated audio.
+- User-authorized Instagram Reel Dddut7lMvl7: **139.109342 seconds**, 135 face samples, readable embedded captions retained, exactly one full-sequence output. Original/clean audio correlation **0.999935**; original/export **0.999868**. The fixed media window matched the clean source at beginning/middle/end (RGB mean absolute error 0.146, 0.170 and 0.008 on a 0–255 scale); canvas corners remained black. All analysis/transcription stayed local.
+- Public Chrome: both clean and StyleOne video playback, fixed portrait preview, comparison, History/re-edit, browser reload and mobile caption controls passed. Initial transient session-load failure passed on repeat after confirming the public API response.
+- Controlled backend restart: persisted clean asset, current preview/export revisions, plan, History and ranged playback passed; owned deletion returned 404 for session, source, clean and export URLs.
+
+Reproducible runners live in apps/backend/scripts: verify-quick-reframe.cjs, verify-quick-reframe-speech.cjs, verify-quick-reframe-styleone.cjs, verify-quick-reframe-word-highlight.cjs and verify-quick-reframe-persistence.cjs. Run real-media runners inside the backend container with the live stack. Disposable test records/media are deleted; the speech session can be temporarily retained for browser/restart checks. The StyleOne runner takes an explicitly authorized social URL and compares original/clean/export audio, fixed black canvas and source content at beginning/middle/end.
+
+The initial version’s eight procedural cases (30-second top hook, 60-second side text, central overlay, moving graphics, embedded captions, missing captions, chart/grid and 180-second source), 181-second rejection, authorized 139.109-second Instagram import and History/restart/deletion passed before the processing-order update. Moving graphics are not proof of moving-face detector accuracy. The updated checks above specifically verify Clean → actual StyleOne.
 
 ## Deployment and limits
 
-Frontend: `https://xeeclip.me/quick-reframe`, static Cloudflare Worker assets. Backend: existing Docker stack on this Windows laptop via `https://api.xeeclip.me`. Follow `production-deployment.md`; never remove volumes. New migration only adds Quick Reframe records and their canonical-project relation. The ignored production `.env` enables approved public social imports; `.env.example` defaults that gate off.
+Frontend: https://xeeclip.me/quick-reframe, static Cloudflare Worker assets. Backend: the existing Docker stack on this Windows laptop via https://api.xeeclip.me. Follow production-deployment.md; never remove volumes. Cloudflare Worker version: 2458ef87-5071-48d1-8583-af04957bd646. This update needs no schema migration: CLEAN is an owned canonical REFERENCE asset.
 
-Recognition is sampled and confidence-based, rather than guaranteed frame-perfect segmentation. Tiny, rapidly moving, low-contrast or non-English baked-in text may need manual review. Conservative crops often retain the full frame; fit intentionally adds aspect-ratio padding. Masks use detected time ranges and positions; fast motion between samples can need manually adjusted regions. No content-aware reconstruction is offered. Silent sources remain silent. The deployment's existing account-independent access model is preserved.
-
-Live external AI hook generation was **not tested**, per the user's local-only instruction. X import has URL/security tests but still needs a real authorized X acceptance video. The laptop must stay online; CPU analysis can take several minutes. No universal automatic face-safety or overlay-removal guarantee is made.
-
-The eight procedural acceptance cases left existing long-video pipeline row counts unchanged. Public Cloudflare deployment: Worker version `ce2d1b28-23b0-4b1e-b03d-f42f12bc91a2`. The first live Instagram attempt exposed a Node 22 lookup callback mismatch; the corrected adapter handles both single-address and all-address callbacks while retaining DNS pinning, and the subsequent real import/export passed.
-
-Final edge checks also reject simultaneous masks exceeding 30% of the frame and hooks overlapping original captions. Two-pixel cleanup regions use a Gaussian fallback because FFmpeg box-blur kernels cannot fit such a small region; a real export/decode test covers this case. Quick Reframe decoding and playback normalization permit only local file/pipe inputs and supported media demuxers; existing YouTube defaults are unchanged.
+Recognition samples at one frame per second and remains confidence-based. Tiny, fast-moving, low-contrast or unfamiliar text may need manual review. Conservative cleanup may preserve an overlay when removal would risk a face, attribution or important visual. Full-frame fit can make portrait content smaller within StyleOne’s wide media window. Silent sources stay silent. External AI hook generation remains untested per the user’s preference. The laptop must remain online, and CPU analysis can take several minutes.

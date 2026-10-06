@@ -1,6 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import type { ReframeAnalysis, ReframeBox, ReframePlan, ReframeRegion } from '@ai-content-platform/shared';
 import { EDIT_MODE_FONT_FAMILIES } from '../edit-mode/edit-mode-text';
+import { AUTOMATIC_2_STREET3_LAYOUT as STYLEONE } from '../edit-mode/styles/automatic-2-street3-layout';
+import { generateCaptions } from '../edit-mode/edit-mode-captions';
+import { wordsFromCache } from '../edit-mode/presets/edit-preset-evidence';
+import { buildTimelineMap } from '../edit-mode/render/edit-mode-timeline-map';
 export type { ReframeAnalysis, ReframeBox, ReframePlan, ReframeRegion } from '@ai-content-platform/shared';
 export const record = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : {};
 const clamp = (v: number, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
@@ -47,7 +51,7 @@ export function analyzeRegions(raw: unknown, duration: number): ReframeAnalysis 
     appearance: frames.some(f=>Number.isFinite(f.brightness)) ? {brightness:frames.reduce((n,f)=>n+(Number(f.brightness)||0),0)/frames.length,contrast:frames.reduce((n,f)=>n+(Number(f.contrast)||0),0)/frames.length} : undefined,
     bars:{top:minBar('top'),bottom:minBar('bottom'),left:minBar('left'),right:minBar('right')} } as ReframeAnalysis;
 }
-export function proposePlan(analysis: ReframeAnalysis, width: number, height: number, transcript: unknown, aspect: ReframePlan['aspect'] = 'SOURCE'): ReframePlan {
+export function proposePlan(analysis: ReframeAnalysis, width: number, height: number, transcript: unknown, aspect: ReframePlan['aspect'] = 'SOURCE', duration?:number): ReframePlan {
   const full = { x:0,y:0,w:1,h:1 }; const candidates: ReframeBox[] = [full];
   const bars = analysis.bars;
   if (bars.top+bars.bottom+bars.left+bars.right > .01) candidates.push({x:bars.left,y:bars.top,w:1-bars.left-bars.right,h:1-bars.top-bars.bottom});
@@ -87,10 +91,13 @@ export function proposePlan(analysis: ReframeAnalysis, width: number, height: nu
   }
   if(chosen.w*chosen.h<.999) reasons.push('A stable crop removes only regions that pass subject and information checks.');
   else reasons.push('Keeps the full frame because a tighter crop is not sufficiently safe.');
-  const cues = (record(transcript).segments||[]).filter((s:any)=>Number.isFinite(s.start)&&Number.isFinite(s.end)&&s.end>s.start&&typeof s.text==='string').map((s:any)=>({start:s.start,end:s.end,text:s.text.trim().slice(0,500)}));
-  const hookSlots=[.04,.28,.46]; const hookY=hookSlots.find(y=>analysis.frames.every(f=>f.faces.every(face=>overlap({x:.08,y,w:.84,h:.15},face)<.001))) ?? .04;
-  return {version:1,aspect,crop:chosen,framing,tracking,cleanup:[],hook:{enabled:false,text:'',y:hookY},
-    captions:{enabled:analysis.subtitleState==='MISSING' && cues.length>0,replaceExisting:false,font:'Noto Sans, sans-serif',size:32,y:.82,color:'#ffffff',cues},
+  const speech=wordsFromCache(transcript);
+  const sourceDuration=duration??Math.max(0,...speech.words.map(w=>w.end));
+  const map=buildTimelineMap([{id:'source',type:'VIDEO',track:0,position:0,startTime:0,duration:sourceDuration,trimStart:0,trimEnd:sourceDuration,properties:{}}]);
+  const cues=speech.words.length?generateCaptions({words:speech.words,wordTimings:speech.wordTimings,map,limit:400}).captions.map(c=>({start:c.startTime,end:Number((c.startTime+c.duration).toFixed(6)),text:c.content})):[];
+  reasons.push('Clean the original first, then apply the fixed StyleOne layout.');
+  return {version:1,aspect,crop:chosen,framing,tracking,cleanup:[],hook:{enabled:false,text:'',y:STYLEONE.hookBox.y},
+    captions:{enabled:analysis.subtitleState==='MISSING' && cues.length>0,replaceExisting:false,font:'Inter, sans-serif',size:STYLEONE.typography.captions.fontSize,y:STYLEONE.captionSafeBox.y,color:STYLEONE.colors.captionBase,cues},
     color:{exposure:analysis.appearance && analysis.appearance.brightness<.22 ? .1 : analysis.appearance && analysis.appearance.brightness>.8 ? -.08 : 0,
       contrast:analysis.appearance && analysis.appearance.contrast<.09 ? 1.06 : 1,saturation:1,temperature:0,sharpness:0,denoise:false},audio:{muted:false,volume:1},resolution:1080,reasons};
 }
@@ -102,11 +109,14 @@ export function validatePlan(input: unknown, duration: number, analysis: Reframe
   const tracking=Array.isArray(p.tracking)&&p.tracking.length<=240 ? p.tracking.map((v:unknown)=>{const k=record(v);return {t:num(k.t,0,duration),x:num(k.x,0,1-crop.w),y:num(k.y,0,1-crop.h)};}) : undefined;
   if(tracking?.some((k,i)=>i>0 && (k.t<=tracking[i-1].t || Math.hypot(k.x-tracking[i-1].x,k.y-tracking[i-1].y)/(k.t-tracking[i-1].t)>.15)))throw new BadRequestException('Tracked framing must move smoothly.');
   const cropAt=(t:number)=>{if(!tracking?.length)return crop;let i=0;while(i<tracking.length-1&&tracking[i+1].t<=t)i++;const k=tracking[i],next=tracking[i+1];const f=next?clamp((t-k.t)/(next.t-k.t)):0;return {...crop,x:k.x+(next?next.x-k.x:0)*f,y:k.y+(next?next.y-k.y:0)*f};};
-  if(analysis.regions.some(r=>r.kind==='ATTRIBUTION'&&!contains(cropAt(r.start),r)))throw new BadRequestException('Keep detected creator attribution inside the frame.');
-  if(tracking?.length && analysis.frames.some(f=>f.faces.some(face=>!contains(cropAt(f.t),face,.01))||f.information.some(b=>!contains(cropAt(f.t),b))))throw new BadRequestException('The moving crop would lose a face or important visual information.');
+  const visibleThroughout=(r:ReframeRegion)=>[r.start,Math.max(r.start,r.end-.001),...(tracking||[]).map(k=>k.t)].filter(t=>t>=r.start&&t<r.end).every(t=>contains(cropAt(t),r));
+  if(analysis.regions.some(r=>r.kind==='ATTRIBUTION'&&!visibleThroughout(r)))throw new BadRequestException('Keep detected creator attribution inside the frame.');
+  if(record(p.captions).replaceExisting!==true&&analysis.regions.some(r=>r.kind==='CAPTION'&&!visibleThroughout(r)))throw new BadRequestException('Keep original captions inside the clean frame, or explicitly replace them.');
+  if(analysis.frames.some(f=>f.faces.some(face=>!contains(cropAt(f.t),face))||f.persons.some(b=>overlap(cropAt(f.t),b)/Math.max(.001,b.w*b.h)<.92)||f.information.some(b=>!contains(cropAt(f.t),b))))throw new BadRequestException('The crop would lose a face or important visual information.');
   const cleanup=Array.isArray(p.cleanup)&&p.cleanup.length<=24 ? p.cleanup.map((v:unknown)=>{
     const r=record(v);const b=validBox(r); const start=num(r.start,0,duration);const end=num(r.end,start+.01,duration);
     if(b.w*b.h>.3 || !['BLUR','COVER'].includes(r.method) || r.authorized!==true)throw new BadRequestException('Confirm your rights to clean a localized region.');
+    if(analysis.frames.filter(f=>f.t>=start&&f.t<end).some(f=>[...f.faces,...f.information].some(a=>overlap(a,b)>.001)))throw new BadRequestException('Cleanup would obscure a face or important visual information.');
     if(analysis.regions.some(a=>a.kind==='ATTRIBUTION' && a.start<end && a.end>start && overlap(a,b)>.001 && !(r.ownedBranding===true && r.regionId===a.id && contains(b,a))))throw new BadRequestException('Keep creator attribution visible. Only explicitly selected branding you own may be removed.');
     return {...b,regionId:String(r.regionId||'manual').slice(0,80),start,end,method:r.method,intensity:num(r.intensity,1,30),authorized:true,ownedBranding:r.ownedBranding===true};
   }) : (()=>{throw new BadRequestException('Too many cleanup regions.');})();
@@ -115,22 +125,16 @@ export function validatePlan(input: unknown, duration: number, analysis: Reframe
   }
   const hook=record(p.hook);const cap=record(p.captions);const color=record(p.color);const audio=record(p.audio);
   if(typeof hook.text!=='string'||hook.text.length>160 || !EDIT_MODE_FONT_FAMILIES[cap.font] || !/^#[0-9a-f]{6}$/iu.test(cap.color))throw new BadRequestException('Check hook text and caption style.');
-  if(hook.enabled){
-    const area={x:.08,y:num(hook.y,0,.7),w:.84,h:.14};
-    const coversFace=analysis.frames.filter(f=>f.t<5).some(f=>f.faces.some(face=>{const c=cropAt(f.t);return overlap(area,{x:(face.x-c.x)/c.w,y:(face.y-c.y)/c.h,w:face.w/c.w,h:face.h/c.h})>.001;}));
-    if(coversFace)throw new BadRequestException('Move the hook away from the detected faces.');
-    if(analysis.regions.filter(r=>r.kind==='CAPTION'&&r.start<5).some(r=>{const c=cropAt(r.start);return overlap(area,{x:(r.x-c.x)/c.w,y:(r.y-c.y)/c.h,w:r.w/c.w,h:r.h/c.h})>.001;}))throw new BadRequestException('Move the hook away from the original captions.');
-    if(cap.enabled && overlap(area,{x:.08,y:num(cap.y,0,.85),w:.84,h:.14})>.001)throw new BadRequestException('Keep the hook separate from generated captions.');
-  }
+  // StyleOne's hook lives above the media window, never in source coordinates.
   if(cap.enabled && analysis.subtitleState!=='MISSING' && cap.replaceExisting!==true)throw new BadRequestException('Confirm replacement before adding captions over an existing or uncertain caption layer.');
   if(!Array.isArray(cap.cues)||cap.cues.length>400)throw new BadRequestException('Too many caption lines.');
   const cues=cap.cues.map((v:unknown)=>{const s=record(v);if(typeof s.text!=='string'||s.text.length>500)throw new BadRequestException('Caption text is too long.');return {start:num(s.start,0,duration),end:num(s.end,s.start+.01,duration),text:s.text};});
   // Replacement requires every detected old caption to be cropped out or explicitly covered.
-  if(cap.enabled && analysis.subtitleState!=='MISSING' && analysis.regions.filter(r=>r.kind==='CAPTION').some(r=>overlap(crop,r)>.001 && !cleanup.some((c:any)=>c.start<=r.start && c.end>=r.end && contains(c,r)))) throw new BadRequestException('Cover or crop out the detected original captions before replacing them.');
-  return {version:1,aspect:p.aspect,crop,framing:p.framing,tracking,cleanup,hook:{enabled:bool(hook.enabled),text:hook.text.trim(),y:num(hook.y,0,.7)},
-    captions:{enabled:bool(cap.enabled),replaceExisting:bool(cap.replaceExisting),font:cap.font,size:num(cap.size,16,64),y:num(cap.y,0,.85),color:cap.color,cues},
+  if(cap.enabled && analysis.subtitleState!=='MISSING' && (!analysis.regions.some(r=>r.kind==='CAPTION') || analysis.regions.filter(r=>r.kind==='CAPTION').some(r=>overlap(cropAt(r.start),r)>.001 && !cleanup.some((c:any)=>c.start<=r.start && c.end>=r.end && c.method==='COVER' && contains(c,r))))) throw new BadRequestException('Cover or crop out the detected original captions before replacing them.');
+  return {version:1,aspect:p.aspect,crop,framing:p.framing,tracking,cleanup,hook:{enabled:bool(hook.enabled),text:hook.text.trim(),y:STYLEONE.hookBox.y},
+    captions:{enabled:bool(cap.enabled),replaceExisting:bool(cap.replaceExisting),font:'Inter, sans-serif',size:STYLEONE.typography.captions.fontSize,y:STYLEONE.captionSafeBox.y,color:STYLEONE.colors.captionBase,cues},
     color:{exposure:num(color.exposure,-.3,.3),contrast:num(color.contrast,.8,1.2),saturation:num(color.saturation,.8,1.2),temperature:num(color.temperature,-.15,.15),sharpness:num(color.sharpness,0,.5),denoise:bool(color.denoise)},
-    audio:{muted:bool(audio.muted),volume:num(audio.volume,0,2)},resolution:p.resolution,reasons:Array.isArray(p.reasons)?p.reasons.filter((s:unknown)=>typeof s==='string').slice(0,10):[]};
+    audio:{muted:bool(audio.muted),volume:num(audio.volume,0,2)},resolution:1080,reasons:Array.isArray(p.reasons)?p.reasons.filter((s:unknown)=>typeof s==='string').slice(0,10):[]};
 }
 export function outputGeometry(p: ReframePlan, w: number, h: number, preview=false) {
   const sw=w*p.crop.w,sh=h*p.crop.h;

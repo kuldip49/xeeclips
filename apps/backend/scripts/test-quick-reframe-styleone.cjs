@@ -1,0 +1,73 @@
+/** Exercises the actual StyleOne compiler/editor/renderers locally, without providers. */
+const assert=require('node:assert/strict');
+const {createHarness,seedAnalyzedProject}=require('./test-edit-mode-isolation.cjs');
+const {proposePlan,validatePlan}=require('../dist/modules/quick-reframe/quick-reframe-plan');
+const {quickCleanRender,quickStyleOneCommands,quickStyleOneRender,cleanFingerprint}=require('../dist/modules/quick-reframe/quick-reframe-render');
+const {AUTOMATIC_2_STREET3_LAYOUT:S}=require('../dist/modules/edit-mode/styles/automatic-2-street3-layout');
+async function main(){
+  const h=createHarness(),seed=await seedAnalyzedProject(h),id=seed.project.id;
+  let project=await h.service.get(id);
+  const source=project.assets.find(a=>a.role==='SOURCE'),duration=source.duration;
+  const analysis={regions:[],frames:[],boundaries:[],subtitleState:'MISSING',warnings:[],bars:{top:0,bottom:0,left:0,right:0}};
+  const p=proposePlan(analysis,source.width,source.height,source.transcript);
+  p.hook={enabled:true,text:'Keep the original speaker visible',y:.65};
+  p.captions.enabled=false;
+  const normalized=validatePlan(p,duration,analysis);
+  project=await h.service.phase3Command(id,'ADD_TEXT',{revision:project.revision,content:p.hook.text,presetRole:'HOOK',origin:'PRESET'});
+  let input={project,assets:project.assets,elements:project.elements,hasSourceAudio:true};
+  const clean=quickCleanRender(input,normalized,'original.mp4','clean.mp4');
+  assert.equal(clean.plan.textOverlays.length,0);assert.equal(clean.plan.subtitles.length,0);assert.equal(clean.ass,null);
+  assert.equal(clean.plan.canvas.visualLayout,null);assert.equal(clean.plan.videoSegments.length,1);
+  const key=cleanFingerprint(source.id,normalized);
+  assert.equal(cleanFingerprint(source.id,{...normalized,crop:{h:normalized.crop.h,w:normalized.crop.w,y:normalized.crop.y,x:normalized.crop.x}}),key);
+  assert.equal(cleanFingerprint(source.id,{...normalized,hook:{...normalized.hook,text:'Different'},audio:{volume:.5,muted:false}}),key);
+  assert.notEqual(cleanFingerprint(source.id,{...normalized,crop:{x:0,y:.1,w:1,h:.9}}),key);
+  const compiled=quickStyleOneCommands(input,normalized);
+  const applied=await h.service.applyAssistantBundle(id,project.revision,{proposalId:'quick-styleone-test',summary:'StyleOne after clean',userMessage:'StyleOne',actor:'TEMPLATE_ACTION',commands:compiled.commands});
+  project=applied.project;
+  assert.deepEqual(project.settings.resolvedVisualLayout.videoFrame,{...project.settings.resolvedVisualLayout.videoFrame,...S.mediaBox});
+  assert.equal(project.settings.resolvedVisualLayout.editingProfile,'AUTOMATIC_2');
+  assert.equal(project.settings.reframePolicy,'SOURCE');assert.equal(project.settings.zoomPolicy,'OFF');
+  const hook=project.elements.find(e=>e.type==='TEXT');
+  assert.equal(hook.properties.fontFamily,S.typography.fontFamily);
+  assert.equal(hook.duration,duration);assert.equal(hook.properties.y,S.hookBox.y);
+  assert.ok(hook.properties.textRuns.some(r=>r.color.toLowerCase()===S.colors.hookHighlight.toLowerCase()));
+  input={project,assets:project.assets.map(a=>a.id===source.id?{...a,width:clean.plan.canvas.width,height:clean.plan.canvas.height,analysis:null}:a),elements:project.elements,hasSourceAudio:true};
+  const styled=quickStyleOneRender(input,'clean.mp4','styled.mp4');
+  const preview=quickStyleOneRender(input,'clean.mp4','preview.mp4',true);
+  assert.deepEqual([styled.plan.canvas.width,styled.plan.canvas.height],[1080,1920]);
+  assert.deepEqual([preview.plan.canvas.width,preview.plan.canvas.height],[540,960]);
+  assert.equal(styled.plan.durationSec,duration);assert.equal(styled.plan.videoSegments.length,1);
+  assert.equal(styled.plan.zoomEvents.length,0);assert.equal(styled.plan.subtitles.length,0);
+  assert.deepEqual(styled.plan.canvas.visualLayout.videoFrame,preview.plan.canvas.visualLayout.videoFrame);
+  const graph=styled.args[styled.args.indexOf('-filter_complex')+1];
+  assert.match(graph,/color=c=#000000:s=1080x1920/);assert.match(graph,/overlay=0:610/);assert.match(graph,/scale=1080:700:force_original_aspect_ratio=decrease/);
+  assert.match(styled.ass,/EB Garamond/);assert.doesNotMatch(graph,/boxblur|qmask/);
+  // Existing captions receive the actual template preset and active-word style.
+  h.rows.editElements.set('caption',{...project.elements[0],id:'caption',assetId:null,type:'SUBTITLE',track:2,position:0,startTime:0,duration:2,trimStart:0,trimEnd:null,properties:{content:'Original words'}});project=await h.service.get(id);
+  const withCaptions={...normalized,captions:{...normalized.captions,enabled:true,cues:[{start:0,end:2,text:'Original words'}]}};
+  const captionBundle=quickStyleOneCommands({project,assets:project.assets,elements:project.elements},withCaptions);
+  const captionResult=await h.service.applyAssistantBundle(id,project.revision,{proposalId:'quick-captions-test',summary:'StyleOne captions',userMessage:'captions',actor:'TEMPLATE_ACTION',commands:captionBundle.commands});
+  const caption=captionResult.project.elements.find(e=>e.type==='SUBTITLE');
+  assert.equal(caption.properties.captionStyleId,'BOLD_HIGHLIGHT');
+  assert.equal(caption.properties.y,S.captionSafeBox.y);assert.equal(caption.properties.activeWord.enabled,true);
+  assert.equal(caption.properties.activeWord.color.toLowerCase(),S.colors.captionActive.toLowerCase());
+  const crowded=captionResult.project.elements.map(e=>e.type==='SUBTITLE'?{...e,properties:{...e.properties,content:'Preserve the complete original sequence and all the original spoken words '.repeat(5)}}:e);
+  assert.throws(()=>quickStyleOneRender({project:captionResult.project,assets:project.assets,elements:crowded},'clean.mp4','out.mp4'),/two-line/);
+  const shortInput={project,assets:project.assets.map(a=>({...a,duration:.5})),elements:project.elements.filter(e=>e.type!=='SUBTITLE').map(e=>({...e,startTime:0,duration:.5,trimEnd:e.type==='VIDEO'?.5:null}))};
+  const shortBundle=quickStyleOneCommands(shortInput,normalized);
+  assert.ok(shortBundle.commands.filter(c=>c.action==='SET_ELEMENT_TIMING').every(c=>c.payload.duration<=.5));
+  // A clean-stage read failure cannot reach the StyleOne editor or composition.
+  const {QuickReframeService}=require('../dist/modules/quick-reframe/quick-reframe.service');
+  const service=Object.create(QuickReframeService.prototype),stages=[];let styles=0,failed=false;
+  Object.assign(service,{aborts:new Map(),logger:{warn:()=>{}},load:async()=>({id:'failed-clean',operationId:'op',plan:normalized,analysis,editProject:{...project,assets:project.assets.filter(a=>a.role==='SOURCE')}}),
+    stage:async(_task,message)=>stages.push(message),storage:{downloadToFile:async()=>{throw new Error('Unreadable source');}},editor:{applyAssistantBundle:async()=>{styles++;}},prisma:{quickReframe:{updateMany:async({data})=>{failed=data.status==='FAILED';return {count:1};}}}});
+  await service.run({id:'failed-clean',operationId:'op',kind:'PREVIEW'});
+  assert.equal(styles,0);assert.equal(failed,true);assert.ok(stages.every(s=>!s.includes('Stage 2')));
+  const {Prisma}=require('@prisma/client');let attempts=0;
+  assert.equal(await service.retryWriteConflict(async()=>{if(++attempts<3)throw new Prisma.PrismaClientKnownRequestError('Conflict',{code:'P2034',clientVersion:'test'});return 'ok';}),'ok');
+  assert.equal(attempts,3);attempts=0;
+  await assert.rejects(()=>service.retryWriteConflict(async()=>{attempts++;throw new Error('Stale revision');}),/Stale revision/);assert.equal(attempts,1);
+  console.log('Clean has no generated overlays; real StyleOne commands, serif emphasis, fixed canvas/card, preview/export parity, full timeline and clean-cache isolation: PASS');
+}
+main().catch(e=>{console.error(e);process.exitCode=1;});

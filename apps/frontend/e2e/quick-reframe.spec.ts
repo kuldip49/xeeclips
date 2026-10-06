@@ -38,3 +38,17 @@ test('own branding requires a separate explicit selection and ownership declarat
   await expect(add).toBeEnabled();await add.click();
   await expect(page.getByLabel('Cleanup 1 method')).toBeVisible();
 });
+test('clean original and fixed StyleOne preview are separate review stages',async({page})=>{
+  await page.route('**/quick-reframe/responsive-fixture',route=>route.fulfill({json:{...session,width:640,height:360,cleanUrl:'/clean-fixture.mp4',previewUrl:'/styled-fixture.mp4',previewRevision:2,status:'READY'}}));
+  for(const file of ['fixture.mp4','clean-fixture.mp4','styled-fixture.mp4'])await page.route(`**/${file}`,route=>route.fulfill({status:204,body:''}));
+  await page.goto('/quick-reframe?video=responsive-fixture');
+  await page.getByRole('button',{name:'StyleOne',exact:true}).click();
+  await expect(page.locator('video').nth(1)).toBeVisible();
+  expect(await page.locator('video').nth(1).evaluate(v=>getComputedStyle(v.parentElement!).aspectRatio)).toBe('9 / 16');
+  await page.getByRole('button',{name:'Clean original',exact:true}).click();
+  await expect(page.locator('video').first()).toHaveAttribute('src',/clean-fixture/);
+  await page.getByRole('button',{name:'Hook',exact:true}).click();
+  await expect(page.getByRole('checkbox',{name:'Show the StyleOne serif hook throughout the video'})).toBeVisible();
+  await expect(page.getByLabel('Hook position')).toHaveCount(0);
+  await expect(page.getByLabel('Export resolution')).toHaveCount(0);
+});

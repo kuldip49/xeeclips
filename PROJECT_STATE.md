@@ -5,7 +5,8 @@ Last updated: 2026-10-07
 ## Milestones
 
 - Quick Reframe AI: standalone `/quick-reframe`, independent queue, canonical assets/plans,
-  local OCR/Whisper, crop/cleanup, optional consented hooks, mobile tools, preview/export and History.
+  local OCR/Whisper, validated clean intermediate → actual StyleOne renderer, optional consented hooks,
+  fixed 1080×1920 canvas/media window, mobile tools, preview/export and History.
   Cloudflare frontend and laptop backend deployed. Real authorized Instagram import/export, duration
   limits, audio/captions, History restart/deletion and public Chrome playback passed.
   Acceptance details and limits: `docs/quick-reframe.md`.
