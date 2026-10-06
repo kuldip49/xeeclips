@@ -1,6 +1,8 @@
 node_modules/
 .next/
 .open-next/
+# Static export of the public site (apps/frontend: npm run build:cloudflare)
+apps/frontend/out/
 .wrangler/
 .dev.vars
 .vercel/

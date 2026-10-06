@@ -6,14 +6,10 @@ test('the one-step form takes a YouTube link, template and count with one Genera
     expect(capabilities.ok()).toBeTruthy();
     test.skip(!(await capabilities.json() as { youtubeEnabled: boolean }).youtubeEnabled,
       'This deployment has YouTube importing disabled.');
-    const response = await request.get('http://localhost:4000/projects');
-    expect(response.ok()).toBeTruthy();
-    const projects = await response.json() as Array<{ id: string }>;
-    expect(projects.length).toBeGreaterThan(0);
-
-    await page.goto(`/projects/${projects[0].id}`);
+    // The one-step form is the home page; nothing is created by this test.
+    await page.goto('/');
     const form = page.getByRole('form', { name: 'Generate clips' });
-    if (!await form.isVisible()) await page.getByRole('button', { name: /Generate clips/ }).first().click();
+    await expect(form).toBeVisible();
     // No deployment-level wording reaches the user.
     await expect(page.getByText(/deployment|retriever|yt-dlp/i)).toHaveCount(0);
     await page.getByRole('tab', { name: 'YouTube link' }).click();

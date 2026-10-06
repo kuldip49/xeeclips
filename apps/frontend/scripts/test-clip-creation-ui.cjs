@@ -34,8 +34,7 @@ const creative = require(join(root, 'src/lib/creative-generation.ts'));
 const panel = read('src/components/clip-creation-panel.tsx');
 const setup = read('src/components/generation/generation-setup.tsx');
 const preview = read('src/components/generation/style-preview.tsx');
-const workspace = read('src/components/project-workspace.tsx');
-const editorPage = read('src/app/edit-mode/[id]/page.tsx');
+const editorPage = read('src/components/edit-mode/edit-mode-project-route.tsx');
 const rightPanel = read('src/components/edit-mode/shell/edit-right-panel.tsx');
 const api = read('src/lib/api.ts');
 
@@ -66,9 +65,11 @@ for (const forbidden of ['recommendedClipCount', 'recommendedCount', 'PRIMARY', 
 }
 
 // --- B. One look: automatic edit, clean cuts, or a full template ---------------
-ok(setup.includes("title: 'Automatic 1'") &&
-  setup.includes("filter((template) => template.id === 'AUTOMATIC_2')"),
-  'the public template picker always allowlists exactly Automatic 1 and Automatic 2');
+// 918fe9e renamed the public looks: StyleZero (AUTOMATIC_1), StyleOne (AUTOMATIC_2), No Edit (RAW).
+ok(setup.includes("value: 'AUTOMATIC_1', title: 'StyleZero'") &&
+  setup.includes("filter((template) => template.id === 'AUTOMATIC_2')") && setup.includes("title: 'StyleOne'") &&
+  setup.includes('{ value: RAW_LOOK.value as string, title: RAW_LOOK.title'),
+  'the public template picker allowlists exactly StyleZero, StyleOne and No Edit');
 ok(state.restoreLook(null) === 'AUTOMATIC_1', 'no previous request -> Automatic 1');
 ok(state.restoreLook({ outputStyle: 'AI_EDITED' }) === 'AUTOMATIC_1', 'a legacy base look is canonicalized');
 ok(state.restoreLook({ outputStyle: 'AI_EDITED', generation: { templateId: 'AUTOMATIC_2' } }) === 'AUTOMATIC_2',
@@ -149,19 +150,19 @@ ok(setup.includes("type='radio'") && setup.includes("className='sr-only'") && se
 ok(setup.includes('focus-within:ring-2') && setup.includes('cursor-pointer'), 'cards show focus and a pointer');
 ok(setup.includes("<fieldset className='grid gap-3' disabled={disabled}>") && panel.includes('disabled={submitting} />'),
   'only a live submit freezes the choices; a queued render never traps the user');
-ok(setup.includes("title: 'Automatic 1'") && setup.includes("value: 'AUTOMATIC_1'") &&
-  !setup.includes("title: 'Clean cuts'") && !setup.includes("value: 'NORMAL'"),
-  'the normal generation chooser exposes Automatic 1 plus the one server template');
+ok(setup.includes("value: 'AUTOMATIC_1'") && !setup.includes("title: 'Clean cuts'") && !setup.includes("value: 'NORMAL'"),
+  'the generation chooser exposes StyleZero plus the server template, never the old Clean cuts look');
 ok(!/Normal Clips|AI Edited Clips|Output style/u.test(panel + setup), 'the Normal/AI product fork is gone');
 ok(setup.includes('data-component={category}') && setup.includes("<option value=''>From the look</option>") &&
   setup.includes("label='My styles'"), 'every component can be overridden, including with a saved style');
 ok(setup.includes("data-testid='creative-brief'") && setup.includes('uploadReference(file, videoId)') &&
   setup.includes('referenceFromUrl('), 'brief and reference (file or URL) are optional inputs');
 ok(preview.includes('Live preview on your uploaded video'), 'the preview identifies the uploaded source');
-ok(panel.includes('createClips(video.id, { requestedClipCount: count, outputStyle, generation: payload })'),
-  'the request carries the optional generation block');
-ok(panel.includes('setCount(restoreClipCount(loaded))') && panel.includes('restoreLook(loaded.clipRequest)'),
-  'look and count restore from the previous request');
+ok(/createClips\(video\.id, \{ requestedClipCount: count, outputStyle, generation: payload,\s*regenerate: analysis\.clipRequest\?\.status === 'COMPLETED' \}\)/u.test(panel),
+  'the request carries the optional generation block, and pressing Create again regenerates');
+ok(panel.includes(': restoreClipCount(loaded));') && panel.includes('restoreLook(loaded.clipRequest)') &&
+  panel.includes('const pending = !loaded.clipRequest && autoRequest ? autoRequest : null;'),
+  'look and count restore from the previous request (or the auto-started one before it exists)');
 ok(panel.includes('disabled={!canCreate}') && panel.includes('canCreateClips({ analysisReady:'),
   'the button is driven by the shared rule');
 ok((panel.match(/useState<GenerationChoices>/gu) ?? []).length === 1, 'one authoritative choice state');
@@ -170,8 +171,11 @@ ok((panel.match(/useState<GenerationChoices>/gu) ?? []).length === 1, 'one autho
 ok(!/getApiBaseUrl\(\)/u.test(read('src/lib/creative-generation.ts')) && !/getApiBaseUrl\(\)/u.test(panel) &&
   read('src/lib/creative-generation.ts').includes('getPublicApiBaseUrl()'),
   'DOM media URLs (source, poster, clip, export) use the public API base on both renders');
-ok(workspace.includes("data-testid='source-preview'") && workspace.includes('poster={sourcePosterUrl(video.id)}'),
-  'the source is previewable immediately after upload');
+// 918fe9e folded the separate source player into the style preview, which plays the
+// uploaded source (with its poster) under the chosen look.
+ok(setup.includes('<StylePreview posterUrl={sourcePosterUrl(videoId)} sourceUrl={sourceFileUrl(videoId)}') &&
+  preview.includes('poster={posterUrl}') && preview.includes('src={sourceUrl}'),
+  'the uploaded source is previewable from the setup, with its poster');
 
 // --- F. Result cards: Preview / Edit / Ask AI / Export ----------------------------
 ok(panel.includes("{opening === 'EDIT' ? 'Opening…' : 'Edit'}") && panel.includes('Ask AI') && panel.includes('Export</a>'),
@@ -180,7 +184,7 @@ ok(panel.includes('clip.editUrl ?? (await materializeGeneratedClipForEditing(cli
   'an already-linked clip opens its project; an unlinked one materializes through the shared API');
 ok(panel.includes("target === 'AI' ? `${editUrl}${editUrl.includes('?') ? '&' : '?'}panel=ai`"),
   'Ask AI opens the SAME project with the AI editor showing');
-ok(editorPage.includes("initialRightTab={query.panel === 'ai' ? 'AI' : 'INSPECTOR'}") &&
+ok(editorPage.includes("initialRightTab={panel === 'ai' ? 'AI' : 'INSPECTOR'}") && editorPage.includes("useSearchParams().get('panel')") &&
   rightPanel.includes('useState<RightTab>(initialTab)'), 'the editor honours panel=ai');
 ok(panel.includes('STYLE_READY_STATUSES.has(clip.style?.status') &&
   panel.includes('clip.style.playbackUrl'),

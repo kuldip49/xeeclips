@@ -62,7 +62,8 @@ export function settingsFromImport(job: VideoImportJob): EntrySettings {
     brief: request?.generation?.brief ?? '',
     platform: job.targetPlatform ?? DEFAULT_ENTRY_SETTINGS.platform,
     aspectRatio: job.outputAspectRatio ?? DEFAULT_ENTRY_SETTINGS.aspectRatio,
-    aiMode: job.aiMode === 'FALLBACK_ONLY' ? 'FALLBACK_ONLY' : 'ONLINE'
+    // The backend runs a legacy OFFLINE job as FALLBACK_ONLY, so it restores as XeeFree too.
+    aiMode: job.aiMode === 'FALLBACK_ONLY' || job.aiMode === 'OFFLINE' ? 'FALLBACK_ONLY' : 'ONLINE'
   };
 }
 

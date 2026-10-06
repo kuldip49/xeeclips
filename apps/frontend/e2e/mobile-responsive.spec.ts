@@ -27,6 +27,17 @@ async function expectNoHorizontalOverflow(page: Page, label: string) {
   expect(scrollWidth, `${label}: page scrolls horizontally (${scrollWidth} > ${width})`).toBeLessThanOrEqual(width);
 }
 
+/** Ask AI asks before any clip content is sent; a fresh browser context has not agreed yet. */
+async function allowAskAi(page: Page) {
+  const consent = page.getByTestId('ask-ai-consent');
+  await expect(consent).toBeVisible({ timeout: 60_000 });
+  await expect(consent.getByRole('button', { name: 'Cancel' })).toBeVisible();
+  const allow = consent.getByRole('button', { name: 'Allow Ask AI' });
+  await expectTouchSize(page, allow, 'Allow Ask AI');
+  await allow.click();
+  await expect(consent).toBeHidden();
+}
+
 async function expectTouchSize(page: Page, locator: ReturnType<Page['locator']>, label: string) {
   const box = await locator.boundingBox();
   expect(box, `${label} is not rendered`).not.toBeNull();
@@ -38,36 +49,35 @@ test.describe('A. 375px shell', () => {
 
   test('home loads, fits, and the tab bar navigates', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-    await expectNoHorizontalOverflow(page, 'landing');
-    await page.getByRole('link', { name: 'Create clips' }).first().click();
-    await page.waitForURL(/\/create$/);
+    await expect(page.getByRole('heading', { name: 'Create clips', level: 1 })).toBeVisible();
     await hideDevOverlay(page);
+    await expectNoHorizontalOverflow(page, 'create');
 
     const nav = page.getByTestId('mobile-nav');
     await expect(nav).toBeVisible();
-    await expectNoHorizontalOverflow(page, 'create');
-    for (const [name, url] of [['Home', /\/dashboard$/], ['Projects', /\/projects$/], ['Edits', /\/edit-mode$/],
-      ['Create clips', /\/create$/]] as const) {
+    await expect(nav.getByRole('link')).toHaveCount(4);
+    for (const [name, url, heading] of [['History', /\/history$/, 'History'], ['Edit', /\/edit$/, 'Edit clips'],
+      ['Settings', /\/settings$/, 'Settings'], ['Create', /\/$/, 'Create clips']] as const) {
       const link = nav.getByRole('link', { name, exact: true });
       await expectTouchSize(page, link, `tab ${name}`);
       await link.click();
       await page.waitForURL(url);
+      await expect(page.getByRole('heading', { name: heading, level: 1 })).toBeVisible();
       await expect(nav.getByRole('link', { name, exact: true })).toHaveAttribute('aria-current', 'page');
       await expectNoHorizontalOverflow(page, name);
     }
-    await nav.getByRole('button', { name: 'More' }).click();
-    const sheet = page.getByRole('dialog', { name: 'More' });
-    await expect(sheet).toBeVisible();
-    await expect(sheet.getByRole('link', { name: /Generated clips/ })).toBeVisible();
-    await sheet.getByRole('button', { name: 'Close' }).click();
-    await expect(sheet).toBeHidden();
+
+    // The app header stays pinned while the page scrolls (an overflow-x:hidden shell once broke
+    // every sticky element: the header scrolled away and the sticky Generate never stuck).
+    await page.evaluate(() => window.scrollTo(0, 400));
+    await expect.poll(() => page.evaluate(() => Math.round(document.querySelector('header')!.getBoundingClientRect().top)))
+      .toBe(0);
   });
 
   test('no page-level horizontal overflow at any phone width', async ({ page }) => {
     for (const width of PHONE_WIDTHS) {
       await page.setViewportSize({ width, height: width <= 360 ? 640 : 844 });
-      for (const route of ['/', '/dashboard', '/projects', '/create', '/edit-mode', `/projects/${PROJECT_ID}`]) {
+      for (const route of ['/', '/history', '/edit', '/settings', '/create', `/projects/${PROJECT_ID}`]) {
         await page.goto(route);
         await page.waitForLoadState('networkidle').catch(() => undefined);
         await expectNoHorizontalOverflow(page, `${route} @ ${width}px`);
@@ -188,6 +198,7 @@ test.describe('D. phone editor', () => {
 
     // Ask AI: drawer docked under the preview, composer and send button on screen.
     await toolbar.getByRole('button', { name: 'Ask AI' }).click();
+    await allowAskAi(page);
     const agent = page.getByTestId('agent-panel');
     await expect(agent).toBeVisible();
     const input = agent.getByLabel('Tell the AI editor what to change');
@@ -217,6 +228,7 @@ test.describe('D. phone editor', () => {
 
   test('Ask AI from a result card opens the editor with the AI drawer', async ({ page }) => {
     await page.goto(`/edit-mode/${EDIT_PROJECT_ID}?panel=ai`);
+    await allowAskAi(page);
     await expect(page.getByTestId('agent-panel')).toBeVisible({ timeout: 60_000 });
   });
 });
@@ -235,8 +247,11 @@ test.describe('E. backend offline', () => {
     await expect(page.getByText(/TypeError|Failed to fetch|ECONNREFUSED|API request failed/)).toHaveCount(0);
     await expectNoHorizontalOverflow(page, 'offline create');
 
-    await page.goto('/edit-mode');
-    await expect(page.getByTestId('offline-notice')).toBeVisible({ timeout: 30_000 });
-    await expectNoHorizontalOverflow(page, 'offline edits');
+    for (const route of ['/history', '/edit']) {
+      await page.goto(route);
+      await expect(page.getByTestId('offline-notice')).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByText(/TypeError|Failed to fetch|ECONNREFUSED|API request failed/)).toHaveCount(0);
+      await expectNoHorizontalOverflow(page, `offline ${route}`);
+    }
   });
 });

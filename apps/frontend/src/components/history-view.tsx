@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Bot, Download, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { deleteHistoryClip, getPublicApiBaseUrl, listHistory, type HistoryClip } from '@/lib/api';
 import { materializeGeneratedClipForEditing } from '@/lib/edit-mode-api';
+import { OfflineNotice } from '@/components/offline-notice';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { clipDuration } from '@/lib/format';
 import { isServerUnavailable } from '@/lib/use-backend-status';
@@ -67,6 +68,7 @@ export function HistoryView({ mode = 'history' }: { mode?: 'history' | 'edit' })
   const [clips, setClips] = useState<HistoryClip[]>(cachedHistory ?? []);
   const [loading, setLoading] = useState(!cachedHistory);
   const [error, setError] = useState('');
+  const [offline, setOffline] = useState(false);
   const [selected, setSelected] = useState<HistoryClip | null>(null);
   const [deleting, setDeleting] = useState(false);
   const refresh = useCallback(async () => {
@@ -75,8 +77,11 @@ export function HistoryView({ mode = 'history' }: { mode?: 'history' | 'edit' })
       cachedHistory = items;
       setClips(items);
       setError('');
+      setOffline(false);
     } catch (caught) {
-      setError(isServerUnavailable(caught) ? 'Processing server is currently offline.' : 'History could not be loaded. Try again.');
+      const unavailable = isServerUnavailable(caught);
+      setOffline(unavailable);
+      setError(unavailable ? '' : 'History could not be loaded. Try again.');
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { void refresh(); }, [refresh]);
@@ -95,13 +100,14 @@ export function HistoryView({ mode = 'history' }: { mode?: 'history' | 'edit' })
   return <div className='grid gap-7'>
     <header><p className='eyebrow'>Your clips</p><h1 className='mt-2 text-3xl font-bold tracking-tight sm:text-4xl'>{mode === 'edit' ? 'Edit clips' : 'History'}</h1>
       <p className='mt-2 text-sm text-muted-foreground'>{mode === 'edit' ? 'Choose a clip to edit or open it in Ask AI.' : 'Every clip you create, newest first.'}</p></header>
+    {offline ? <OfflineNotice onRetry={refresh} detail='Your clips are safe. They appear here again when it is back.' /> : null}
     {error ? <p role='alert' className='rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning-soft'>{error} <button className='ml-2 underline' onClick={() => void refresh()}>Retry</button></p> : null}
     {loading ? <p role='status' className='flex items-center gap-2 text-sm text-muted-foreground'><Loader2 size={17} className='animate-spin text-secondary' />Loading clips…</p>
       : visibleClips.length ? groups.map((group) => {
         const items = visibleClips.filter((clip) => groupFor(clip.createdAt) === group);
         return items.length ? <section key={group} className='grid gap-3'><h2 className='text-sm font-semibold text-soft'>{group}</h2>
           <div className='grid gap-4 lg:grid-cols-2'>{items.map((clip) => <HistoryCard key={clip.id} clip={clip} onDelete={mode === 'history' ? setSelected : undefined} />)}</div></section> : null;
-      }) : !error ? <div className='empty-state'><h2 className='text-lg font-semibold'>{mode === 'edit' ? 'No clips to edit yet.' : 'No clips yet.'}</h2>
+      }) : !error && !offline ? <div className='empty-state'><h2 className='text-lg font-semibold'>{mode === 'edit' ? 'No clips to edit yet.' : 'No clips yet.'}</h2>
         <p className='mt-2 text-sm text-muted-foreground'>{mode === 'edit' ? 'Create clips first, then return here to edit them.' : 'Create your first clips and they\'ll appear here.'}</p>
         <Link href='/' className='btn-primary mt-5 inline-flex min-h-[44px] items-center rounded-xl px-5 text-sm'>Create clips</Link></div> : null}
     <ConfirmDialog open={!!selected} title='Delete this clip?' busy={deleting}

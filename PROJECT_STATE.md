@@ -1269,6 +1269,45 @@ change. Generated media and the Automatic 1/2 previews keep their own colours an
   that fail identically on the previous commit (stale expectations: Ask AI consent, empty History,
   removed test ids); none are new.
 
+## Production reliability pass (2026-10-06)
+
+- **Root cause of the 30-150 s production hangs.** The `xeeclips-frontend` Worker ran Next.js
+  per request (OpenNext) on the Workers Free plan, whose CPU limit is 10 ms. `wrangler tail`
+  showed `exceededCpu` at `cpuTime: 10` on almost every dynamic page, ~14-15 ms for static
+  pages and ~660 ms for an editor render; a per-layer probe (25 rounds) had 60/100 Worker
+  requests fail (`Error 1102` / 503) or hang to the 150 s timeout, while the tunnel and API had
+  0 failures (max 3.6 s). The creation-session page returned 1102 on 8/8 attempts.
+- **Fix: static frontend.** `npm run build:cloudflare` is now a Next static export (`out/`)
+  served from Workers static assets (no code per request). `/?session=` and `/edit-mode/<id>`
+  load their data in the browser (`CreateClipsRoute`, `EditModeProjectRoute`; skeleton and
+  error states reused). `cloudflare/router.mjs` runs first only for `/edit-mode/*` and
+  `/projects/*` and serves the one prebuilt shell (`_`) for any id; `run_worker_first` is
+  required because browser navigations to a missing file otherwise get the 404 page without
+  reaching the Worker. Local `next dev`/Docker keep server rendering (export only when
+  `XEECLIP_STATIC_EXPORT=1`). The editor HTML went from 3.2 MB server-rendered to a 9 KB shell.
+- **API.** `/history/clips` loaded ~50 KB of JSON per clip (candidate, edit telemetry, edit
+  settings, job telemetry) for 172 clips: 1.0-2.7 s. It now selects scalar columns plus the four
+  JSON keys it uses (SQL `->>`): ~0.10 s, byte-identical output. Other page endpoints were
+  already <0.2 s at the origin. Origin gzip was tried and reverted: it cut the editor history
+  from 1.7 MB to 239 KB but did not change tunnel latency.
+- **Tunnel.** Each API call costs ~1 s through `api.xeeclip.me` regardless of size: the tunnel
+  connectors are in CCU/DEL but requests from India are served at the Marseille edge
+  (`CF-RAY ...-MRS`), so every call crosses India-Europe twice. Not fixable in code.
+- **Polling.** `usePolling` (no overlapping requests, paused in hidden tabs) replaces raw
+  `setInterval`. A finished creation session made 2 requests every 2.5 s forever (48/min of
+  125 KB project payloads through the tunnel); it now stops once analysis, the auto request
+  and imports have settled: 0 requests/min.
+- **App bugs fixed.** AppShell used `overflow-x-hidden`, which made the non-scrolling shell the
+  sticky container: the header scrolled away and the phone's sticky Generate never stuck
+  (`overflow-x-clip` now). History/Edit offline now show the shared `OfflineNotice` with Retry.
+  A failed YouTube import whose job was legacy `OFFLINE` restored as XeePro; it restores as XeeFree.
+- **Tests.** Stale expectations updated to the shipped product (four-tab nav, StyleZero/
+  StyleOne/No Edit names, Ask AI consent, auto-start restore, regenerate flag); the
+  product-simplification mock answered CORS for :3001 so every mocked call failed. p0-editor
+  test 1 used to crop/AI-edit/export an existing project; it now creates and deletes its own.
+  New `e2e/workflows.spec.ts` + `e2e/support/disposable.ts` run the user journeys on disposable
+  data (`E2E_SOURCE`, optional `E2E_YOUTUBE_URL`), cleaning up by id and `e2e-disposable-` name.
+
 ## Explicitly deferred
 
 - LLM features

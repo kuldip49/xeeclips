@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Download, Film, LoaderCircle, Play, Upload } from 'lucide-react';
 import { editExportFileUrl, EditModeApiError, listEditExports, getEditExportProgress,
   startEditExport } from '@/lib/edit-mode-api';
+import { usePolling } from '@/lib/use-polling';
 import type { EditExport, EditExportProgress } from '@/lib/edit-mode-types';
 
 const PHASE_LABEL: Record<EditExportProgress['phase'], string> = {
@@ -53,13 +54,7 @@ export function EditExportPanel({ projectId, revision, hasSource, disabled, onSt
 
   const running = progress != null && progress.phase !== 'COMPLETED' && progress.phase !== 'FAILED';
   useEffect(() => { onPhaseChange?.(progress?.phase ?? null); }, [progress?.phase, onPhaseChange]);
-  useEffect(() => {
-    if (!running) return undefined;
-    const timer = setInterval(() => {
-      void getEditExportProgress(projectId).then(setProgress).catch(() => undefined);
-    }, 1500);
-    return () => clearInterval(timer);
-  }, [projectId, running]);
+  usePolling(async () => setProgress(await getEditExportProgress(projectId)), 1500, running);
 
   // When a render finishes, pull the new asset list and let the workspace
   // refresh the project so its status badge stops saying "exporting".

@@ -1,27 +1,23 @@
 {
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "xeeclips-frontend",
-  "main": ".open-next/worker.js",
+  // The site is a static export (`npm run build:cloudflare` -> out/). Files are served directly
+  // from the asset store; the router only runs for the per-id paths (see cloudflare/router.mjs).
+  "main": "cloudflare/router.mjs",
   "compatibility_date": "2026-10-04",
-  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "workers_dev": false,
   "preview_urls": false,
   "routes": [
     { "pattern": "xeeclip.me", "custom_domain": true }
   ],
   "assets": {
-    "directory": ".open-next/assets",
-    "binding": "ASSETS"
-  },
-  "services": [
-    {
-      "binding": "WORKER_SELF_REFERENCE",
-      "service": "xeeclips-frontend"
-    }
-  ],
-  "vars": {
-    "NEXT_PUBLIC_API_URL": "https://api.xeeclip.me",
-    "SERVER_API_URL": "https://api.xeeclip.me"
+    "directory": "out",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "404-page",
+    // Browser navigations to a missing file get the 404 page from the asset layer without ever
+    // reaching the Worker, so the per-id routes must run the router first.
+    "run_worker_first": ["/edit-mode/*", "/projects/*"]
   },
   "observability": {
     "enabled": true

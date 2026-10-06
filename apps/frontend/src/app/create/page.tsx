@@ -1,34 +1,14 @@
-import Link from 'next/link';
+import { Suspense } from 'react';
 import { AppShell } from '@/components/app-shell';
-import { CreateClipsFlow } from '@/components/create-clips-flow';
-import { CreationSession } from '@/components/creation-session';
-import { getProject, type Project } from '@/lib/api';
+import { CreateClipsRoute, CreateClipsView } from '@/components/create-clips-route';
 
 export const metadata = { title: 'Create clips' };
 
-export default async function CreatePage({ searchParams }: {
-  searchParams?: Promise<{ session?: string }>;
-}) {
-  const session = (await searchParams)?.session;
-  let project: Project | null = null;
-  let unavailable = false;
-  if (session) {
-    try { project = await getProject(session, { cache: 'no-store' }); }
-    catch { unavailable = true; }
-  }
+/** Static: the form is prerendered; `?session=` is read and loaded in the browser. */
+export default function CreatePage() {
   return <AppShell>
-    <div className='mx-auto grid w-full max-w-[920px] min-w-0 grid-cols-[minmax(0,1fr)] gap-6'>
-      <header className='flex flex-wrap items-end justify-between gap-3'>
-        <div>
-          <p className='eyebrow'>XeeClip</p>
-          <h1 className='mt-2 text-[30px] font-bold leading-tight tracking-tight sm:text-4xl'>Create clips</h1>
-          <p className='mt-2 text-sm leading-6 text-muted-foreground sm:text-base'>Turn a long video into short clips.</p>
-        </div>
-        {session ? <Link href='/' className='inline-flex h-10 items-center rounded-xl border border-border px-4 text-sm font-medium text-soft hover:bg-tint'>Create another</Link> : null}
-      </header>
-      {project ? <CreationSession initialProject={project} />
-        : unavailable ? <div role='alert' className='rounded-2xl border border-warning/20 bg-warning/10 p-5 text-sm text-warning-soft'>Your clips could not be loaded right now. Refresh when the processing server is available. Your finished clips remain in <Link className='underline' href='/history'>History</Link>.</div>
-          : <div className='mx-auto w-full max-w-[720px] rounded-[24px] border border-border bg-surface p-4 sm:p-6'><CreateClipsFlow /></div>}
-    </div>
+    <Suspense fallback={<CreateClipsView session={null} project={null} unavailable={false} />}>
+      <CreateClipsRoute />
+    </Suspense>
   </AppShell>;
 }

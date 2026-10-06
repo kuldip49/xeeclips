@@ -133,6 +133,10 @@ count → generate → result cards with Preview / Edit / Ask AI / Export (`comp
 Phones/tablets use a separate shell (bottom tab bar, `/create` one-step flow, docked editor drawers
 + tool bar; see the "Mobile-first responsive frontend" section of `PROJECT_STATE.md`); keep desktop
 layouts unchanged and cover phone paths in `e2e/mobile-responsive.spec.ts`.
+Production (xeeclip.me) is a static export served from Cloudflare static assets (see
+`docs/production-deployment.md`): pages must not depend on per-request server rendering
+(`searchParams`, server fetches, dynamic `params`); load data in client components, and give a
+new dynamic route a `generateStaticParams` placeholder plus a rule in `cloudflare/router.mjs`.
 Colours and fonts come only from the design tokens in `src/app/globals.css` / `tailwind.config.ts`
 (`bg-surface`, `text-muted-foreground`, `btn-primary`, `font-display`…); never add raw Tailwind
 palette or hex classes to app chrome. Video stages stay black and generated media keeps its own colours.

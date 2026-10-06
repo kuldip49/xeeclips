@@ -1,33 +1,35 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Loader2 } from 'lucide-react';
 import { ClipCreationPanel } from '@/components/clip-creation-panel';
 import { UploadVideoForm } from '@/components/upload-video-form';
 import { listVideoImports, listVideos, retryVideo, type Project, type VideoImportJob } from '@/lib/api';
 import { analysisProgressLabel, importProgressLabel, settingsFromImport } from '@/lib/entry-flow';
+import { usePolling } from '@/lib/use-polling';
 
 export function CreationSession({ initialProject }: { initialProject: Project }) {
   const [project, setProject] = useState(initialProject);
   const [imports, setImports] = useState<VideoImportJob[]>([]);
   const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => {
-    let active = true;
-    const refresh = async () => {
-      const [videos, jobs] = await Promise.allSettled([listVideos(initialProject.id), listVideoImports(initialProject.id)]);
-      if (!active) return;
-      if (videos.status === 'fulfilled') setProject((current) => ({ ...current, videos: videos.value }));
-      if (jobs.status === 'fulfilled') setImports(jobs.value);
-    };
-    void refresh();
-    const interval = window.setInterval(refresh, 2500);
-    return () => { active = false; window.clearInterval(interval); };
+  const refresh = useCallback(async () => {
+    const [videos, jobs] = await Promise.allSettled([listVideos(initialProject.id), listVideoImports(initialProject.id)]);
+    if (videos.status === 'fulfilled') setProject((current) => ({ ...current, videos: videos.value }));
+    if (jobs.status === 'fulfilled') setImports(jobs.value);
   }, [initialProject.id]);
+  useEffect(() => { void refresh(); }, [refresh]);
   const video = project.videos[0];
   const job = video?.processingJobs?.[0];
   const pendingImport = imports.find((item) => item.status !== 'READY');
+  // Once analysis has finished (or failed), the auto-started request has been handed to the
+  // clips panel and no import is in flight, nothing here changes any more: stop polling. The
+  // panel keeps polling its own results while clips render.
+  const settled = !!video && (job?.status === 'COMPLETED' || job?.status === 'FAILED') &&
+    !['PENDING', 'STARTING'].includes(job?.autoGenerationStatus ?? '') &&
+    imports.every((item) => ['READY', 'IMPORT_FAILED', 'CANCELLED'].includes(item.status));
+  usePolling(refresh, 2500, !settled);
   return <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-5'>
     {video ? <>
       <div className='rounded-2xl border border-border bg-surface p-4 sm:p-5'>
@@ -36,7 +38,7 @@ export function CreationSession({ initialProject }: { initialProject: Project })
           {job?.status === 'COMPLETED' ? 'Your video is ready.' : job?.status === 'FAILED' ? 'Something went wrong.' : analysisProgressLabel(video.processingStages)}
         </p>
         {job?.status !== 'COMPLETED' && job?.status !== 'FAILED' ? <div className='mt-3 h-1.5 overflow-hidden rounded-full bg-tint-strong'><div className='h-full rounded-full bg-brand-progress transition-all' style={{ width: `${Math.max(4, job?.progress ?? 0)}%` }} /></div> : null}
-        {job?.status === 'FAILED' && job.retryable !== false ? <button className='mt-3 rounded-xl border border-border px-4 py-2 text-sm font-semibold' disabled={retrying} onClick={() => { setRetrying(true); void retryVideo(video.id).catch(() => setError('Could not try again.')).finally(() => setRetrying(false)); }}>{retrying ? 'Trying again…' : 'Try again'}</button> : null}
+        {job?.status === 'FAILED' && job.retryable !== false ? <button className='mt-3 rounded-xl border border-border px-4 py-2 text-sm font-semibold' disabled={retrying} onClick={() => { setRetrying(true); void retryVideo(video.id).then(refresh).catch(() => setError('Could not try again.')).finally(() => setRetrying(false)); }}>{retrying ? 'Trying again…' : 'Try again'}</button> : null}
       </div>
       {error ? <p role='alert' className='text-sm text-danger-soft'>{error}</p> : null}
       <ClipCreationPanel video={video} />

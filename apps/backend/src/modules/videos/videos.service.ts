@@ -14,7 +14,7 @@ import { extname } from "path";
 import { PrismaService } from "../database/prisma.service";
 import { generatedClipEditLink } from '../edit-mode/generated-clip-edit-link';
 import { editAssetOwnsStorage, editAssetStorageLocation } from '../edit-mode/edit-asset-storage';
-import { resolveGenerationStyleReadiness, toClipCard } from './clip-selection.service';
+import { resolveGenerationStyleReadiness } from './clip-selection.service';
 import { StorageService } from "../storage/storage.service";
 import { ProcessingQueueService } from "../processing/processing-queue.service";
 
@@ -468,41 +468,66 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   /** Public product view of persisted renders. Internal project and job identities stay server-side. */
+  /**
+   * Every clip, newest first, as History cards. History lists all clips, so it must not load the
+   * large per-row JSON (candidate scoring, edit telemetry, edit settings, job telemetry - about
+   * 50 KB per clip): only scalar columns, plus the four JSON keys the cards use, read in SQL.
+   */
   async getHistory() {
     const clips = await this.prisma.generatedClip.findMany({
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      include: {
-        candidate: true,
-        editProject: { select: { id: true, settings: true } },
+      select: {
+        id: true, createdAt: true, duration: true, processingType: true, thumbnailObjectKey: true,
+        templateId: true, requestedTemplate: true,
+        candidate: { select: { bestHook: true, hookCandidate: true } },
+        editProject: { select: { id: true } },
         video: { select: { originalName: true,
-          processingJobs: { orderBy: { createdAt: 'desc' }, take: 1,
-            select: { aiMode: true, telemetry: true } } } }
+          processingJobs: { orderBy: { createdAt: 'desc' }, take: 1, select: { aiMode: true } } } }
       }
     });
+    if (!clips.length) return [];
+    const extracted = await this.prisma.$queryRaw<Array<{ id: string; hookRendered: boolean | null;
+      hookFinalText: string | null; generationStyle: Prisma.JsonValue | null; effectiveAiMode: string | null }>>`
+      SELECT g."id",
+        (g."editTelemetry"->>'hookRendered') = 'true' AS "hookRendered",
+        g."editTelemetry"->>'hookFinalText' AS "hookFinalText",
+        e."settings"->'generationStyle' AS "generationStyle",
+        (SELECT j."telemetry"->>'effectiveAiMode' FROM "ProcessingJob" j WHERE j."videoId" = g."videoId"
+          ORDER BY j."createdAt" DESC LIMIT 1) AS "effectiveAiMode"
+      FROM "GeneratedClip" g LEFT JOIN "EditProject" e ON e."generatedClipId" = g."id"
+      WHERE g."id" IN (${Prisma.join(clips.map((clip) => clip.id))})`;
+    const byId = new Map(extracted.map((row) => [row.id, row]));
     return clips.map((clip) => {
-      const job = clip.video.processingJobs[0];
-      const telemetry = job?.telemetry && typeof job.telemetry === 'object' &&
-        !Array.isArray(job.telemetry) ? job.telemetry as Record<string, unknown> : {};
-      const card = toClipCard(clip, telemetry.effectiveAiMode ?? job?.aiMode, 1);
+      const json = byId.get(clip.id);
+      const editProject = clip.editProject
+        ? { id: clip.editProject.id, settings: { generationStyle: json?.generationStyle ?? null } } : null;
+      // Same rules as toClipCard: the rendered headline, else the candidate's hook.
+      const renderedHook = clip.processingType === 'EDITED_CLIPS' && json?.hookRendered === true &&
+        typeof json.hookFinalText === 'string' ? json.hookFinalText.trim() : '';
+      const hook = renderedHook || clip.candidate?.bestHook || clip.candidate?.hookCandidate || '';
+      const styleState = resolveGenerationStyleReadiness({ editProject, templateId: clip.templateId,
+        requestedTemplate: clip.requestedTemplate });
+      const link = generatedClipEditLink(editProject);
       const style = clip.requestedTemplate ?? clip.templateId;
       const requiresStyle = style === 'AUTOMATIC_2';
-      const styledReady = !!card.style?.playbackUrl &&
-        ['EXPORT_READY', 'READY', 'LEGACY_STYLE_READY'].includes(card.style.status);
+      const styledReady = !!styleState?.playbackUrl &&
+        ['EXPORT_READY', 'READY', 'LEGACY_STYLE_READY'].includes(styleState.status);
+      const aiMode = json?.effectiveAiMode ?? clip.video.processingJobs[0]?.aiMode ?? '';
       return {
         id: clip.id,
-        title: card.hook || `Clip from ${clip.video.originalName}`,
+        title: hook || `Clip from ${clip.video.originalName}`,
         createdAt: clip.createdAt,
-        duration: card.durationSec,
-        thumbnailUrl: card.posterUrl,
-        playbackUrl: requiresStyle ? styledReady ? card.style!.playbackUrl : null : card.playbackUrl,
+        duration: Math.round(clip.duration * 10) / 10,
+        thumbnailUrl: clip.thumbnailObjectKey ? `/generated-clips/${clip.id}/poster` : null,
+        playbackUrl: requiresStyle ? styledReady ? styleState!.playbackUrl : null : `/generated-clips/${clip.id}/file`,
         style: style === 'AUTOMATIC_2' ? 'StyleOne' : style === 'AUTOMATIC_RAW' ||
           clip.processingType === 'NORMAL_CLIPS' ? 'No Edit' : 'StyleZero',
-        mode: String(telemetry.effectiveAiMode ?? job?.aiMode ?? '') === 'ONLINE' ? 'XeePro' : 'XeeFree',
+        mode: String(aiMode) === 'ONLINE' ? 'XeePro' : 'XeeFree',
         status: requiresStyle && !styledReady
-          ? card.style?.status === 'STYLE_FAILED' ? 'Something went wrong' : 'Applying style' : 'Ready',
+          ? styleState?.status === 'STYLE_FAILED' ? 'Something went wrong' : 'Applying style' : 'Ready',
         sourceLabel: clip.video.originalName,
-        editUrl: card.editUrl,
-        editable: card.isEditable,
+        editUrl: link.editUrl,
+        editable: link.isEditable,
         exportable: !requiresStyle || styledReady
       };
     });

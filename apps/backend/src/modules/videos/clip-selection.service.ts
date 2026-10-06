@@ -218,7 +218,8 @@ const KNOWN_STYLE_STATUSES = new Set(['BASE_READY', 'STYLE_APPLYING', 'STYLE_REA
  * This is the single place that resolves readiness; getResults() reuses it for its aggregate
  * counts so the per-card and aggregate views can never disagree.
  */
-export function resolveGenerationStyleReadiness(clip: ResultClip) {
+export function resolveGenerationStyleReadiness(
+  clip: Pick<ResultClip, 'editProject' | 'requestedTemplate' | 'templateId'>) {
   const style = jsonObject(jsonObject(clip.editProject?.settings).generationStyle);
   if (typeof style.status !== 'string') return null;
   const applied = Array.isArray(style.lines) ? (style.lines as unknown[]).map(String).slice(0, 12) : [];

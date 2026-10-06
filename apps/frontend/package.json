@@ -5,9 +5,9 @@
   "scripts": {
     "dev": "next dev -H 0.0.0.0 -p 3000",
     "build": "next build",
-    "build:cloudflare": "opennextjs-cloudflare build",
-    "preview:cloudflare": "opennextjs-cloudflare preview",
-    "deploy:cloudflare": "opennextjs-cloudflare deploy",
+    "build:cloudflare": "node scripts/build-static.cjs",
+    "preview:cloudflare": "wrangler dev --config wrangler.jsonc",
+    "deploy:cloudflare": "wrangler deploy --config wrangler.jsonc",
     "start": "next start -H 0.0.0.0 -p 3000",
     "lint": "tsc --noEmit",
     "test:ai-mode-ui": "node scripts/test-ai-mode-ui.cjs",

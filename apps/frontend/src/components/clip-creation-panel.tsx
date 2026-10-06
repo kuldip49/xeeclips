@@ -11,6 +11,7 @@ import { ClipPlayerSheet, LazyVideo } from '@/components/generation/lazy-video';
 import { StageSteps, stageFromAnalysisLabel } from '@/components/generation/stage-steps';
 import { clipDuration } from '@/lib/format';
 import { cn } from '@/lib/utils';
+import { usePolling } from '@/lib/use-polling';
 import {
   createClips,
   deleteHistoryClip,
@@ -347,12 +348,7 @@ export function ClipCreationPanel({ video }: { video: Video }) {
   }, [analysisDone, choices.look, payloadKey]);
 
   const awaitingAuto = analysisDone && autoWaiting;
-  useEffect(() => {
-    if (!rendering && !styling && !awaitingAuto) return;
-    const interval = window.setInterval(() => { void refresh().catch(() => undefined); },
-      awaitingAuto ? 2000 : 4000);
-    return () => window.clearInterval(interval);
-  }, [rendering, styling, awaitingAuto, refresh]);
+  usePolling(refresh, awaitingAuto ? 2000 : 4000, rendering || styling || awaitingAuto);
 
   const explicitStyle = !!payload && (!!payload.templateId || !!payload.referenceId ||
     Object.keys(payload.components).length > 0);

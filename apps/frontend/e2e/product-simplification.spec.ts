@@ -9,7 +9,8 @@ test.beforeEach(async ({ page }) => {
       ? JSON.stringify({ youtubeEnabled: true }) : path === '/edit-mode/creative/catalog'
         ? JSON.stringify({ templates: [], categories: [], components: {} }) : '{}';
     await route.fulfill({ status: 200, contentType: 'application/json',
-      headers: { 'Access-Control-Allow-Origin': 'http://localhost:3001',
+      // Echo the page's own origin: a fixed origin made the browser reject every mocked response.
+      headers: { 'Access-Control-Allow-Origin': route.request().headers().origin ?? 'http://localhost:3000',
         'Access-Control-Allow-Credentials': 'true' }, body });
   });
 });

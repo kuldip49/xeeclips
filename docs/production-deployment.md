@@ -71,20 +71,32 @@ Invoke-WebRequest https://api.xeeclip.me/health
 
 ## Frontend Worker
 
-OpenNext packages the Next.js app for Cloudflare Workers. The production API
-origin is in `apps/frontend/wrangler.jsonc`, and the public variable is also
-embedded during the build. The Wrangler custom domain route attaches
-`xeeclip.me` and lets Cloudflare create its DNS and TLS records. The Worker
-has no `workers.dev` or preview URL.
+The public site is a static export of the Next.js app (`output: 'export'`, enabled only
+by `npm run build:cloudflare`), served by the `xeeclips-frontend` Worker's static assets.
+Cloudflare serves every file straight from its asset store without running any code, so
+pages cost no Worker CPU and never wait for the laptop before sending HTML. The creation
+session (`/?session=`) and the editor (`/edit-mode/<id>`) load their data in the browser.
+The only Worker code, `apps/frontend/cloudflare/router.mjs`, runs first for
+`/edit-mode/*` and `/projects/*` and returns the one prebuilt shell for any id (a rewrite,
+so the URL stays). `public/_redirects` maps the old `/dashboard`, `/projects` and
+`/edit-mode` pages. The API origin is baked in at build time from `NEXT_PUBLIC_API_URL`.
+The Wrangler custom domain route attaches `xeeclip.me` and lets Cloudflare create its DNS
+and TLS records. The Worker has no `workers.dev` or preview URL.
+
+Do not move back to per-request server rendering (OpenNext) on the Workers Free plan: its
+10 ms CPU limit was exceeded by ~14 ms static pages and ~660 ms editor renders, which showed
+up as `Error 1102` / 503 responses and 60-150 s hangs (measured 2026-10-06).
 
 ```powershell
 Set-Location C:\projects\ai-content-platform
 $env:NEXT_PUBLIC_API_URL='https://api.xeeclip.me'
-$env:SERVER_API_URL='https://api.xeeclip.me'
-npm run build:cloudflare --workspace apps/frontend
+npm run build:cloudflare --workspace apps/frontend    # -> apps/frontend/out
 npx wrangler deploy --config apps/frontend/wrangler.jsonc
 Invoke-WebRequest https://xeeclip.me
 ```
+
+`npm run preview:cloudflare --workspace apps/frontend` serves `out/` locally with the same
+asset handling and router (`wrangler dev`).
 
 Local Compose frontend development still uses `http://localhost:3000` and
 calls `http://localhost:4000`. If processing later moves to a VPS, move the

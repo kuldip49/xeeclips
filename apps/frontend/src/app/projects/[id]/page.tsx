@@ -1,6 +1,10 @@
-import { redirect } from 'next/navigation';
+import { ProjectSessionRedirect } from '@/components/project-session-redirect';
 
-export default async function ProjectRedirect({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
-  redirect(`/?session=${encodeURIComponent(id)}`);
+/** Old project links open their creation session. One prerendered shell serves every id. */
+export function generateStaticParams() {
+  return [{ id: '_' }];
+}
+
+export default function ProjectRedirect() {
+  return <ProjectSessionRedirect />;
 }

@@ -100,8 +100,14 @@ ok('the right panel mounts the AI editor agent with the selected element',
 section('5. Step 7/8 agent panel');
 const agentPanel = read('src/components/edit-mode/edit-agent-panel.tsx');
 const agentCode = agentPanel.replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$|\{\/\*[\s\S]*?\*\/\}/gmu, '');
-ok('the agent receives selection, range, playhead, autonomy and task rules',
-  /runEditAgent\(projectId, \{ message, revision, selectedElementId,\s*selectedTimeRange, playheadSec, autonomy, constraints \}\)/u.test(agentPanel));
+ok('the agent receives consent, selection, range, playhead, autonomy and task rules',
+  /runEditAgent\(projectId, \{ message, revision, aiConsent: true, selectedElementId,\s*selectedTimeRange, playheadSec, autonomy, constraints \}\)/u.test(agentPanel));
+// aiConsent is only honest because the agent cannot mount before the user allows Ask AI.
+const consentGate = rightPanel.indexOf("if (consent !== 'granted') return");
+ok('Ask AI asks for consent before the agent panel exists',
+  consentGate > 0 && consentGate < rightPanel.indexOf('const chat = <EditAgentPanel') &&
+  /localStorage\.setItem\(ASK_AI_CONSENT_KEY, 'allowed'\)/u.test(rightPanel) &&
+  /Allow Ask AI/u.test(rightPanel) && /Ask AI is off/u.test(rightPanel));
 ok('the ledger shows every clause with status and verification',
   /agent-ledger/u.test(agentPanel) && /verified/u.test(agentPanel) && /Needs your OK/u.test(agentPanel));
 ok('held destructive work needs an explicit "Yes, do it"', /Yes, do it/u.test(agentPanel));
