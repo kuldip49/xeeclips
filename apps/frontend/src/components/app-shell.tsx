@@ -3,15 +3,15 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { History, Pencil, Plus, Settings } from 'lucide-react';
+import { History, ScanLine, Plus, Settings } from 'lucide-react';
 import { BrandMark } from '@/components/brand';
 import { MobileNav } from '@/components/mobile-nav';
 import { cn } from '@/lib/utils';
 
 const links = [
   { label: 'Create', href: '/', icon: Plus },
+  { label: 'Quick Reframe', href: '/quick-reframe', icon: ScanLine },
   { label: 'History', href: '/history', icon: History },
-  { label: 'Edit', href: '/edit', icon: Pencil },
   { label: 'Settings', href: '/settings', icon: Settings }
 ];
 
@@ -24,6 +24,8 @@ export function AppShell({ children }: { children: ReactNode; title?: string; ba
         <Link href='/' aria-label='XeeClip Create' className='flex shrink-0 items-center gap-2.5 rounded-xl font-display text-base font-extrabold tracking-tight'>
           <BrandMark className='h-9 w-9 rounded-xl' />XeeClip
         </Link>
+        <Link href='/quick-reframe' aria-current={pathname.startsWith('/quick-reframe')?'page':undefined}
+          className={cn('inline-flex min-h-11 items-center gap-2 rounded-xl px-3 text-xs font-semibold md:hidden',pathname.startsWith('/quick-reframe')?'bg-primary/15 text-primary-soft':'bg-tint text-soft')}><ScanLine size={16}/>Quick Reframe</Link>
         <nav aria-label='Main navigation' className='hidden items-center gap-1 md:flex'>
           {links.map(({ label, href, icon: Icon }) => {
             const active = href === '/' ? pathname === '/' || pathname.startsWith('/create') : pathname.startsWith(href);

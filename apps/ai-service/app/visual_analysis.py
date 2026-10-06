@@ -210,7 +210,7 @@ class VisualRuntime:
             self.fail("faceLandmarker", error)
         return self.face_landmarker
 
-    def load_ocr(self, config: VisualConfig) -> Any | None:
+    def load_ocr(self, config: VisualConfig, cpu_threads: int | None = None) -> Any | None:
         if not config.ocr_enabled or self.ocr is not None or "ocr" in self.failures:
             return self.ocr
         try:
@@ -228,6 +228,7 @@ class VisualRuntime:
                     # PaddleOCR 3.7 defaults CPU inference to oneDNN; Paddle 3.3.1's
                     # PIR executor cannot convert an Array<Double> attribute there.
                     enable_mkldnn=False,
+                    **({'cpu_threads': cpu_threads} if cpu_threads is not None else {}),
                 )
             except (TypeError, ValueError):
                 raise

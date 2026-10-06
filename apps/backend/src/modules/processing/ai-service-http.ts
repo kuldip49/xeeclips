@@ -11,7 +11,7 @@ import { request as httpsRequest } from 'node:https';
 
 export type AiServiceResponse = { ok: boolean; status: number; text(): Promise<string>; json(): Promise<unknown> };
 
-export function postAiServiceJson(url: string, body: unknown, timeoutMs: number): Promise<AiServiceResponse> {
+export function postAiServiceJson(url: string, body: unknown, timeoutMs: number, signal?: AbortSignal): Promise<AiServiceResponse> {
   const target = new URL(url);
   const payload = Buffer.from(JSON.stringify(body));
   const send = target.protocol === 'https:' ? httpsRequest : httpRequest;
@@ -24,7 +24,7 @@ export function postAiServiceJson(url: string, body: unknown, timeoutMs: number)
       request.destroy(error);
       fail(error);
     }, timeoutMs);
-    const request = send(target, { method: 'POST',
+    const request = send(target, { method: 'POST', signal,
       headers: { 'content-type': 'application/json', 'content-length': payload.length } },
     (response: IncomingMessage) => {
       const chunks: Buffer[] = [];

@@ -1,8 +1,14 @@
 # Project State
 
-Last updated: 2026-09-28
+Last updated: 2026-10-07
 
 ## Milestones
+
+- Quick Reframe AI: standalone `/quick-reframe`, independent queue, canonical assets/plans,
+  local OCR/Whisper, crop/cleanup, optional consented hooks, mobile tools, preview/export and History.
+  Cloudflare frontend and laptop backend deployed. Real authorized Instagram import/export, duration
+  limits, audio/captions, History restart/deletion and public Chrome playback passed.
+  Acceptance details and limits: `docs/quick-reframe.md`.
 
 - Milestone 1: complete
 - Milestone 2: complete

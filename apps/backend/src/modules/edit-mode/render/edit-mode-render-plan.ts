@@ -64,6 +64,8 @@ export type PlanElement = {
   properties: unknown;
 };
 export type PlanInput = {
+  /** A bounded target for a source-preserving tool's preview/export. Default editor sizing is unchanged. */
+  canvasOverride?: { width: number; height: number };
   project: { id: string; revision: number; settings: unknown };
   assets: PlanAsset[];
   elements: PlanElement[];
@@ -116,7 +118,7 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
       'The timeline has no playable video segment to export.');
   }
 
-  const canvas = resolveCanvas(style.aspectRatio, sourceWidth, sourceHeight);
+  const canvas = input.canvasOverride ?? resolveCanvas(style.aspectRatio, sourceWidth, sourceHeight);
   const cached = analysisFramesFromCache(source.analysis);
   const transcript = wordsFromCache(source.transcript);
   if (!cached.frames.length) {

@@ -118,12 +118,13 @@ export type MediaProbeResult = {
  * file has a usable video/audio stream is a business decision the caller makes from the returned
  * flags, not something this function decides.
  */
-export async function probeMedia(filePath: string): Promise<MediaProbeResult> {
+export async function probeMedia(filePath: string, options?: { timeoutMs?: number; localOnly?: boolean }): Promise<MediaProbeResult> {
   let stdout: string;
   try {
     ({ stdout } = await execFileAsync('ffprobe', [
-      '-v', 'error', '-show_streams', '-show_format', '-of', 'json', filePath
-    ], { maxBuffer: 10 * 1024 * 1024 }));
+      '-v', 'error', ...(options?.localOnly ? ['-protocol_whitelist', 'file,pipe', '-format_whitelist', 'mov,matroska,webm'] : []),
+      '-show_streams', '-show_format', '-of', 'json', filePath
+    ], { maxBuffer: 10 * 1024 * 1024, timeout: options?.timeoutMs }));
   } catch (error) {
     throw new MediaProcessingError('INVALID_MEDIA_FILE', error);
   }

@@ -13,6 +13,8 @@ COPY packages/shared packages/shared
 
 WORKDIR /app/apps/frontend
 
+RUN npm --prefix /app/packages/shared run build
+
 EXPOSE 3000
 
 CMD ["npm", "run", "dev"]

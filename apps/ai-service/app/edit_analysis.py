@@ -258,7 +258,7 @@ def ocr_candidates(sampled: list[dict[str, Any]], boundaries: list[float]):
 
 
 def analyze_edit_window(video_path: Path, fps: float = 4.0, max_frames: int = 480,
-                        config: VisualConfig | None = None) -> dict[str, Any]:
+                        config: VisualConfig | None = None, run_ocr: bool = True) -> dict[str, Any]:
     started = perf_counter()
     config = config or VisualConfig()
     capture = cv2.VideoCapture(str(video_path))
@@ -346,7 +346,7 @@ def analyze_edit_window(video_path: Path, fps: float = 4.0, max_frames: int = 48
         item["ocr_lines"] = []
     ocr_lines: list[str] = []
     ocr = None
-    for item, shot_frames in ocr_candidates(sampled, boundaries):
+    for item, shot_frames in (ocr_candidates(sampled, boundaries) if run_ocr else []):
         ocr = ocr or RUNTIME.load_ocr(config)
         if ocr is None:
             break

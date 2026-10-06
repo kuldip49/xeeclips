@@ -28,6 +28,7 @@ COPY packages/shared packages/shared
 WORKDIR /app/apps/backend
 
 RUN npm run prisma:generate
+RUN npm --prefix /app/packages/shared run build
 RUN npm run build
 
 # In-house, procedurally generated background-music beds: the fallback when the

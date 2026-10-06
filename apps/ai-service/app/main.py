@@ -127,6 +127,7 @@ app = FastAPI(
 class TranscriptionRequest(BaseModel):
     bucket: str = Field(min_length=1)
     object_key: str = Field(min_length=1)
+    task: str = Field(default='translate', pattern='^(translate|transcribe)$')
 
 
 class TranscriptSegment(BaseModel):
@@ -288,7 +289,7 @@ def _transcribe(request: TranscriptionRequest) -> TranscriptionResponse:
             if chunking is None:
                 raw_segments, info = whisper_model.transcribe(
                     str(audio_path), beam_size=5, vad_filter=True, vad_parameters=vad_parameters,
-                    word_timestamps=True, task='translate')
+                    word_timestamps=True, task=request.task)
                 raw_items = [(0.0, segment) for segment in raw_segments]
                 language, language_probability, total_duration = info.language, info.language_probability, info.duration
             else:
@@ -301,7 +302,7 @@ def _transcribe(request: TranscriptionRequest) -> TranscriptionResponse:
                         audio = _read_pcm(wav, start, end)
                         raw_segments, info = whisper_model.transcribe(
                             audio, beam_size=5, vad_filter=True, vad_parameters=vad_parameters,
-                            word_timestamps=True, task='translate',
+                            word_timestamps=True, task=request.task,
                             # The first window decides the language; later ones keep it, and the
                             # previous window's tail keeps wording consistent across the cut.
                             language=language, initial_prompt=prompt)
@@ -407,3 +408,17 @@ def edit_analysis(request: EditAnalysisRequest) -> dict:
     except Exception as error:
         logger.exception('Edit analysis failed')
         raise HTTPException(status_code=500, detail=f'Edit analysis failed: {error}') from error
+
+
+@app.post('/quick-reframe-analysis')
+def quick_reframe_analysis(request: EditAnalysisRequest) -> dict:
+    from app.quick_reframe_analysis import analyze_quick_reframe
+    try:
+        with TemporaryDirectory(prefix='quick-reframe-') as directory:
+            path = Path(directory) / 'source.mp4'
+            get_storage_client().fget_object(request.bucket, request.object_key, str(path))
+            with visual_analysis_lock:
+                return analyze_quick_reframe(path)
+    except Exception as error:
+        logger.exception('Quick Reframe analysis failed')
+        raise HTTPException(status_code=500, detail='Video analysis is unavailable') from error

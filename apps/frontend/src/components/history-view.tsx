@@ -10,6 +10,7 @@ import { OfflineNotice } from '@/components/offline-notice';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { clipDuration } from '@/lib/format';
 import { isServerUnavailable } from '@/lib/use-backend-status';
+import { QuickReframeHistory } from '@/components/quick-reframe/history';
 
 let cachedHistory: HistoryClip[] | null = null;
 
@@ -110,6 +111,7 @@ export function HistoryView({ mode = 'history' }: { mode?: 'history' | 'edit' })
       }) : !error && !offline ? <div className='empty-state'><h2 className='text-lg font-semibold'>{mode === 'edit' ? 'No clips to edit yet.' : 'No clips yet.'}</h2>
         <p className='mt-2 text-sm text-muted-foreground'>{mode === 'edit' ? 'Create clips first, then return here to edit them.' : 'Create your first clips and they\'ll appear here.'}</p>
         <Link href='/' className='btn-primary mt-5 inline-flex min-h-[44px] items-center rounded-xl px-5 text-sm'>Create clips</Link></div> : null}
+    {mode==='history'&&<QuickReframeHistory />}
     <ConfirmDialog open={!!selected} title='Delete this clip?' busy={deleting}
       description='This removes the clip from your history and cannot be undone.'
       confirmLabel='Delete' busyLabel='Deleting…' onConfirm={() => void remove()} onCancel={() => setSelected(null)} />

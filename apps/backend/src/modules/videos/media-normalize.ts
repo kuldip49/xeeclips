@@ -10,15 +10,15 @@ export type NormalizedMedia = {
 };
 
 /** The checks every imported source must pass before it is stored. */
-export function validateImportedProbe(probe: MediaProbeResult, size: number, label: string) {
+export function validateImportedProbe(probe: MediaProbeResult, size: number, label: string, allowSilent=false) {
   const problems: string[] = [];
   if (!size) problems.push('empty file');
   if (!probe.hasVideo) problems.push('no video stream');
-  if (!probe.hasAudio) problems.push('no audio stream');
+  if (!probe.hasAudio && !allowSilent) problems.push('no audio stream');
   if (!probe.durationSec || probe.durationSec <= 0) problems.push('no duration');
   if (!probe.width || !probe.height || probe.width < 16 || probe.height < 16 ||
       probe.width > 8192 || probe.height > 8192) problems.push(`dimensions ${probe.width}x${probe.height}`);
-  if (!probe.videoCodec || !probe.audioCodec) problems.push('unknown codec');
+  if (!probe.videoCodec || (!probe.audioCodec && !allowSilent)) problems.push('unknown codec');
   if (!probe.formatName) problems.push('unknown container');
   if (problems.length) {
     const code = !probe.hasVideo ? 'NO_VIDEO_FORMAT' : !probe.hasAudio ? 'NO_AUDIO_FORMAT' : 'MEDIA_INVALID';
@@ -33,44 +33,47 @@ export function validateImportedProbe(probe: MediaProbeResult, size: number, lab
  * downstream can tell the source came from YouTube.
  */
 export async function normalizeImportedMedia(inputPath: string, outputDir: string,
-  signal: AbortSignal): Promise<NormalizedMedia> {
-  const inputProbe = await probeMedia(inputPath).catch(() => {
+  signal: AbortSignal, options?: { allowSilent?: boolean; localOnly?: boolean; timeoutMs?: number }): Promise<NormalizedMedia> {
+  const inputProbe = await probeMedia(inputPath, options).catch(() => {
     throw importFailure('MEDIA_INVALID', 'ffprobe could not read the retrieved file');
   });
-  validateImportedProbe(inputProbe, (await stat(inputPath)).size, 'retrieved');
+  validateImportedProbe(inputProbe, (await stat(inputPath)).size, 'retrieved', options?.allowSilent);
   const videoOk = inputProbe.videoCodec === 'h264';
-  const audioOk = inputProbe.audioCodec === 'aac';
+  const audioOk = inputProbe.audioCodec === 'aac' || (!inputProbe.hasAudio && options?.allowSilent);
   const containerOk = /(^|,)mp4(,|$)/.test(inputProbe.formatName ?? '') || /mov,mp4/.test(inputProbe.formatName ?? '');
   if (videoOk && audioOk && containerOk) {
     return { filePath: inputPath, size: (await stat(inputPath)).size, probe: inputProbe, action: 'none' };
   }
   const outputPath = join(outputDir, 'canonical.mp4');
-  await runFfmpeg(['-hide_banner', '-v', 'error', '-y', '-i', inputPath,
-    '-map', '0:v:0', '-map', '0:a:0', '-sn', '-dn',
+  await runFfmpeg(['-hide_banner', '-v', 'error', '-y', ...(options?.localOnly ? ['-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm'] : []), '-i', inputPath,
+    '-map', '0:v:0', '-map', options?.allowSilent ? '0:a:0?' : '0:a:0', '-sn', '-dn',
     ...(videoOk ? ['-c:v', 'copy'] : ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p']),
     ...(audioOk ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '192k']),
-    '-movflags', '+faststart', outputPath], signal);
+    '-movflags', '+faststart', outputPath], signal, options?.timeoutMs);
   const size = (await stat(outputPath)).size;
-  const probe = await probeMedia(outputPath).catch(() => {
+  const probe = await probeMedia(outputPath, options).catch(() => {
     throw importFailure('MEDIA_INVALID', 'ffprobe could not read the normalized file');
   });
-  validateImportedProbe(probe, size, 'normalized');
+  validateImportedProbe(probe, size, 'normalized', options?.allowSilent);
   // Normalization must never shorten the source.
   if (inputProbe.durationSec && probe.durationSec && probe.durationSec < inputProbe.durationSec - 2)
     throw importFailure('MEDIA_INVALID', `normalized ${probe.durationSec}s < retrieved ${inputProbe.durationSec}s`);
   return { filePath: outputPath, size, probe, action: videoOk && audioOk ? 'remux' : 'transcode' };
 }
 
-function runFfmpeg(args: string[], signal: AbortSignal) {
+function runFfmpeg(args: string[], signal: AbortSignal, timeoutMs?: number) {
   return new Promise<void>((resolve, reject) => {
     const child = spawn('ffmpeg', args, { shell: false, windowsHide: true, stdio: ['ignore', 'ignore', 'pipe'] });
+    const timer=timeoutMs ? setTimeout(()=>child.kill('SIGKILL'),timeoutMs) : null;
     let stderr = '';
     const onAbort = () => child.kill('SIGKILL');
     if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true });
     child.stderr.on('data', (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-4000); });
     child.on('error', (error) => { signal.removeEventListener('abort', onAbort);
+      if(timer)clearTimeout(timer);
       reject(importFailure('MEDIA_INVALID', `ffmpeg failed to start: ${error.message}`)); });
     child.on('close', (code) => {
+      if(timer)clearTimeout(timer);
       signal.removeEventListener('abort', onAbort);
       if (signal.aborted) reject(signal.reason instanceof ImportError ? signal.reason
         : new ImportError('IMPORT_CANCELLED', 'Import cancelled.'));

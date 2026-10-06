@@ -540,12 +540,34 @@ model EditProject {
   assets          EditAsset[]
   elements        EditElement[]
   history         EditHistory[]
+  quickReframe    QuickReframe?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 
   @@index([sourceProjectId])
   @@index([originalVideoId])
   @@index([updatedAt])
+}
+
+/// Independent orchestration around the existing canonical editor and assets.
+model QuickReframe {
+  id String @id @default(uuid())
+  editProjectId String @unique
+  editProject EditProject @relation(fields: [editProjectId], references: [id], onDelete: Cascade)
+  status String @default("INPUT")
+  progress Int @default(0)
+  message String @default("Upload a video")
+  error String?
+  operationId String?
+  analysis Json?
+  plan Json?
+  hooks Json @default("[]")
+  undo Json @default("[]")
+  redo Json @default("[]")
+  externalAiAuthorized Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([createdAt])
 }
 
 model EditAsset {

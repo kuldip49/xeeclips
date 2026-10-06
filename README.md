@@ -5,6 +5,10 @@ Windows/Cloudflare deployment procedure: [docs/production-deployment.md](docs/pr
 
 Personal AI-powered short-form content assistant with a provider-neutral multi-model clip pipeline.
 
+Quick Reframe AI is the independent single-video tool at `/quick-reframe` (maximum 180 seconds),
+with local analysis, cropping, localized cleanup, captions, preview/export and History.
+Architecture, acceptance results and limits: [docs/quick-reframe.md](docs/quick-reframe.md).
+
 - Next.js frontend with landing, dashboard, and project detail pages
 - NestJS backend API with health, project, and video modules
 - FastAPI AI service with a health check

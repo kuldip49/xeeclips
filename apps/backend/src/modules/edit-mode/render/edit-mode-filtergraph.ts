@@ -17,6 +17,10 @@ import { atempoChain, overlayTransformFilter,
 import { zoomAnchorExpression, zoomEnvelopeExpression } from './edit-mode-zoom';
 
 export type GraphInput = {
+  /** Trusted, validated source-local preparation (Quick Reframe masks). Absent for existing editors. */
+  sourcePreparation?: { graph: string[]; videoLabel: string };
+  /** Keep the source audio level and ending untouched in a single-video cleanup. */
+  preserveSourceAudio?: boolean;
   plan: RenderPlan;
   sourcePath: string;
   /** elementId -> local file for every image overlay. */
@@ -68,6 +72,8 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
   const { width, height, fps } = plan.canvas;
   const graph: string[] = [];
   const args: string[] = ['-v', 'error', '-y', '-i', input.sourcePath];
+  if (input.sourcePreparation) graph.push(...input.sourcePreparation.graph);
+  const sourceVideo = input.sourcePreparation?.videoLabel ?? '0:v';
 
   // --- Extra inputs ---------------------------------------------------------
   const overlayInput = new Map<string, number>();
@@ -106,7 +112,7 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
   const sourceAudible = segments.some((segment) => !segment.sourceMuted && segment.sourceVolume > 0);
   const withAudio = plan.hasSourceAudio && sourceAudible;
   if (n > 1) {
-    graph.push(`[0:v]split=${n}${segments.map((_, i) => `[vs${i}]`).join('')}`);
+    graph.push(`[${sourceVideo}]split=${n}${segments.map((_, i) => `[vs${i}]`).join('')}`);
     if (withAudio) graph.push(`[0:a]asplit=${n}${segments.map((_, i) => `[as${i}]`).join('')}`);
   }
   segments.forEach((segment, i) => {
@@ -124,7 +130,7 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
     // composes in, and the order that keeps crop/rotation/pad black genuinely
     // black. See edit-mode-color-filter.ts for the full rationale.
     const color = colorAdjustmentFilter(segment.color);
-    graph.push(`[${n > 1 ? `vs${i}` : '0:v'}]trim=start=${seconds(segment.sourceStart)}:` +
+    graph.push(`[${n > 1 ? `vs${i}` : sourceVideo}]trim=start=${seconds(segment.sourceStart)}:` +
       `end=${seconds(segment.sourceEnd)},setpts=${retime}` +
       `${color ? `,${color}` : ''}` +
       `${gradeBeforeGeometry ? `,${plan.grading.filter}` : ''}` +
@@ -325,7 +331,8 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
     graph.push(mixed);
     // A short tail fade stops the export ending on a click.
     const endFade = Math.min(0.12, plan.durationSec / 4);
-    graph.push('[amixed]alimiter=level_in=1:level_out=1:limit=0.95:attack=5:release=50,' +
+    if (input.preserveSourceAudio) graph.push('[amixed]anull[aout]');
+    else graph.push('[amixed]alimiter=level_in=1:level_out=1:limit=0.95:attack=5:release=50,' +
       `atrim=start=0:end=${seconds(plan.durationSec)},asetpts=PTS-STARTPTS,` +
       `afade=t=out:st=${seconds(Math.max(0, plan.durationSec - endFade))}:` +
       `d=${seconds(endFade)},` +

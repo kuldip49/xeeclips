@@ -1,0 +1,23 @@
+/** Versioned, normalized Quick Reframe editing contract. Source time is never remapped. */
+export type ReframeBox = { x: number; y: number; w: number; h: number };
+export type ReframeRegion = ReframeBox & { id: string; start: number; end: number;
+  confidence: number; text: string; kind: 'DECORATIVE' | 'CAPTION' | 'ATTRIBUTION' | 'INFORMATION' | 'UNKNOWN' };
+export type ReframeAnalysis = { regions: ReframeRegion[];
+  frames: { t: number; faces: ReframeBox[]; persons: ReframeBox[]; information: ReframeBox[] }[];
+  boundaries: number[]; subtitleState: 'EXISTING_READABLE' | 'MISSING' | 'PARTIAL_OR_UNREADABLE';
+  warnings: string[]; appearance?: { brightness: number; contrast: number };
+  bars: { top: number; bottom: number; left: number; right: number } };
+export type ReframePlan = { version: 1; aspect: 'SOURCE' | '9:16' | '1:1' | '16:9' | 'CUSTOM';
+  crop: ReframeBox; framing: 'CROP' | 'FIT';
+  tracking?: { t: number; x: number; y: number }[];
+  cleanup: (ReframeBox & { regionId: string; start: number; end: number; method: 'BLUR' | 'COVER'; intensity: number; authorized: boolean; ownedBranding?: boolean })[];
+  hook: { enabled: boolean; text: string; y: number };
+  captions: { enabled: boolean; replaceExisting: boolean; font: string; size: number; y: number; color: string;
+    cues: { start: number; end: number; text: string }[] };
+  color: { exposure: number; contrast: number; saturation: number; temperature: number; sharpness: number; denoise: boolean };
+  audio: { muted: boolean; volume: number }; resolution: 720 | 1080; reasons: string[] };
+export type ReframeSession = { id: string; revision: number; name: string; duration: number;
+  width: number; height: number; sourceUrl: string | null; previewUrl: string | null; exportUrl: string | null;
+  previewRevision: number | null; exportRevision: number | null;
+  status: string; progress: number; message: string; error: string | null;
+  analysis: ReframeAnalysis | null; plan: ReframePlan | null; hooks: string[]; createdAt: string };

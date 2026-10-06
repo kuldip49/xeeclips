@@ -35,6 +35,6 @@ import { SavedStylesService } from './styles/saved-styles.service';
     EditReviewService, EditReviewStore, EditBriefService, EditBriefPlanStore, EditAgentService,
     GenerationStylingService, ReferenceAnalysisService, SavedStylesService,
     LlmProviderService, ProviderRegistry, LlmRouterService],
-  exports: [GenerationStylingService, SavedStylesService]
+  exports: [GenerationStylingService, SavedStylesService, EditModeService]
 })
 export class EditModeModule {}
