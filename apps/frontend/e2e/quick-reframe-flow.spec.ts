@@ -34,7 +34,7 @@ async function uploadAndCrop(page: Page) {
   await page.waitForTimeout(1200); // let the debounced draft save land, as a user would
   await page.reload(); await expect(page.getByTestId('crop-stage')).toBeVisible();
   await expect(page.getByLabel('From left', { exact: true })).toHaveValue(/^0\.02/);
-  await page.getByTestId('crop-done').click();
+  await page.locator('[data-testid^="crop-done"]:visible').click();
   await expect(page.getByRole('heading', { name: 'How would you like to edit your video?' })).toBeVisible({ timeout: 10 * 60 * 1000 });
   return id;
 }

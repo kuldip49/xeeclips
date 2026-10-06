@@ -19,7 +19,11 @@ test('crop comes first and is usable at every requested width',async({page})=>{
     await expect(page.getByRole('heading',{name:'Quick Reframe AI'})).toBeVisible();
     await expect(page.getByRole('navigation',{name:'Quick Reframe steps'}).locator('[aria-current="step"]')).toContainText(width<640?'':'Crop');
     await expect(page.getByTestId('crop-stage')).toBeVisible();
-    await expect(page.getByTestId('crop-done')).toBeVisible();
+    await expect(page.locator('[data-testid^="crop-done"]:visible')).toHaveCount(1);
+    // The whole portrait frame is visible: the picture fits inside its stage and keeps the video's shape.
+    const stage=(await page.getByTestId('crop-stage').boundingBox())!;const holder=(await page.getByTestId('crop-stage').locator('xpath=..').boundingBox())!;
+    expect(stage.height).toBeGreaterThan(150);expect(stage.y).toBeGreaterThanOrEqual(holder.y-1);expect(stage.y+stage.height).toBeLessThanOrEqual(holder.y+holder.height+1);
+    expect(stage.x+stage.width).toBeLessThanOrEqual(holder.x+holder.width+1);expect(Math.abs(stage.width/stage.height-360/640)).toBeLessThan(.02);
     // No StyleOne or editing controls exist before the crop is confirmed.
     await expect(page.getByRole('button',{name:'Apply StyleOne'})).toHaveCount(0);
     await expect(page.getByRole('button',{name:'Export Video',exact:true})).toHaveCount(0);

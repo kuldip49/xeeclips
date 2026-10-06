@@ -39,6 +39,22 @@ export function CropStep({ session, plan, busy, onChange, onDone, onCancel, conf
   const [suggesting, setSuggesting] = useState<ReframeAspect | null>(null);
   const [note, setNote] = useState('');
   const W = session.width || 16, H = session.height || 9;
+  // The whole frame must always be visible: size the picture in pixels from the measured stage,
+  // rather than relying on percentage heights (which do not resolve inside the centred grid).
+  const frame = useRef<HTMLDivElement>(null);
+  const [room, setRoom] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const element = frame.current; if (!element) return;
+    const measure = () => { const style = getComputedStyle(element);
+      const padX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight), padY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      setRoom({ width: Math.max(0, element.clientWidth - padX), height: Math.max(0, element.clientHeight - padY) }); };
+    measure(); const observer = new ResizeObserver(measure); observer.observe(element);
+    // Phones/tablets: bring the whole picture above the docked Cancel/Done bar instead of under it.
+    if (window.innerWidth < 1024) element.scrollIntoView({ block: 'start' });
+    return () => observer.disconnect();
+  }, []);
+  const fit = (aspect: number) => { if (!room.width || !room.height) return { width: 0, height: 0 };
+    const scale = Math.min(room.width / aspect, room.height); return { width: Math.floor(scale * aspect), height: Math.floor(scale) }; };
   const ratio = shapeRatio(plan.aspect);
   const problems = useMemo(() => cropProblems(plan, session.analysis), [plan, session.analysis]);
   const src = mediaUrl(session.originalUrl);
@@ -124,9 +140,9 @@ export function CropStep({ session, plan, busy, onChange, onDone, onCancel, conf
         <button type='button' className={cn(chip(showText), 'ml-auto inline-flex items-center gap-1.5')} aria-pressed={showText}
           onClick={() => setShowText((v) => !v)}>{showText ? <EyeOff size={14} /> : <Eye size={14} />}Show detected text</button>
       </div>
-      <div className='relative mx-auto grid w-full place-items-center overflow-hidden rounded-2xl bg-black' style={{ height: 'min(62vh, 640px)' }}>
-        <div ref={stage} data-testid='crop-stage' className={cn('relative max-h-full max-w-full touch-none select-none', view === 'after' && 'hidden')}
-          style={{ aspectRatio: `${W} / ${H}`, height: W / H < 1.2 ? '100%' : undefined, width: W / H >= 1.2 ? '100%' : undefined }}
+      <div ref={frame} className='relative mx-auto grid h-[min(52vh,520px)] w-full scroll-mt-20 place-items-center overflow-hidden rounded-2xl bg-black p-3 lg:h-[clamp(320px,calc(100dvh-330px),680px)]'>
+        <div ref={stage} data-testid='crop-stage' className={cn('relative touch-none select-none', view === 'after' && 'hidden')}
+          style={fit(W / H)}
           onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
           <video ref={video} src={src} playsInline preload='metadata' className='pointer-events-none h-full w-full object-contain'
             onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
@@ -144,8 +160,7 @@ export function CropStep({ session, plan, busy, onChange, onDone, onCancel, conf
               <span data-handle={h.id} className={cn('rounded-full border-2 border-white bg-primary shadow', h.id.length === 2 ? 'h-4 w-4' : 'h-3 w-6', (h.id === 'w' || h.id === 'e') && 'h-6 w-3')} /></span>)}
           </div>
         </div>
-        {view === 'after' && <div className='relative max-h-full max-w-full overflow-hidden' data-testid='crop-result'
-          style={{ aspectRatio: String(croppedAspect), height: croppedAspect < 1.2 ? '100%' : undefined, width: croppedAspect >= 1.2 ? '100%' : undefined }}>
+        {view === 'after' && <div className='relative overflow-hidden' data-testid='crop-result' style={fit(croppedAspect)}>
           <video ref={afterVideo} src={src} muted playsInline preload='metadata' className='absolute max-w-none'
             style={{ width: pct(1 / plan.crop.w), height: pct(1 / plan.crop.h), left: pct(-plan.crop.x / plan.crop.w), top: pct(-plan.crop.y / plan.crop.h) }} />
           {masks.map((m, i) => <div key={i} aria-hidden className='pointer-events-none absolute' style={{ left: pct((m.x - plan.crop.x) / plan.crop.w), top: pct((m.y - plan.crop.y) / plan.crop.h), width: pct(m.w / plan.crop.w), height: pct(m.h / plan.crop.h),
@@ -163,6 +178,11 @@ export function CropStep({ session, plan, busy, onChange, onDone, onCancel, conf
     </div>
 
     <aside className='grid min-w-0 content-start gap-5 rounded-2xl border border-border bg-surface p-4 sm:p-5'>
+      <div className='hidden gap-2 lg:grid'>
+        <Button type='button' size='lg' className='h-12' disabled={busy || problems.length > 0} onClick={onDone} data-testid='crop-done-desktop'><Check size={16} />Done</Button>
+        <Button type='button' variant='secondary' disabled={busy} onClick={onCancel}><X size={16} />{confirmed ? 'Cancel' : 'Reset'}</Button>
+        <p className='text-center text-xs text-muted-foreground'>{plan.crop.w < 0.999 || plan.crop.h < 0.999 ? `Keeps ${Math.round(plan.crop.w * plan.crop.h * 100)}% of the frame` : 'Full frame'}</p>
+      </div>
       <div className='grid gap-2'>
         <h2 className='font-display text-sm font-semibold'>Shape</h2>
         <div className='flex flex-wrap gap-2'>{CROP_SHAPES.map((shape) => <button key={shape.id} type='button' className={chip(plan.aspect === shape.id)} aria-pressed={plan.aspect === shape.id}
@@ -183,7 +203,7 @@ export function CropStep({ session, plan, busy, onChange, onDone, onCancel, conf
       {plan.tracking?.length ? <p className='text-xs text-muted-foreground'>Subject tracking is on. The result preview shows the starting position; the confirmed video follows the subject.</p> : null}
     </aside>
 
-    <div className='sticky bottom-[calc(var(--bottom-nav-h,0px)+env(safe-area-inset-bottom)+8px)] z-20 flex gap-2 rounded-2xl border border-border bg-background/95 p-3 backdrop-blur-xl md:bottom-4 lg:col-span-2'>
+    <div className='sticky bottom-[calc(var(--bottom-nav-h,0px)+env(safe-area-inset-bottom)+8px)] z-20 flex gap-2 rounded-2xl border border-border bg-background/95 p-3 backdrop-blur-xl md:bottom-4 lg:hidden'>
       <Button type='button' variant='secondary' className='h-12 flex-1 md:flex-none' disabled={busy} onClick={onCancel}><X size={16} />{confirmed ? 'Cancel' : 'Reset'}</Button>
       <span className='hidden flex-1 items-center text-xs text-muted-foreground md:flex'>{plan.crop.w < 0.999 || plan.crop.h < 0.999 ? `Keeps ${Math.round(plan.crop.w * plan.crop.h * 100)}% of the frame` : 'Full frame'}{plan.cleanup.length ? ` · ${plan.cleanup.length} overlay cleanup${plan.cleanup.length > 1 ? 's' : ''}` : ''}</span>
       <Button type='button' className='h-12 flex-1 md:flex-none md:px-8' disabled={busy || problems.length > 0} onClick={onDone} data-testid='crop-done'><Check size={16} />Done</Button>
