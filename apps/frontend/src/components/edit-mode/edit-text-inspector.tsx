@@ -20,16 +20,16 @@ import { canHighlightWords, readCaptionWords, readTextStyle, CAPTION_STYLE_PRESE
 
 const num = (value: unknown, fallback = 0) =>
   Number.isFinite(Number(value)) ? Number(value) : fallback;
-const field = 'w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1.5 text-xs text-slate-200';
-const label = 'text-[10px] text-slate-500';
+const field = 'w-full rounded-lg border border-border bg-inset px-2 py-1.5 text-xs text-soft';
+const label = 'text-[10px] text-faint';
 
 function Section({ title, children, defaultOpen = true }: {
   title: string; children: React.ReactNode; defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
-  return <section className='rounded-xl border border-white/[.07] bg-white/[.02]'>
+  return <section className='rounded-xl border border-border bg-tint-subtle'>
     <button onClick={() => setOpen(!open)} aria-expanded={open}
-      className='flex w-full items-center justify-between px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400'>
+      className='flex w-full items-center justify-between px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground'>
       {title}<ChevronDown size={12} className={open ? 'rotate-180 transition' : 'transition'} />
     </button>
     {open && <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 px-2.5 pb-2.5'>
@@ -47,7 +47,7 @@ function Slider({ title, value, min, max, step, format, onInput, onCommit }: {
       aria-label={title}
       onChange={(event) => onInput(num(event.target.value))}
       onPointerUp={onCommit} onKeyUp={onCommit} onBlur={onCommit}
-      className='mt-1 w-full accent-cyan-300' />
+      className='mt-1 w-full accent-secondary' />
   </label>;
 }
 
@@ -64,8 +64,8 @@ function ColorField({ title, value, onInput, onCommit }: {
 function Toggle({ title, checked, onChange }: {
   title: string; checked: boolean; onChange: (checked: boolean) => void;
 }) {
-  return <label className='flex items-center gap-2 text-xs text-slate-300'>
-    <input type='checkbox' checked={checked} className='accent-cyan-300'
+  return <label className='flex items-center gap-2 text-xs text-soft'>
+    <input type='checkbox' checked={checked} className='accent-secondary'
       onChange={(event) => onChange(event.target.checked)} />{title}</label>;
 }
 
@@ -147,7 +147,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
             ? { action: 'set-caption-text', elementId: id, content: next }
             : { action: 'set-text-content', elementId: id, content: next });
         }} />
-      {caption && properties.manualEdited === true && <p className='text-[10px] text-amber-200/70'>
+      {caption && properties.manualEdited === true && <p className='text-[10px] text-warning-soft/70'>
         Edited by hand. Regenerating captions replaces this wording.</p>}
       {!caption && <div className='grid grid-cols-2 gap-1'>
         {TEXT_STYLE_PRESETS.map((preset) => <button key={preset.id} title={preset.description}
@@ -155,8 +155,8 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
             textStyleId: preset.id as TextStylePresetId })}
           className={`rounded-md border px-1.5 py-1 text-[10px] ${
             properties.textStyleId === preset.id
-              ? 'border-violet-300/50 bg-violet-500/15 text-violet-100'
-              : 'border-white/10 text-slate-300 hover:bg-white/5'}`}>{preset.label}</button>)}
+              ? 'border-primary/50 bg-primary/15 text-foreground'
+              : 'border-border text-soft hover:bg-tint'}`}>{preset.label}</button>)}
       </div>}
     </Section>
 
@@ -174,13 +174,13 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
             captionStyleId: preset.id as CaptionStylePresetId })}
           className={`rounded-md border px-1.5 py-1 text-[10px] ${
             properties.captionStyleId === preset.id
-              ? 'border-sky-300/50 bg-sky-500/15 text-sky-100'
-              : 'border-white/10 text-slate-300 hover:bg-white/5'}`}>{preset.label}</button>)}
+              ? 'border-secondary/50 bg-secondary/15 text-secondary-soft'
+              : 'border-border text-soft hover:bg-tint'}`}>{preset.label}</button>)}
       </div>
       <button onClick={() => onCommit({ action: 'apply-caption-style-to-all', elementId: id })}
-        className='flex items-center justify-center gap-1.5 rounded-lg border border-sky-300/25 py-1.5 text-[11px] font-semibold text-sky-200 hover:bg-sky-400/10'>
+        className='flex items-center justify-center gap-1.5 rounded-lg border border-secondary/25 py-1.5 text-[11px] font-semibold text-secondary-soft hover:bg-secondary/10'>
         <Sparkles size={12} />Apply this style to all {captionCount} captions</button>
-      <p className='text-[10px] leading-4 text-slate-500'>
+      <p className='text-[10px] leading-4 text-faint'>
         Style and placement only — wording, timing and manual corrections are left alone, and
         one undo puts every caption back.</p>
       <div className='grid grid-cols-3 gap-1'>
@@ -189,14 +189,14 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
           disabled={playheadSec <= selected.startTime ||
             playheadSec >= selected.startTime + selected.duration}
           title='Split this caption at the playhead'
-          className='flex items-center justify-center gap-1 rounded-md border border-white/10 py-1 text-[10px] disabled:opacity-30'>
+          className='flex items-center justify-center gap-1 rounded-md border border-border py-1 text-[10px] disabled:opacity-30'>
           <Scissors size={10} />Split</button>
         <button onClick={() => onCommit({ action: 'merge-caption', elementId: id,
           direction: 'PREVIOUS' })}
-          className='rounded-md border border-white/10 py-1 text-[10px]'>Merge ←</button>
+          className='rounded-md border border-border py-1 text-[10px]'>Merge ←</button>
         <button onClick={() => onCommit({ action: 'merge-caption', elementId: id,
           direction: 'NEXT' })}
-          className='rounded-md border border-white/10 py-1 text-[10px]'>Merge →</button>
+          className='rounded-md border border-border py-1 text-[10px]'>Merge →</button>
       </div>
       <Toggle title='Highlight the active word' checked={style.activeWord.enabled}
         onChange={(enabled) => {
@@ -209,7 +209,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
         onInput={(color) => patch({ activeWord: { ...style.activeWord, color } })}
         onCommit={commitActiveWord} />}
       {style.activeWord.enabled && !canHighlightWords(properties) &&
-        <p className='text-[10px] leading-4 text-amber-200/70'>
+        <p className='text-[10px] leading-4 text-warning-soft/70'>
           {words.length === 0
             ? 'This caption has no word timings, so it renders as a normal caption — word-level animation is never faked.'
             : 'The wording no longer matches the stored word timings, so this caption renders without the highlight.'}
@@ -246,7 +246,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
       </div>
       <Slider title='Size' value={style.fontSize} min={TEXT_BOUNDS.minFontSize}
         max={150} step={1} onInput={(value) => patch({ fontSize: value })} onCommit={commitSize} />
-      <p className='text-[10px] leading-4 text-slate-600'>
+      <p className='text-[10px] leading-4 text-faint'>
         ASS carries one bold flag, so 600 and above export bold and below export regular.</p>
     </Section>
 
@@ -263,8 +263,8 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
           <button key={align} onClick={() => { patch({ textAlign: align });
             onCommit({ action: 'set-text-alignment', elementId: id, textAlign: align }); }}
             className={`rounded-md border py-1 text-[10px] capitalize ${
-              style.textAlign === align ? 'border-cyan-300/50 bg-cyan-500/15 text-cyan-100'
-                : 'border-white/10 text-slate-300'}`}>{align}</button>)}
+              style.textAlign === align ? 'border-secondary/50 bg-secondary/15 text-secondary-soft'
+                : 'border-border text-soft'}`}>{align}</button>)}
       </div>
     </Section>
 
@@ -279,7 +279,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
       <Slider title='Width' value={style.stroke.width} min={0} max={TEXT_BOUNDS.maxStrokeWidth}
         step={0.5} onInput={(width) => patch({ stroke: { ...style.stroke, width } })}
         onCommit={commitStroke} />
-      {strokeSuppressed && <p className='text-[10px] leading-4 text-amber-200/70'>
+      {strokeSuppressed && <p className='text-[10px] leading-4 text-warning-soft/70'>
         A background plate and a stroke cannot both be drawn in the export, so the plate wins.
         The preview shows the same choice.</p>}
     </Section>
@@ -312,7 +312,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
             onBlur={commitShadow} />
         </label>)}
       </div>
-      <p className='text-[10px] leading-4 text-slate-600'>
+      <p className='text-[10px] leading-4 text-faint'>
         ASS has no independent shadow blur; the export softens the border and shadow together,
         which is the closest visual match.</p>
     </Section>
@@ -341,7 +341,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
         onInput={(radius) => patch({ background: { ...style.background, radius } })}
         onCommit={commitBackground} />
       {style.background.enabled && style.background.radius > 0 &&
-        <p className='text-[10px] leading-4 text-amber-200/70'>
+        <p className='text-[10px] leading-4 text-warning-soft/70'>
           Rounded plates render square in the export — ASS has no corner radius.</p>}
     </Section>
 
@@ -353,7 +353,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
         max={TEXT_BOUNDS.maxLineSpacing} step={0.05}
         format={(value) => `${value.toFixed(2)}×`}
         onInput={(lineSpacing) => patch({ lineSpacing })} onCommit={commitSpacing} />
-      <p className='text-[10px] leading-4 text-slate-600'>
+      <p className='text-[10px] leading-4 text-faint'>
         Line spacing shapes the preview only; libass lays lines out on the font&rsquo;s own
         leading.</p>
     </Section>
@@ -397,7 +397,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
             onBlur={commitTiming} />
         </label>
       </div>
-      <p className='text-[10px] text-slate-500'>
+      <p className='text-[10px] text-faint'>
         Ends at {(selected.startTime + selected.duration).toFixed(2)}s of
         {' '}{timelineDurationSec.toFixed(2)}s</p>
     </Section>
@@ -407,7 +407,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
         {([['Back', -1000], ['−', -1], ['+', 1], ['Front', 1000]] as const).map(([text, delta]) =>
           <button key={text} onClick={() => onCommit({ action: 'set-element-z-index',
             elementId: id, zIndex: Math.max(0, num(properties.zIndex) + delta) })}
-            className='rounded border border-white/10 py-1 text-[10px]'>
+            className='rounded border border-border py-1 text-[10px]'>
             <Layers size={10} className='mx-auto' />{text}</button>)}
       </div>
       <p className={label}>zIndex {num(properties.zIndex)}</p>

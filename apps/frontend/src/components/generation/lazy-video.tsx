@@ -50,7 +50,7 @@ export function LazyVideo({ src, poster, label, vertical, className }: {
       ? <video ref={video} key={src} className={cn('mx-auto block w-full rounded-xl bg-black object-contain', shape)}
         controls playsInline preload={poster ? 'none' : 'metadata'} poster={poster} src={src} aria-label={label} />
       : <button type='button' onClick={() => { setNear(true); setAutoPlay(true); }} aria-label={label}
-        className={cn('group relative grid w-full place-items-center overflow-hidden rounded-xl bg-gradient-to-br from-[#141a2b] to-black', shape)}>
+        className={cn('group relative grid w-full place-items-center overflow-hidden rounded-xl bg-gradient-to-br from-surface to-black', shape)}>
         {poster ? <img src={poster} alt='' loading='lazy' decoding='async' className='absolute inset-0 h-full w-full object-contain' /> : null}
         <span className='relative grid h-14 w-14 place-items-center rounded-full bg-white/90 text-black shadow-xl'><Play size={24} className='ml-1' aria-hidden /></span>
       </button>}

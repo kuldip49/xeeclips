@@ -74,9 +74,9 @@ type EdgeHandler = (event: React.PointerEvent, element: EditElement, edge: TrimE
  * their own lane layer beside the blocks.
  */
 const TimelineBlock = memo(function TimelineBlock({ element, pxPerSecond, track, selected,
-  primary, translucent, tool, onSelect, onEdge }: {
+  primary, tool, onSelect, onEdge }: {
   element: EditElement; pxPerSecond: number; track: TimelineTrack; selected: boolean;
-  primary: boolean; translucent: boolean; tool: TimelineTool;
+  primary: boolean; tool: TimelineTool;
   onSelect: BlockPointer; onEdge: EdgeHandler;
 }) {
   const widthPx = Math.max(2, element.duration * pxPerSecond);
@@ -98,18 +98,18 @@ const TimelineBlock = memo(function TimelineBlock({ element, pxPerSecond, track,
     title={caption ? undefined : `${track.label} · ${clock(element.duration)}`}
     onPointerDown={(event) => onSelect(event, element)}
     className={`group absolute inset-y-1 flex items-center overflow-hidden rounded-md border px-1.5 text-[10px] font-medium ${cursor} ${selected ? 'touch-none ' : ''}${
-      selected ? `border-white text-white ring-2 ring-cyan-300/50 ${primary ? 'bg-white/25' : 'bg-white/15'}`
-        : translucent ? `${track.color} bg-transparent` : track.color
+      selected ? `border-white text-foreground ring-2 ring-secondary/50 ${primary ? 'bg-white/25' : 'bg-tint-active'}`
+        : track.color
     }${isHidden(element) ? ' opacity-40' : ''}`}
     style={{ left: `${element.startTime * pxPerSecond}px`, width: `${widthPx}px` }}>
     {showHandles && <span onPointerDown={(event) => onEdge(event, element, 'left')}
       aria-label='Change start' data-testid='timeline-trim-left'
-      className='absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize touch-none rounded-l-md bg-white/25 opacity-70 group-hover:bg-cyan-300/70 group-hover:opacity-100 coarse:w-5 coarse:bg-white/35' />}
+      className='absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize touch-none rounded-l-md bg-white/25 opacity-70 group-hover:bg-secondary/70 group-hover:opacity-100 coarse:w-5 coarse:bg-white/35' />}
     {locked && widthPx >= 22 && <Lock size={9} className='pointer-events-none mr-1 shrink-0 opacity-70' />}
     {widthPx >= 30 && <span className='pointer-events-none w-full truncate text-center drop-shadow-[0_1px_2px_rgba(0,0,0,.9)]'>{label}</span>}
     {showHandles && <span onPointerDown={(event) => onEdge(event, element, 'right')}
       aria-label='Change end' data-testid='timeline-trim-right'
-      className='absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize touch-none rounded-r-md bg-white/25 opacity-70 group-hover:bg-cyan-300/70 group-hover:opacity-100 coarse:w-5 coarse:bg-white/35' />}
+      className='absolute inset-y-0 right-0 z-10 w-2 cursor-ew-resize touch-none rounded-r-md bg-white/25 opacity-70 group-hover:bg-secondary/70 group-hover:opacity-100 coarse:w-5 coarse:bg-white/35' />}
   </div>;
 });
 
@@ -119,13 +119,13 @@ const Playhead = memo(function Playhead({ seconds, pxPerSecond, heightPx }: {
   seconds: number; pxPerSecond: number; heightPx: number;
 }) {
   return <div data-testid='timeline-playhead' aria-hidden
-    className='pointer-events-none absolute top-0 z-20 w-px bg-cyan-300 shadow-[0_0_8px_rgba(103,232,249,.8)]'
+    className='pointer-events-none absolute top-0 z-20 w-px bg-secondary shadow-[0_0_8px_rgb(var(--secondary)/0.8)]'
     style={{ height: `${heightPx}px`, transform: `translateX(${Math.max(0, seconds) * pxPerSecond}px)` }} />;
 });
 
 const Ruler = memo(function Ruler({ ticks, pxPerSecond }: { ticks: number[]; pxPerSecond: number }) {
   return <>{ticks.map((tick) => <span key={tick}
-    className='absolute bottom-0 top-0 border-l border-white/10 pl-1 text-[9px] leading-6 tabular-nums text-slate-500'
+    className='absolute bottom-0 top-0 border-l border-border pl-1 text-[9px] leading-6 tabular-nums text-faint'
     style={{ left: `${tick * pxPerSecond}px` }}>{clock(tick)}</span>)}</>;
 });
 
@@ -561,7 +561,7 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
     const items = trackElements(elements, track);
     const mounted = windowElements(items, viewport, [selectedElementId, ...selectionSet]);
     const video = track.id === 'VIDEO';
-    return <div key={track.id} className='relative border-b border-white/[.04] last:border-0'
+    return <div key={track.id} className='relative border-b border-border last:border-0'
       style={{ height: `${track.heightPx}px` }} data-testid={`timeline-track-${track.id}`}
       data-mounted={mounted.length} data-total={items.length}>
       {video && <div className='pointer-events-none absolute inset-x-0 overflow-hidden'
@@ -590,7 +590,7 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
               trimStart: element.trimStart,
               speed: Number(element.properties.speed ?? 1) || 1 }} /></div>)}
       {mounted.map((element) => <TimelineBlock key={element.id} element={element}
-        pxPerSecond={viewport.pxPerSecond} track={track} tool={tool} translucent={video}
+        pxPerSecond={viewport.pxPerSecond} track={track} tool={tool}
         selected={element.id === selectedElementId || selectionSet.has(element.id)}
         primary={element.id === selectedElementId}
         onSelect={pressBlock} onEdge={beginEdge} />)}
@@ -628,25 +628,25 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
       onZoomIn={() => zoomBy(ZOOM_FACTOR)} onZoomOut={() => zoomBy(1 / ZOOM_FACTOR)}
       onFit={zoomToFit} onUndo={onUndo} onRedo={onRedo} onToggleCollapsed={onToggleCollapsed} />
 
-    {selectedRange && <div className='flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-amber-300/25 bg-amber-300/5 px-3 py-1 text-[11px] text-amber-200'>
+    {selectedRange && <div className='flex shrink-0 flex-wrap items-center gap-2 rounded-lg border border-warning/25 bg-warning/5 px-3 py-1 text-[11px] text-warning-soft'>
       <span className='font-semibold uppercase tracking-[.12em]'>Range</span>
       <span className='tabular-nums'>{stamp(selectedRange.startSec)} – {stamp(selectedRange.endSec)}</span>
-      <span className='text-amber-200/60'>({stamp(selectedRange.endSec - selectedRange.startSec)})</span>
-      <span className='text-amber-200/60'>· the AI editor acts on this range</span>
+      <span className='text-warning-soft/60'>({stamp(selectedRange.endSec - selectedRange.startSec)})</span>
+      <span className='text-warning-soft/60'>· the AI editor acts on this range</span>
       <button type='button' onClick={() => onSelectRange(null)} aria-label='Clear the selected range'
-        className='ml-auto flex items-center gap-1 rounded-md border border-amber-300/25 px-2 py-0.5 font-medium hover:bg-amber-300/10'>
+        className='ml-auto flex items-center gap-1 rounded-md border border-warning/25 px-2 py-0.5 font-medium hover:bg-warning/10'>
         <X size={11} />Clear</button>
     </div>}
 
     {!collapsed && <div data-testid='timeline-surface'
-      className='flex min-h-0 flex-1 overflow-hidden rounded-xl border border-white/[.08] bg-[#080b13]'>
+      className='flex min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-background'>
       {/* The track headers are a fixed column beside the lanes rather than
           labels floating over them, so a dense caption track never has its name
           sitting on top of its own blocks. It follows the lanes' vertical
           scroll through a transform written straight to the DOM. */}
-      <div className='shrink-0 overflow-hidden border-r border-white/[.07] bg-[#0a0e18]'
+      <div className='shrink-0 overflow-hidden border-r border-border bg-sunken'
         style={{ width: `${compact ? COMPACT_HEADER_COLUMN_PX : HEADER_COLUMN_PX}px` }}>
-        <div className='border-b border-white/[.06]' style={{ height: `${RULER_HEIGHT_PX}px` }} />
+        <div className='border-b border-border' style={{ height: `${RULER_HEIGHT_PX}px` }} />
         <div ref={headerRef} className='will-change-transform'>{headerNodes}</div>
       </div>
 
@@ -654,30 +654,30 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
         className='relative min-h-0 flex-1 overflow-auto'>
         <div className='relative' style={{ width: `${Math.max(viewport.contentWidthPx, viewportWidth)}px` }}>
           <div onPointerDown={beginScrub} data-testid='timeline-ruler'
-            className='sticky top-0 z-30 cursor-ew-resize touch-none border-b border-white/[.06] bg-[#080b13]'
+            className='sticky top-0 z-30 cursor-ew-resize touch-none border-b border-border bg-background'
             style={{ height: `${RULER_HEIGHT_PX}px` }}>
             <Ruler ticks={ticks} pxPerSecond={viewport.pxPerSecond} />
-            <div aria-hidden className='pointer-events-none absolute z-10 h-0 w-0 border-x-[5px] border-t-[7px] border-x-transparent border-t-cyan-300'
+            <div aria-hidden className='pointer-events-none absolute z-10 h-0 w-0 border-x-[5px] border-t-[7px] border-x-transparent border-t-secondary'
               style={{ bottom: 0, transform: `translateX(${Math.max(0, currentPlayheadSec) * viewport.pxPerSecond - 5}px)` }} />
           </div>
           <div className='relative' style={{ height: `${lanesHeight}px` }} onPointerDown={beginRange}>
-            {selectedRange && <div aria-hidden className='pointer-events-none absolute bottom-0 top-0 z-10 border-x border-amber-300/70 bg-amber-300/10'
+            {selectedRange && <div aria-hidden className='pointer-events-none absolute bottom-0 top-0 z-10 border-x border-warning/70 bg-warning/10'
               style={{ left: `${selectedRange.startSec * viewport.pxPerSecond}px`,
                 width: `${Math.max(2, (selectedRange.endSec - selectedRange.startSec) * viewport.pxPerSecond)}px` }} />}
             {laneNodes}
             {overlay.guide && <div data-testid='timeline-snap-guide' aria-hidden
-              className='pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-amber-300 shadow-[0_0_6px_rgba(252,211,77,.9)]'
+              className='pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-warning shadow-[0_0_6px_rgb(var(--warning)/0.9)]'
               style={{ transform: `translateX(${overlay.guide.atSec * viewport.pxPerSecond}px)` }} />}
             {overlay.dropSec != null && <div data-testid='timeline-drop-indicator' aria-hidden
-              className='pointer-events-none absolute bottom-0 top-0 z-30 w-0.5 bg-violet-300'
+              className='pointer-events-none absolute bottom-0 top-0 z-30 w-0.5 bg-primary'
               style={{ transform: `translateX(${overlay.dropSec * viewport.pxPerSecond}px)` }} />}
             <Playhead seconds={currentPlayheadSec} pxPerSecond={viewport.pxPerSecond}
               heightPx={lanesHeight} />
           </div>
         </div>
         {overlay.readout && <div data-testid='timeline-readout'
-          className='pointer-events-none sticky bottom-1 left-2 z-40 inline-block rounded-md border border-cyan-300/30 bg-[#0b1220]/95 px-2 py-1 text-[10px] font-medium tabular-nums text-cyan-100'>
-          {overlay.readout}{overlay.guide && <span className='ml-1 text-amber-300'>· {overlay.guide.label}</span>}
+          className='pointer-events-none sticky bottom-1 left-2 z-40 inline-block rounded-md border border-secondary/30 bg-elevated/95 px-2 py-1 text-[10px] font-medium tabular-nums text-secondary-soft'>
+          {overlay.readout}{overlay.guide && <span className='ml-1 text-warning'>· {overlay.guide.label}</span>}
         </div>}
       </div>
     </div>}

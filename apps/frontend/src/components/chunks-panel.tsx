@@ -14,7 +14,7 @@ function timestamp(seconds: number) {
 }
 
 function Metric({ label, value }: { label: string; value: string | number }) {
-  return <div><dt className='text-slate-400'>{label}</dt><dd className='mt-1 font-medium tabular-nums'>{value}</dd></div>;
+  return <div><dt className='text-muted-foreground'>{label}</dt><dd className='mt-1 font-medium tabular-nums'>{value}</dd></div>;
 }
 
 export function ChunksPanel({ video, visualAnalysisEnabled }: { video: Video; visualAnalysisEnabled: boolean }) {
@@ -54,33 +54,33 @@ export function ChunksPanel({ video, visualAnalysisEnabled }: { video: Video; vi
     return () => { cancelled = true; };
   }, [video.id, complete, analysisStage?.status, analysisStage?.progress, visualStage?.status, visualStage?.progress, attempt]);
 
-  const errorView = error && <div role='alert' className='flex flex-wrap items-center gap-2 text-sm text-red-300'><span>{error}</span><Button size='sm' variant='outline' onClick={() => setAttempt((value) => value + 1)}>Retry</Button></div>;
+  const errorView = error && <div role='alert' className='flex flex-wrap items-center gap-2 text-sm text-danger'><span>{error}</span><Button size='sm' variant='outline' onClick={() => setAttempt((value) => value + 1)}>Retry</Button></div>;
   const loadingView = complete && !chunks && !error && <div className='grid gap-2' role='status' aria-label='Loading chunks'><div className='skeleton h-12' /><div className='skeleton h-12' /></div>;
 
   return <div className='grid gap-2'>
     <WorkspaceAccordion title='Transcript chunks' summary={chunks ? `${chunks.length} chunks` : complete ? 'Loading' : 'Pending'} icon={Rows3}>
       <div className='grid gap-3 text-sm'>
-        {!complete && <p className='text-slate-400'>Chunks will appear after the build chunks stage completes.</p>}
+        {!complete && <p className='text-muted-foreground'>Chunks will appear after the build chunks stage completes.</p>}
         {loadingView}{errorView}
-        {chunks?.length === 0 && <p className='text-slate-400'>No transcript chunks available.</p>}
-        {chunks?.map((chunk) => <div key={chunk.id} className='rounded-xl bg-white/[.03] p-3'><p className='mb-2 flex flex-wrap gap-3 text-xs text-slate-400'><span>{timestamp(chunk.startTime)}–{timestamp(chunk.endTime)}</span><span>{chunk.duration.toFixed(1)} sec</span><span>{chunk.wordCount} words</span></p><p>{chunk.text}</p></div>)}
+        {chunks?.length === 0 && <p className='text-muted-foreground'>No transcript chunks available.</p>}
+        {chunks?.map((chunk) => <div key={chunk.id} className='rounded-xl bg-tint-subtle p-3'><p className='mb-2 flex flex-wrap gap-3 text-xs text-muted-foreground'><span>{timestamp(chunk.startTime)}–{timestamp(chunk.endTime)}</span><span>{chunk.duration.toFixed(1)} sec</span><span>{chunk.wordCount} words</span></p><p>{chunk.text}</p></div>)}
       </div>
     </WorkspaceAccordion>
 
     <WorkspaceAccordion title='Chunk analysis' summary={analyses.size ? `${analyses.size} analyzed` : complete ? 'Pending' : 'Waiting'} icon={BarChart3}>
       <div className='grid gap-3 text-sm'>
-        {!complete && <p className='text-slate-400'>Analysis will appear after chunks are built.</p>}{loadingView}{errorView}
-        {chunks?.map((chunk) => { const analysis = analyses.get(chunk.id); return <div key={chunk.id} className='rounded-xl bg-white/[.03] p-3'><p className='mb-3 text-xs font-semibold text-slate-300'>{timestamp(chunk.startTime)}–{timestamp(chunk.endTime)}</p>{analysis ? <dl className='grid grid-cols-2 gap-3 text-xs sm:grid-cols-4'><Metric label='Questions' value={analysis.questionCount} /><Metric label='Exclamations' value={analysis.exclamationCount} /><Metric label='Keyword density' value={`${analysis.keywordDensity.toFixed(1)}%`} /><Metric label='Avg sentence' value={`${analysis.averageSentenceLength.toFixed(1)} words`} /><Metric label='Speech rate' value={`${analysis.speechRate.toFixed(1)} wpm`} /><Metric label='Information density' value={`${analysis.informationDensity.toFixed(1)}%`} /><Metric label='Readability' value={`${analysis.readabilityScore.toFixed(1)}/100`} /></dl> : <p className='text-xs text-slate-400'>Analysis unavailable.</p>}</div>; })}
+        {!complete && <p className='text-muted-foreground'>Analysis will appear after chunks are built.</p>}{loadingView}{errorView}
+        {chunks?.map((chunk) => { const analysis = analyses.get(chunk.id); return <div key={chunk.id} className='rounded-xl bg-tint-subtle p-3'><p className='mb-3 text-xs font-semibold text-soft'>{timestamp(chunk.startTime)}–{timestamp(chunk.endTime)}</p>{analysis ? <dl className='grid grid-cols-2 gap-3 text-xs sm:grid-cols-4'><Metric label='Questions' value={analysis.questionCount} /><Metric label='Exclamations' value={analysis.exclamationCount} /><Metric label='Keyword density' value={`${analysis.keywordDensity.toFixed(1)}%`} /><Metric label='Avg sentence' value={`${analysis.averageSentenceLength.toFixed(1)} words`} /><Metric label='Speech rate' value={`${analysis.speechRate.toFixed(1)} wpm`} /><Metric label='Information density' value={`${analysis.informationDensity.toFixed(1)}%`} /><Metric label='Readability' value={`${analysis.readabilityScore.toFixed(1)}/100`} /></dl> : <p className='text-xs text-muted-foreground'>Analysis unavailable.</p>}</div>; })}
       </div>
     </WorkspaceAccordion>
 
     <WorkspaceAccordion title='Visual analysis' summary={visualResults.length ? `${visualResults.length} chunks` : visualStage?.status?.toLowerCase() || 'Pending'} icon={Clapperboard}>
       <div className='grid gap-3 text-sm'>
-        {visualStage?.status === 'SKIPPED' && <p className='text-slate-400'>Visual Intelligence skipped.</p>}
-        {visualStage?.status === 'FAILED' && <p role='alert' className='text-red-300'>Visual Intelligence failed. Transcript and chunk analyses remain available.</p>}
-        {!visualResults.length && visualAnalysisEnabled && visualStage?.status !== 'SKIPPED' && <p className='text-slate-400'>Visual analysis unavailable.</p>}
-        {visualSummary && <div className='rounded-xl border border-white/[.08] bg-[#151d2e] p-4'><h4 className='text-sm font-semibold'>Visual intelligence summary</h4><dl className='mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4'><Metric label='Scene changes' value={visualSummary.scenes} /><Metric label='Average motion' value={`${visualSummary.motion.toFixed(1)}%`} /><Metric label='Face presence' value={`${visualSummary.faceChunks}/${visualResults.length}`} /><Metric label='OCR presence' value={`${visualSummary.ocrChunks}/${visualResults.length}`} /></dl></div>}
-        {chunks?.map((chunk) => { const visual = visualAnalyses.get(chunk.id); if (!visual) return null; return <div key={chunk.id} className='rounded-xl bg-white/[.03] p-3'><p className='mb-3 text-xs font-semibold text-slate-300'>{timestamp(chunk.startTime)}–{timestamp(chunk.endTime)}</p><dl className='grid grid-cols-2 gap-3 text-xs sm:grid-cols-4'><Metric label='Shot boundaries' value={visual.shotBoundaries.length} /><Metric label='Scene changes' value={visual.sceneChangeCount} /><Metric label='Average motion' value={`${visual.averageMotion.toFixed(1)}%`} /><Metric label='Faces' value={visual.faceCount} /><Metric label='Largest face' value={`${visual.largestFaceRatio.toFixed(1)}%`} /><Metric label='Brightness' value={`${visual.brightness.toFixed(1)}%`} /><Metric label='Contrast' value={`${visual.contrast.toFixed(1)}%`} /><Metric label='Colorfulness' value={`${visual.colorfulness.toFixed(1)}%`} /><Metric label='Subtitles' value={visual.subtitleDetected ? 'Detected' : 'Not detected'} /></dl>{visual.shotBoundaries.length > 0 && <p className='mt-3 text-xs text-slate-400'>Cuts at {visual.shotBoundaries.map(timestamp).join(', ')}</p>}<p className='mt-2 whitespace-pre-wrap break-words text-xs'><span className='text-slate-400'>OCR: </span>{visual.ocrText || 'No text detected'}</p></div>; })}
+        {visualStage?.status === 'SKIPPED' && <p className='text-muted-foreground'>Visual Intelligence skipped.</p>}
+        {visualStage?.status === 'FAILED' && <p role='alert' className='text-danger'>Visual Intelligence failed. Transcript and chunk analyses remain available.</p>}
+        {!visualResults.length && visualAnalysisEnabled && visualStage?.status !== 'SKIPPED' && <p className='text-muted-foreground'>Visual analysis unavailable.</p>}
+        {visualSummary && <div className='rounded-xl border border-border bg-elevated p-4'><h4 className='text-sm font-semibold'>Visual intelligence summary</h4><dl className='mt-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4'><Metric label='Scene changes' value={visualSummary.scenes} /><Metric label='Average motion' value={`${visualSummary.motion.toFixed(1)}%`} /><Metric label='Face presence' value={`${visualSummary.faceChunks}/${visualResults.length}`} /><Metric label='OCR presence' value={`${visualSummary.ocrChunks}/${visualResults.length}`} /></dl></div>}
+        {chunks?.map((chunk) => { const visual = visualAnalyses.get(chunk.id); if (!visual) return null; return <div key={chunk.id} className='rounded-xl bg-tint-subtle p-3'><p className='mb-3 text-xs font-semibold text-soft'>{timestamp(chunk.startTime)}–{timestamp(chunk.endTime)}</p><dl className='grid grid-cols-2 gap-3 text-xs sm:grid-cols-4'><Metric label='Shot boundaries' value={visual.shotBoundaries.length} /><Metric label='Scene changes' value={visual.sceneChangeCount} /><Metric label='Average motion' value={`${visual.averageMotion.toFixed(1)}%`} /><Metric label='Faces' value={visual.faceCount} /><Metric label='Largest face' value={`${visual.largestFaceRatio.toFixed(1)}%`} /><Metric label='Brightness' value={`${visual.brightness.toFixed(1)}%`} /><Metric label='Contrast' value={`${visual.contrast.toFixed(1)}%`} /><Metric label='Colorfulness' value={`${visual.colorfulness.toFixed(1)}%`} /><Metric label='Subtitles' value={visual.subtitleDetected ? 'Detected' : 'Not detected'} /></dl>{visual.shotBoundaries.length > 0 && <p className='mt-3 text-xs text-muted-foreground'>Cuts at {visual.shotBoundaries.map(timestamp).join(', ')}</p>}<p className='mt-2 whitespace-pre-wrap break-words text-xs'><span className='text-muted-foreground'>OCR: </span>{visual.ocrText || 'No text detected'}</p></div>; })}
       </div>
     </WorkspaceAccordion>
   </div>;

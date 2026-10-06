@@ -39,16 +39,16 @@ function SaveStatus({ busy, exportPhase }: {
   const working = !!busy || (!!exportPhase && exportPhase !== 'COMPLETED' && exportPhase !== 'FAILED');
   const failed = !busy && exportPhase === 'FAILED';
   return <span role='status' className={`flex shrink-0 items-center gap-1.5 text-xs ${
-    failed ? 'text-red-300' : 'text-slate-400'}`}>
+    failed ? 'text-danger' : 'text-muted-foreground'}`}>
     {working ? <LoaderCircle size={13} className='animate-spin' />
       : failed ? <TriangleAlert size={13} />
-        : <Check size={13} className='text-emerald-400' />}
+        : <Check size={13} className='text-success' />}
     <span className='hidden sm:inline'>{label}</span>
   </span>;
 }
 
-const iconButton = 'grid h-8 w-8 place-items-center rounded-lg text-slate-300 coarse:h-10 coarse:w-10 ' +
-  'transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-30 ' +
+const iconButton = 'grid h-8 w-8 place-items-center rounded-lg text-soft coarse:h-10 coarse:w-10 ' +
+  'transition-colors hover:bg-tint-strong disabled:cursor-not-allowed disabled:opacity-30 ' +
   'disabled:hover:bg-transparent';
 
 export function EditTopBar({ projectName, revision, busy, exportPhase, canUndo, canRedo,
@@ -67,24 +67,24 @@ export function EditTopBar({ projectName, revision, busy, exportPhase, canUndo, 
   onExport: () => void;
   exportDisabled: boolean;
 }) {
-  return <header className='pt-safe shrink-0 border-b border-white/10 bg-[#0d111c]'>
+  return <header className='pt-safe shrink-0 border-b border-border bg-surface'>
     <div className='flex h-12 items-center gap-2 px-1.5 sm:gap-3 sm:px-3'>
     <Link href='/history' aria-label='Back to History'
-      className='flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-slate-300 hover:bg-white/10 max-md:h-11 max-md:w-11 max-md:justify-center max-md:rounded-full max-md:p-0'>
+      className='flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-soft hover:bg-tint-strong max-md:h-11 max-md:w-11 max-md:justify-center max-md:rounded-full max-md:p-0'>
       <ArrowLeft size={15} className='max-md:h-5 max-md:w-5' /><span className='hidden md:inline'>History</span>
     </Link>
-    <span className='hidden h-5 w-px shrink-0 bg-white/10 sm:block' />
+    <span className='hidden h-5 w-px shrink-0 bg-tint-strong sm:block' />
     <h1 className='min-w-0 flex-1 truncate text-sm font-semibold tracking-tight'>Edit clip</h1>
     <SaveStatus busy={busy} exportPhase={exportPhase} revision={revision} />
-    <span className='hidden h-5 w-px shrink-0 bg-white/10 sm:block' />
+    <span className='hidden h-5 w-px shrink-0 bg-tint-strong sm:block' />
     <div className='flex shrink-0 items-center gap-0.5'>
       <button className={iconButton} aria-label='Undo' title='Undo (Ctrl+Z)'
         disabled={!canUndo || !!busy} onClick={onUndo}><Undo2 size={16} /></button>
       <button className={iconButton} aria-label='Redo' title='Redo (Ctrl+Shift+Z)'
         disabled={!canRedo || !!busy} onClick={onRedo}><Redo2 size={16} /></button>
     </div>
-    <span className='hidden h-5 w-px shrink-0 bg-white/10 lg:block' />
-    <div className='hidden shrink-0 items-center gap-0.5 rounded-lg bg-black/30 p-0.5 lg:flex'
+    <span className='hidden h-5 w-px shrink-0 bg-tint-strong lg:block' />
+    <div className='hidden shrink-0 items-center gap-0.5 rounded-lg bg-inset p-0.5 lg:flex'
       role='group' aria-label='Aspect ratio'>
       {ASPECT_RATIOS.map((ratio) => {
         const active = ratio.id === aspectRatio;
@@ -92,12 +92,12 @@ export function EditTopBar({ projectName, revision, busy, exportPhase, canUndo, 
           title={onAspectRatio ? undefined : 'Aspect ratio is set by the applied preset.'}
           aria-pressed={active} onClick={() => onAspectRatio?.(ratio.id)}
           className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
-            active ? 'bg-white/15 text-white' : 'text-slate-400'} ${
-            onAspectRatio ? 'hover:text-white' : 'cursor-default'}`}>{ratio.label}</button>;
+            active ? 'bg-tint-active text-foreground' : 'text-muted-foreground'} ${
+            onAspectRatio ? 'hover:text-foreground' : 'cursor-default'}`}>{ratio.label}</button>;
       })}
     </div>
     <button onClick={onExport} disabled={exportDisabled}
-      className='flex shrink-0 items-center gap-1.5 rounded-lg bg-violet-500 px-3 py-1.5 text-xs font-bold text-white transition-colors hover:bg-violet-400 disabled:cursor-not-allowed disabled:opacity-40 max-md:h-10 max-md:rounded-xl max-md:px-3.5 max-md:text-sm'>
+      className='flex shrink-0 items-center gap-1.5 rounded-lg btn-primary px-3 py-1.5 text-xs font-bold text-primary-foreground transition-colors disabled:cursor-not-allowed disabled:opacity-40 max-md:h-10 max-md:rounded-xl max-md:px-3.5 max-md:text-sm'>
       <Download size={14} />Export
     </button>
     </div>

@@ -71,7 +71,7 @@ export function StylePreview({ posterUrl, sourceUrl, resolved, layout, loading }
     }
   }, [resolved, layout]);
   const frame = failed
-    ? <div className='grid h-full w-full place-items-center bg-slate-900 text-slate-500'><ImageOff size={22} aria-hidden /></div>
+    ? <div className='grid h-full w-full place-items-center bg-surface text-faint'><ImageOff size={22} aria-hidden /></div>
     : <video ref={video} src={sourceUrl} poster={posterUrl} aria-label='Your source video style preview'
       controls playsInline preload='none' onError={() => setFailed(true)}
       onTimeUpdate={(event) => { playback.current = event.currentTarget.currentTime; }}
@@ -81,7 +81,7 @@ export function StylePreview({ posterUrl, sourceUrl, resolved, layout, loading }
         transition: 'filter 120ms ease, transform 120ms ease' }} />;
   return <figure ref={figure} className='grid min-w-0 justify-items-center gap-2' aria-label='Style preview'>
     <div data-testid='style-preview' data-layout={model.layout} data-loading={loading}
-      className='relative overflow-hidden rounded-xl border border-white/10 shadow-lg'
+      className='relative overflow-hidden rounded-xl border border-border shadow-lg'
       style={{ width, height: Math.round(width * ASPECT), background: fitBg }}>
       {model.layout === 'FIT' && model.fitBackground === 'BLUR' && !failed
         ? <img src={posterUrl} alt='' aria-hidden className='absolute inset-0 h-full w-full scale-110 object-cover blur-xl brightness-75' />
@@ -103,14 +103,14 @@ export function StylePreview({ posterUrl, sourceUrl, resolved, layout, loading }
       {model.logoCorner && CORNERS[model.logoCorner]
         ? <span className={`absolute ${CORNERS[model.logoCorner]} rounded bg-white/80 px-1.5 py-0.5 text-[9px] font-bold text-slate-900`}>LOGO</span>
         : null}
-      {loading ? <div className='absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-violet-400' /> : null}
+      {loading ? <div className='absolute inset-x-0 bottom-0 h-0.5 animate-pulse bg-secondary' /> : null}
     </div>
-    <figcaption className='max-w-[270px] text-center text-[11px] leading-4 text-slate-500'>
+    <figcaption className='max-w-[270px] text-center text-[11px] leading-4 text-faint'>
       Live preview on your uploaded video — timing and tracked crop may adapt per shot.
     </figcaption>
     {model.badges.length ? <div className='flex max-w-[300px] flex-wrap justify-center gap-1'>
       {model.badges.map((badge) => <span key={badge}
-        className='rounded-full border border-white/10 px-2 py-0.5 text-[10px] text-slate-400'>{badge}</span>)}
+        className='rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground'>{badge}</span>)}
     </div> : null}
   </figure>;
 }

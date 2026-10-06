@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { ShieldCheck } from 'lucide-react';
 import type { ManualEditCommand } from '@/lib/edit-mode-api';
 import type { AgentRun, ChatApplyResult, EditAsset, EditElement, EditHistory, EditPresetApplyResult,
   EditProject, EditProjectStyle, EditTimeRange } from '@/lib/edit-mode-types';
@@ -70,27 +71,30 @@ export function EditAiContent({ project, source, selected, style, busy, selected
   const aiMode = mode ?? ownMode;
   const setAiMode = (next: AiMode) => { setOwnMode(next); onModeChange?.(next); };
   const sheet = layout === 'sheet';
-  if (consent !== 'granted') return <section className='grid content-start gap-4 rounded-2xl border border-white/10 bg-[#111827] p-4 sm:p-5'>
-    <h2 className='text-lg font-semibold'>Ask AI</h2>
-    <p className='text-sm leading-6 text-slate-300'>{ASK_AI_DISCLOSURE}</p>
-    {consent === 'declined' ? <p className='text-sm text-slate-400'>Ask AI is off. You can keep editing manually.</p>
-      : <p className='text-sm text-slate-300'>Allow Ask AI to process your prompt and relevant clip content?</p>}
+  if (consent !== 'granted') return <section data-testid='ask-ai-consent' className='panel grid content-start gap-4 p-4 shadow-card sm:p-5'>
+    <div className='flex items-center gap-3'>
+      <span className='grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary-soft'><ShieldCheck size={20} aria-hidden /></span>
+      <h2 className='text-lg font-semibold'>Ask AI</h2>
+    </div>
+    <p className='text-sm leading-6 text-soft'>{ASK_AI_DISCLOSURE}</p>
+    {consent === 'declined' ? <p className='text-sm text-muted-foreground'>Ask AI is off. You can keep editing manually.</p>
+      : <p className='text-sm text-soft'>Allow Ask AI to process your prompt and relevant clip content?</p>}
     <div className='flex flex-wrap gap-2'>
       {consent === 'declined' ? <button type='button' onClick={() => setConsent('needed')}
-        className='h-10 rounded-xl bg-violet-500 px-4 text-sm font-semibold'>Enable Ask AI</button> : <>
+        className='btn-primary h-11 rounded-xl px-4 text-sm md:h-10'>Enable Ask AI</button> : <>
         <button type='button' onClick={() => setConsent('declined')}
-          className='h-10 rounded-xl border border-white/10 px-4 text-sm'>Cancel</button>
+          className='h-11 rounded-xl border border-border px-4 text-sm font-medium text-soft transition-colors hover:border-border-strong hover:bg-tint hover:text-foreground md:h-10'>Cancel</button>
         <button type='button' onClick={() => { try { localStorage.setItem(ASK_AI_CONSENT_KEY, 'allowed'); }
           catch { /* Keep consent for this open editor only when storage is unavailable. */ }
-          setConsent('granted'); }} className='h-10 rounded-xl bg-violet-500 px-4 text-sm font-semibold'>Allow Ask AI</button>
+          setConsent('granted'); }} className='btn-primary h-11 rounded-xl px-4 text-sm md:h-10'>Allow Ask AI</button>
       </>}
     </div>
   </section>;
-  const tabs = <div role='tablist' aria-label='AI mode' className={`grid shrink-0 grid-cols-3 gap-1 rounded-lg bg-black/30 p-1 ${sheet ? 'rounded-xl' : ''}`}>
+  const tabs = <div role='tablist' aria-label='AI mode' className={`grid shrink-0 grid-cols-3 gap-1 rounded-lg bg-inset p-1 ${sheet ? 'rounded-xl' : ''}`}>
     {([['CHAT', 'Chat'], ['REVIEW', 'Review'], ['BRIEF', 'Edit plan']] as const).map(([value, label]) =>
       <button key={value} role='tab' aria-selected={aiMode === value}
         onClick={() => setAiMode(value)} className={`rounded-md font-semibold ${sheet ? 'h-10 rounded-lg text-xs' : 'py-1.5 text-[10px]'} ${
-          aiMode === value ? 'bg-violet-400/15 text-violet-200' : 'text-slate-500'}`}>{label}</button>)}
+          aiMode === value ? 'bg-primary/20 text-foreground' : 'text-muted-foreground hover:text-soft'}`}>{label}</button>)}
   </div>;
   const chat = <EditAgentPanel projectId={project.id} revision={project.revision} hasSource={!!source}
     disabled={busy} selectedElementId={selectedElementId} selected={selected}
@@ -105,13 +109,13 @@ export function EditAiContent({ project, source, selected, style, busy, selected
     playheadSec={playheadSec} onProject={onChatApplied}
     onError={(message) => onError(`PREVIEW_LAYOUT_FAILED: ${message}`)} />;
   if (sheet) return <div className='flex h-full min-h-0 min-w-0 flex-col gap-3'>
-    <p className='text-xs leading-5 text-slate-400'>{ASK_AI_DISCLOSURE}</p>
+    <p className='text-xs leading-5 text-muted-foreground'>{ASK_AI_DISCLOSURE}</p>
     {tabs}
     {aiMode === 'CHAT' ? <div className='flex min-h-0 flex-1 flex-col'>{chat}</div>
       : <div className='min-h-0 flex-1 overflow-y-auto overscroll-contain pb-[max(.75rem,var(--safe-bottom))]'>{aiMode === 'REVIEW' ? review : brief}</div>}
   </div>;
   return <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3'>
-    <p className='text-xs leading-5 text-slate-400'>{ASK_AI_DISCLOSURE}</p>
+    <p className='text-xs leading-5 text-muted-foreground'>{ASK_AI_DISCLOSURE}</p>
     {tabs}
     {aiMode === 'CHAT' && chat}
     {aiMode === 'REVIEW' && review}
@@ -140,11 +144,11 @@ export function EditRightPanel({ exportOpen, onExportStatus, onExportPhase, onCl
   const { project, source, busy } = content;
   const tabClass = (value: RightTab) =>
     `flex-1 rounded-md py-1.5 text-[11px] font-semibold transition-colors ${
-      tab === value ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-slate-200'}`;
+      tab === value ? 'bg-tint-active text-foreground' : 'text-muted-foreground hover:text-soft'}`;
   return <aside aria-label='Inspector and AI editor'
-    className='hidden w-[320px] shrink-0 flex-col border-l border-white/10 bg-[#0b0f1a] md:flex'>
-    <div className='shrink-0 border-b border-white/10 p-2'>
-      <div role='tablist' aria-label='Right panel' className='flex gap-1 rounded-lg bg-black/30 p-0.5'>
+    className='hidden w-[320px] shrink-0 flex-col border-l border-border bg-sunken md:flex'>
+    <div className='shrink-0 border-b border-border p-2'>
+      <div role='tablist' aria-label='Right panel' className='flex gap-1 rounded-lg bg-inset p-0.5'>
         <button role='tab' aria-selected={tab === 'INSPECTOR'} className={tabClass('INSPECTOR')}
           onClick={() => setTab('INSPECTOR')}>Inspector</button>
         <button role='tab' aria-selected={tab === 'AI'} className={tabClass('AI')}
@@ -157,7 +161,7 @@ export function EditRightPanel({ exportOpen, onExportStatus, onExportPhase, onCl
         <EditExportPanel projectId={project.id} revision={project.revision} hasSource={!!source}
           disabled={busy} onStatusChange={onExportStatus} onPhaseChange={onExportPhase} />
         <button onClick={onCloseExport}
-          className='mt-2 w-full rounded-lg border border-white/10 py-1.5 text-[11px] text-slate-400 hover:bg-white/5'>
+          className='mt-2 w-full rounded-lg border border-border py-1.5 text-[11px] text-muted-foreground hover:bg-tint'>
           Hide export</button>
       </div>}
     </div>

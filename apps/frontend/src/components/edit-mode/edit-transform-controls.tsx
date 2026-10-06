@@ -17,9 +17,9 @@ export const readCrop = (properties: Record<string, unknown>): CropInsets => {
     top: num(value.top), bottom: num(value.bottom) };
 };
 
-const field = 'w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1 text-xs text-slate-200';
-const chip = 'rounded-md border border-white/10 py-1 text-[10px] text-slate-300 hover:bg-white/10';
-const label = 'text-[10px] text-slate-500';
+const field = 'w-full rounded-lg border border-border bg-inset px-2 py-1 text-xs text-soft';
+const chip = 'rounded-md border border-border py-1 text-[10px] text-soft hover:bg-tint-strong';
+const label = 'text-[10px] text-faint';
 
 const CROP_EDGES = [['left', 'Left'], ['right', 'Right'], ['top', 'Top'], ['bottom', 'Bottom']] as const;
 
@@ -92,8 +92,8 @@ export function EditTransformControls({ selected, sourceAspect, onPreview, onCom
     commitCrop(rounded);
   };
 
-  return <div className='grid gap-3 border-t border-white/[.06] pt-3'>
-    <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-500'>Transform</p>
+  return <div className='grid gap-3 border-t border-border pt-3'>
+    <p className='text-[10px] font-semibold uppercase tracking-wider text-faint'>Transform</p>
 
     {/* --- Crop --- */}
     <div className='grid gap-1.5'>
@@ -133,9 +133,9 @@ export function EditTransformControls({ selected, sourceAspect, onPreview, onCom
     <div className='grid gap-1.5'>
       <div className='flex items-baseline justify-between'>
         <span className={label}>Angle</span>
-        <span className='text-[10px] tabular-nums text-slate-400'>{rotation.toFixed(0)}°</span>
+        <span className='text-[10px] tabular-nums text-muted-foreground'>{rotation.toFixed(0)}°</span>
       </div>
-      <input className='w-full accent-cyan-300' type='range'
+      <input className='w-full accent-secondary' type='range'
         min={TRANSFORM_BOUNDS.minRotation} max={TRANSFORM_BOUNDS.maxRotation} step={1}
         value={rotation} aria-label='Rotation angle'
         onChange={(event) => patch({ rotation: num(event.target.value) })}
@@ -168,8 +168,8 @@ export function EditTransformControls({ selected, sourceAspect, onPreview, onCom
                   flipH: next.flipH as boolean, flipV: next.flipV as boolean });
               }}
               className={`flex items-center justify-center gap-1 rounded-md border py-1.5 text-[10px] ${
-                active ? 'border-cyan-300/40 bg-cyan-400/10 text-cyan-200'
-                  : 'border-white/10 text-slate-300 hover:bg-white/10'}`}>
+                active ? 'border-secondary/40 bg-secondary/10 text-secondary-soft'
+                  : 'border-border text-soft hover:bg-tint-strong'}`}>
               <Icon size={12} />{title}</button>;
           })}
       </div>
@@ -181,9 +181,9 @@ export function EditTransformControls({ selected, sourceAspect, onPreview, onCom
       <div className='grid gap-1.5'>
         <div className='flex items-baseline justify-between'>
           <span className={label}>Scale</span>
-          <span className='text-[10px] tabular-nums text-slate-400'>{scale.toFixed(2)}×</span>
+          <span className='text-[10px] tabular-nums text-muted-foreground'>{scale.toFixed(2)}×</span>
         </div>
-        <input className='w-full accent-cyan-300' type='range' aria-label='Scale'
+        <input className='w-full accent-secondary' type='range' aria-label='Scale'
           min={TRANSFORM_BOUNDS.minScale} max={TRANSFORM_BOUNDS.maxScale} step='.01' value={scale}
           onChange={(event) => patch({ scale: num(event.target.value, 1) })}
           onPointerUp={() => onCommit({ action: 'set-video-scale', elementId: selected.id,
@@ -207,17 +207,17 @@ export function EditTransformControls({ selected, sourceAspect, onPreview, onCom
       <div className='grid gap-1.5'>
         <div className='flex items-baseline justify-between'>
           <span className={label}>Speed</span>
-          <span className='text-[10px] tabular-nums text-slate-400'>{speed.toFixed(2)}×</span>
+          <span className='text-[10px] tabular-nums text-muted-foreground'>{speed.toFixed(2)}×</span>
         </div>
         <div className='grid grid-cols-7 gap-1'>
           {SPEED_PRESETS.map((preset) => <button key={preset} type='button'
             aria-pressed={Math.abs(preset - speed) < 1e-6}
             onClick={() => onCommit({ action: 'set-speed', elementId: selected.id, speed: preset })}
             className={`rounded-md border py-1 text-[9px] ${
-              Math.abs(preset - speed) < 1e-6 ? 'border-cyan-300/40 bg-cyan-400/10 text-cyan-200'
-                : 'border-white/10 text-slate-300 hover:bg-white/10'}`}>{preset}×</button>)}
+              Math.abs(preset - speed) < 1e-6 ? 'border-secondary/40 bg-secondary/10 text-secondary-soft'
+                : 'border-border text-soft hover:bg-tint-strong'}`}>{preset}×</button>)}
         </div>
-        <p className='text-[10px] leading-4 text-slate-500'>
+        <p className='text-[10px] leading-4 text-faint'>
           Changing speed moves every later clip, and the overlays placed on them, to match.</p>
       </div>
     </>}
@@ -232,7 +232,7 @@ export function EditTransformControls({ selected, sourceAspect, onPreview, onCom
         onCommit({ action: 'set-video-scale', elementId: selected.id, scale: 1 });
         onCommit({ action: 'set-video-position', elementId: selected.id, x: 0, y: 0 });
       }
-    }} className='flex items-center justify-center gap-1 rounded-lg border border-white/10 py-1.5 text-[10px] text-slate-300 hover:bg-white/5'>
+    }} className='flex items-center justify-center gap-1 rounded-lg border border-border py-1.5 text-[10px] text-soft hover:bg-tint'>
       <RotateCw size={11} />Reset transform</button>
   </div>;
 }

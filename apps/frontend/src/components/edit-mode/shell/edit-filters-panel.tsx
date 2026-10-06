@@ -26,7 +26,7 @@ export function EditFiltersPanel({ selected, busy, onCommand }: {
   onCommand: (command: ManualEditCommand) => void;
 }) {
   if (!selected || selected.type !== 'VIDEO') {
-    return <p className='text-[11px] leading-4 text-slate-500'>
+    return <p className='text-[11px] leading-4 text-faint'>
       Select a video segment on the timeline to apply a filter.</p>;
   }
   const properties = selected.properties;
@@ -48,32 +48,32 @@ export function EditFiltersPanel({ selected, busy, onCommand }: {
           onClick={() => onCommand({ action: 'apply-color-filter', elementId: selected.id,
             filterId: filter.id, strength })}
           className={`grid gap-1 rounded-lg border p-1.5 text-left disabled:opacity-30 ${
-            active ? 'border-violet-300/60 bg-violet-400/10' : 'border-white/10 hover:bg-white/5'}`}>
+            active ? 'border-primary/60 bg-primary/10' : 'border-border hover:bg-tint'}`}>
           <span aria-hidden className='h-9 w-full rounded'
             style={{ filter: preview || undefined,
               background: 'linear-gradient(135deg,#1f2937 0%,#8b5cf6 40%,#f59e0b 75%,#fef3c7 100%)' }} />
-          <span className='truncate text-[10px] font-medium text-slate-200'>{filter.label}</span>
+          <span className='truncate text-[10px] font-medium text-soft'>{filter.label}</span>
         </button>;
       })}
     </div>
 
-    <div className='grid gap-1 border-t border-white/[.06] pt-3'>
+    <div className='grid gap-1 border-t border-border pt-3'>
       <div className='flex items-baseline justify-between'>
-        <label htmlFor='filter-strength' className='text-[11px] text-slate-300'>Strength</label>
-        <span className='text-[10px] tabular-nums text-slate-500'>
+        <label htmlFor='filter-strength' className='text-[11px] text-soft'>Strength</label>
+        <span className='text-[10px] tabular-nums text-faint'>
           {Math.round(strength * 100)}%</span>
       </div>
       <input id='filter-strength' type='range' min={0} max={1} step={0.05} value={strength}
-        disabled={busy || !activeId} className='w-full accent-violet-400'
+        disabled={busy || !activeId} className='w-full accent-primary'
         onChange={(event) => activeId && onCommand({ action: 'apply-color-filter',
           elementId: selected.id, filterId: activeId, strength: Number(event.target.value) })} />
-      <p className='text-[9px] leading-3 text-slate-600'>
+      <p className='text-[9px] leading-3 text-faint'>
         {activeId
           ? 'Re-applies the filter at this strength. Anything you changed by hand afterwards is replaced.'
           : 'Pick a filter first.'}</p>
     </div>
 
-    {edited && <p className='text-[10px] leading-4 text-amber-200/70'>
+    {edited && <p className='text-[10px] leading-4 text-warning-soft/70'>
       You have adjusted this grade by hand, so it no longer matches {
         COLOR_FILTERS.find((filter) => filter.id === activeId)?.label} exactly. Your values are
       what renders.</p>}

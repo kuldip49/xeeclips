@@ -2,26 +2,66 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * XeeClip design tokens.
+ *
+ * Every colour the app chrome uses is defined once here as RGB channels so Tailwind can apply
+ * opacity (`bg-primary/15`). Components use the semantic names from tailwind.config.ts
+ * (`bg-surface`, `text-muted-foreground`, `border-border`, ...), never raw palette or hex values.
+ * Video stages stay pure black and never take these tokens; generated media, templates and
+ * subtitles keep their own colours.
+ */
 @layer base {
   :root {
-    --background: 225 44% 5%;
-    --foreground: 210 40% 98%;
-    --card: 221 42% 11%;
-    --card-foreground: 210 40% 98%;
-    --primary: 258 90% 66%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 222 35% 15%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 222 35% 15%;
-    --muted-foreground: 215 20% 65%;
-    --accent: 220 37% 13%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 220 20% 23%;
-    --input: 220 20% 23%;
-    --ring: 258 90% 66%;
+    /* Surfaces, darkest to lightest. */
+    --background: 8 11 20;           /* #080B14 page */
+    --sunken: 11 15 26;              /* #0B0F1A recessed panels, inputs, wells */
+    --stage: 5 7 13;                 /* #05070D behind video. Kept near-black on purpose. */
+    --surface: 18 24 39;             /* #121827 cards, panels */
+    --elevated: 28 36 54;            /* #1C2436 sheets, dialogs, raised controls */
+    --border: 42 48 66;              /* #2A3042 */
+    --border-strong: 61 69 92;       /* #3D455C hover and emphasised edges */
+
+    /* Text. All four pass WCAG AA on --surface. */
+    --foreground: 248 250 252;       /* #F8FAFC */
+    --soft: 203 213 225;             /* #CBD5E1 secondary copy */
+    --muted-foreground: 148 163 184; /* #94A3B8 */
+    --faint: 126 140 162;            /* #7E8CA2 meta labels, placeholders */
+
+    /* Brand. Violet = primary actions and selection, cyan = progress and live indicators,
+       pink = decoration only. `-soft` tones are for text and icons on dark surfaces. */
+    --primary: 139 92 246;           /* #8B5CF6 */
+    --primary-hover: 124 58 237;     /* #7C3AED */
+    --primary-soft: 196 181 253;     /* #C4B5FD */
+    --primary-foreground: 255 255 255;
+    --secondary: 34 211 238;         /* #22D3EE */
+    --secondary-soft: 165 243 252;   /* #A5F3FC */
+    --secondary-foreground: 4 19 26;
+    --accent: 244 114 182;           /* #F472B6 */
+    --accent-soft: 251 207 232;      /* #FBCFE8 */
+    --accent-foreground: 31 7 20;
+
+    /* Status. */
+    --success: 52 211 153;           /* #34D399 */
+    --success-soft: 167 243 208;
+    --success-foreground: 3 26 18;
+    --warning: 251 191 36;           /* #FBBF24 */
+    --warning-soft: 253 230 138;
+    --warning-foreground: 31 20 2;
+    --danger: 251 113 133;           /* #FB7185 */
+    --danger-soft: 254 205 211;
+    --danger-foreground: 36 6 13;
+
+    /* Editor timeline track identities: each lane must stay distinguishable from its neighbours. */
+    --track-video: 139 92 246;
+    --track-text: 34 211 238;
+    --track-caption: 96 165 250;
+    --track-image: 244 114 182;
+    --track-audio: 52 211 153;
+
+    --ring: 167 139 250;             /* #A78BFA, visible on every surface */
     --radius: 1rem;
+
     /* Mobile shell metrics, shared by the bottom nav, sticky CTAs and sheets. */
     --mobile-header-h: 56px;
     --bottom-nav-h: 64px;
@@ -36,10 +76,15 @@
   /* While typing, the tab bar steps aside so the keyboard, field and its button get the room. */
   :root[data-keyboard='open'] { --nav-offset: 0px; }
   * { @apply border-border; }
-  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; background: #070a12; }
-  body { @apply bg-background text-foreground antialiased; font-family: Arial, Helvetica, sans-serif;
-    -webkit-tap-highlight-color: transparent; }
-  ::selection { background: #8b5cf666; color: #fff; }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
+    background: rgb(var(--background)); color-scheme: dark; }
+  body { @apply bg-background font-sans text-foreground antialiased;
+    -webkit-tap-highlight-color: transparent; font-feature-settings: 'cv11', 'ss01'; }
+  h1, h2, h3, h4, h5, h6 { @apply font-display; letter-spacing: -0.015em; }
+  ::selection { background: rgb(var(--primary) / .4); color: rgb(var(--foreground)); }
+  /* Keyboard focus is always visible; components that draw their own ring opt out with outline-none. */
+  :focus-visible { outline: 2px solid rgb(var(--ring)); outline-offset: 2px; }
+  * { scrollbar-color: rgb(var(--border-strong)) transparent; }
   /* No 300ms double-tap delay on controls; pinch-zoom of the page itself stays available. */
   a, button, label, summary, [role='button'], [role='tab'] { touch-action: manipulation; }
   video { max-width: 100%; }
@@ -53,12 +98,18 @@
 
 @layer components {
   .page-enter { animation: page-enter .35s ease-out both; }
-  .surface { background: #0d111c; border: 1px solid rgba(255,255,255,.08); }
-  .eyebrow { @apply text-xs font-semibold uppercase tracking-[.18em] text-violet-400; }
-  .section-title { @apply text-xl font-semibold tracking-tight text-slate-50; }
-  .soft-panel { @apply rounded-2xl border border-white/[.08] bg-[#111827]; }
-  .empty-state { @apply flex flex-col items-center justify-center rounded-2xl border border-dashed border-white/10 bg-white/[.02] px-6 py-12 text-center; }
-  .skeleton { @apply animate-pulse rounded-lg bg-white/[.07]; }
+  .eyebrow { @apply font-display text-xs font-semibold uppercase tracking-[.18em] text-primary-soft; }
+  /* Shared building blocks. Prefer these over re-spelling the same utilities in a component. */
+  .panel { @apply rounded-2xl border border-border bg-surface; }
+  .field { @apply rounded-xl border border-border bg-sunken text-foreground transition-colors
+    placeholder:text-faint hover:border-border-strong focus:border-primary/70 focus:outline-none
+    focus-visible:ring-2 focus-visible:ring-ring/40; }
+  .btn-primary { @apply bg-primary font-display font-semibold text-primary-foreground
+    shadow-glow transition-colors hover:bg-primary-hover focus-visible:outline-none
+    focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background
+    disabled:shadow-none; }
+  .empty-state { @apply flex flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-tint-subtle px-6 py-12 text-center; }
+  .skeleton { @apply animate-pulse rounded-lg bg-tint-strong; }
   /* Content that must clear the fixed mobile bottom nav (and the home indicator). */
   .pb-mobile-nav { padding-bottom: calc(var(--bottom-nav-h) + var(--safe-bottom) + 24px); }
   @media (min-width: 1024px) { .pb-mobile-nav { padding-bottom: 2rem; } }
@@ -82,6 +133,7 @@
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  .pressable:active, .hover\:-translate-y-0\.5:hover { transform: none; }
 }
 
 /* Automatic 2 (street3 template) serif. Same face the export renderer uses (EB Garamond, OFL). */

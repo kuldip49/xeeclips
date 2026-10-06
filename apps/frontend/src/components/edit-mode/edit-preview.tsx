@@ -217,7 +217,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   const segmentColor = readColorAdjustments(mapping?.element.properties ?? {});
   const colorStyle = colorPreviewStyle(segmentColor);
   const colorLayers = colorOverlayLayers(segmentColor);
-  if (!source) return <section className='grid min-h-[360px] place-items-center rounded-2xl border border-dashed border-white/10 bg-black/20 text-center'><div><p className='text-sm font-semibold text-slate-300'>No source attached</p><p className='mt-2 text-xs text-slate-500'>Choose one exact video from the media panel.</p></div></section>;
+  if (!source) return <section className='grid min-h-[360px] place-items-center rounded-2xl border border-dashed border-border bg-black/20 text-center'><div><p className='text-sm font-semibold text-soft'>No source attached</p><p className='mt-2 text-xs text-faint'>Choose one exact video from the media panel.</p></div></section>;
   const timeUpdate = (media: HTMLVideoElement) => {
     if (syncing.current) { syncing.current = false; return; }
     const item = videoTrack(elements).find((element) => element.id === activeId.current) ?? mapping?.element; if (!item) return;
@@ -347,7 +347,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   const blurBackdrop = !manualCropBackground && fitted &&
     fitBackground !== 'WHITE' && fitBackground !== 'BLACK';
 
-  return <section className='flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/40 max-md:rounded-none max-md:border-0'>
+  return <section className='flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-black/40 max-md:rounded-none max-md:border-0'>
     <div className='flex min-h-0 w-full flex-1 bg-[radial-gradient(ellipse_at_center,#1a2030_0%,#0d1018_70%)] p-3 max-md:p-1.5'
       data-testid='edit-preview-stage'>
     <div ref={frame} className='relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden'>
@@ -362,7 +362,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     className={`relative overflow-hidden ${cropEditor ? '' : 'rounded-[3px] shadow-[0_0_0_1px_rgba(255,255,255,.16),0_18px_48px_rgba(0,0,0,.55)]'}`}
     data-testid='edit-preview-canvas' data-canvas-width={canvasSize.width} data-view-mode={focusing ? 'FOCUS' : 'FIT'}
     data-fit-background={manualCropBackground ? 'BLACK' : fitted ? (fitBackground ?? 'BLUR') : 'NONE'}>
-      {blurBackdrop && <span className='pointer-events-none absolute left-1.5 top-1.5 z-10 rounded bg-black/50 px-1.5 py-0.5 text-[9px] text-slate-300'>
+      {blurBackdrop && <span className='pointer-events-none absolute left-1.5 top-1.5 z-10 rounded bg-black/50 px-1.5 py-0.5 text-[9px] text-soft'>
         Blurred backdrop appears in export</span>}
       {/* The transform of the segment under the playhead. Crop, flip, rotation,
           scale and position are drawn here in the same order the renderer
@@ -421,13 +421,13 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
         transform={cropTransform} onChange={cropEditor.onChange} />}
 
       {mediaState === 'LOADING' && <div role='status'
-        className='pointer-events-none absolute inset-0 z-40 grid place-items-center bg-black/35 text-xs text-slate-300'>
+        className='pointer-events-none absolute inset-0 z-40 grid place-items-center bg-black/35 text-xs text-soft'>
         Loading preview media…
       </div>}
       {mediaState === 'FAILED' && <div role='alert' data-error-code='MEDIA_LOAD_FAILED'
         className='absolute inset-0 z-40 grid place-items-center bg-black/80 p-6 text-center'>
-        <div><p className='text-sm font-semibold text-white'>Preview media could not be loaded</p>
-          <button type='button' className='mt-3 rounded-lg border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/15'
+        <div><p className='text-sm font-semibold text-foreground'>Preview media could not be loaded</p>
+          <button type='button' className='mt-3 rounded-lg border border-border-strong bg-white/10 px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-white/15'
             onClick={() => { setMediaState('LOADING'); setMediaAttempt((value) => value + 1); }}>
             Retry
           </button>
@@ -451,7 +451,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
         return <div key={element.id} role='button' tabIndex={0}
           data-testid='preview-element' data-element-id={element.id}
           onPointerDown={(event) => interaction(event, element, 'move')}
-          className={`absolute cursor-move touch-none select-none ${selected ? 'outline outline-2 outline-offset-2 outline-cyan-300' : ''}`}
+          className={`absolute cursor-move touch-none select-none ${selected ? 'outline outline-2 outline-offset-2 outline-secondary' : ''}`}
           style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%`, width: `${p.width * 100}%`,
             height: `${p.height * 100}%`, opacity: p.opacity, zIndex: p.zIndex,
             ...(text
@@ -469,10 +469,10 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
             {CORNERS.map(({ corner, className, cursor }) => <span key={corner}
               aria-label={`Resize ${corner}`} style={{ cursor }}
               onPointerDown={(event) => interaction(event, element, 'resize', corner)}
-              className={`touch-hit absolute h-3 w-3 rounded-sm border border-black bg-cyan-300 coarse:h-4 coarse:w-4 ${className}`} />)}
+              className={`touch-hit absolute h-3 w-3 rounded-sm border border-black bg-secondary coarse:h-4 coarse:w-4 ${className}`} />)}
             <span aria-label='Rotate' title='Rotate'
               onPointerDown={(event) => interaction(event, element, 'rotate')}
-              className='touch-hit absolute -top-7 left-1/2 grid h-5 w-5 -translate-x-1/2 cursor-grab place-items-center rounded-full border border-black bg-cyan-300 text-black coarse:-top-9 coarse:h-7 coarse:w-7'>
+              className='touch-hit absolute -top-7 left-1/2 grid h-5 w-5 -translate-x-1/2 cursor-grab place-items-center rounded-full border border-black bg-secondary text-black coarse:-top-9 coarse:h-7 coarse:w-7'>
               <RotateCw size={11} /></span>
           </>}
         </div>;
@@ -480,7 +480,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
 
       {guides.map((guide) => <div key={`${guide.axis}-${guide.at}`} aria-hidden
         data-testid='snap-guide'
-        className='pointer-events-none absolute z-50 bg-fuchsia-400/80'
+        className='pointer-events-none absolute z-50 bg-accent/80'
         style={guide.axis === 'x'
           ? { left: `${guide.at * 100}%`, top: 0, bottom: 0, width: 1 }
           : { top: `${guide.at * 100}%`, left: 0, right: 0, height: 1 }} />)}
@@ -491,11 +491,11 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     </div>
     </div>
     </div>
-    <div className='flex shrink-0 items-center gap-3 border-t border-white/10 px-4 py-2 max-md:gap-2.5 max-md:px-3 max-md:py-1.5'><button onClick={() => void toggle()} aria-label={playing ? 'Pause preview' : 'Play preview'} className='grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-black disabled:opacity-40 coarse:h-11 coarse:w-11' disabled={!!cropEditor || !mapping || mediaState !== 'READY'}>{playing ? <Pause size={16} /> : <Play size={16} className='ml-0.5' />}</button><input aria-label='Seek edited timeline' type='range' min={0} max={duration || 0} step={0.01} value={Math.min(currentPlayheadSec, duration)} disabled={!!cropEditor} onChange={(event) => onPlayheadChange(Number(event.target.value))} className='h-1 min-w-0 flex-1 accent-violet-400 disabled:opacity-40 coarse:h-8' /><span className='shrink-0 text-xs tabular-nums text-slate-400'>{clock(currentPlayheadSec)} / {clock(duration)}</span>
-      {focusRegion && !cropEditor ? <div role='group' aria-label='Preview view' className='flex shrink-0 rounded-lg border border-white/10 bg-white/[.03] p-0.5 text-[11px]'>
+    <div className='flex shrink-0 items-center gap-3 border-t border-border px-4 py-2 max-md:gap-2.5 max-md:px-3 max-md:py-1.5'><button onClick={() => void toggle()} aria-label={playing ? 'Pause preview' : 'Play preview'} className='grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white text-black disabled:opacity-40 coarse:h-11 coarse:w-11' disabled={!!cropEditor || !mapping || mediaState !== 'READY'}>{playing ? <Pause size={16} /> : <Play size={16} className='ml-0.5' />}</button><input aria-label='Seek edited timeline' type='range' min={0} max={duration || 0} step={0.01} value={Math.min(currentPlayheadSec, duration)} disabled={!!cropEditor} onChange={(event) => onPlayheadChange(Number(event.target.value))} className='h-1 min-w-0 flex-1 accent-primary disabled:opacity-40 coarse:h-8' /><span className='shrink-0 text-xs tabular-nums text-muted-foreground'>{clock(currentPlayheadSec)} / {clock(duration)}</span>
+      {focusRegion && !cropEditor ? <div role='group' aria-label='Preview view' className='flex shrink-0 rounded-lg border border-border bg-white/[.03] p-0.5 text-[11px]'>
         {([['FOCUS', 'Focus', 'Fill the preview with the hook and video'], ['FIT', 'Fit', 'Show the whole export frame']] as const).map(([mode, label, hint]) =>
           <button key={mode} type='button' title={hint} aria-pressed={viewMode === mode} onClick={() => setViewMode(mode)}
-            className={`rounded-md px-2 py-0.5 font-semibold transition-colors coarse:min-h-[34px] coarse:px-2.5 ${viewMode === mode ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-white'}`}>{label}</button>)}
+            className={`rounded-md px-2 py-0.5 font-semibold transition-colors coarse:min-h-[34px] coarse:px-2.5 ${viewMode === mode ? 'bg-white/15 text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>{label}</button>)}
       </div> : null}</div>
   </section>;
 });

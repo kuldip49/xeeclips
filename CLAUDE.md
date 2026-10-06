@@ -133,6 +133,9 @@ count → generate → result cards with Preview / Edit / Ask AI / Export (`comp
 Phones/tablets use a separate shell (bottom tab bar, `/create` one-step flow, docked editor drawers
 + tool bar; see the "Mobile-first responsive frontend" section of `PROJECT_STATE.md`); keep desktop
 layouts unchanged and cover phone paths in `e2e/mobile-responsive.spec.ts`.
+Colours and fonts come only from the design tokens in `src/app/globals.css` / `tailwind.config.ts`
+(`bg-surface`, `text-muted-foreground`, `btn-primary`, `font-display`…); never add raw Tailwind
+palette or hex classes to app chrome. Video stages stay black and generated media keeps its own colours.
 
 ### AI service boundary
 

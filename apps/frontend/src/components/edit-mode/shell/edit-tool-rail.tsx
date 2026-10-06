@@ -20,7 +20,7 @@ export function EditToolRail({ active, cropDisabled = false, onSelect }: {
   onSelect: (id: EditToolId | null) => void;
 }) {
   return <nav aria-label='Editing tools'
-    className='hidden w-[72px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-white/10 bg-[#0d111c] py-2 md:flex'>
+    className='hidden w-[72px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-surface py-2 md:flex'>
     {EDIT_TOOLS.map((tool) => {
       const Icon = ICONS[tool.id];
       const selected = active === tool.id;
@@ -30,9 +30,9 @@ export function EditToolRail({ active, cropDisabled = false, onSelect }: {
           ? 'Select a video segment to use manual crop.' : undefined)}
         onClick={() => onSelect(selected ? null : tool.id)}
         className={`mx-1.5 grid place-items-center gap-1 rounded-xl px-1 py-2.5 transition-colors ${
-          disabled ? 'cursor-not-allowed text-slate-600'
-            : selected ? 'bg-violet-500/15 text-violet-200'
-              : 'text-slate-400 hover:bg-white/5 hover:text-slate-200'}`}>
+          disabled ? 'cursor-not-allowed text-faint opacity-50'
+            : selected ? 'bg-primary/15 text-primary-soft'
+              : 'text-muted-foreground hover:bg-tint hover:text-soft'}`}>
         <Icon size={19} aria-hidden />
         <span className='text-[10px] font-medium leading-none'>{tool.label}</span>
       </button>;

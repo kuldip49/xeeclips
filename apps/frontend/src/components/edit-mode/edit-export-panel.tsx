@@ -93,72 +93,72 @@ export function EditExportPanel({ projectId, revision, hasSource, disabled, onSt
     } finally { setStarting(false); }
   };
 
-  return <section className='rounded-2xl border border-white/10 bg-[#0d111c] p-4'>
+  return <section className='rounded-2xl border border-border bg-surface p-4'>
     <div className='flex items-center gap-2'>
-      <Upload size={16} className='text-violet-300' />
+      <Upload size={16} className='text-primary-soft' />
       <h2 className='text-sm font-semibold'>Export</h2>
-      <span className='ml-auto text-[11px] text-slate-500'>r{revision}</span>
+      <span className='ml-auto text-[11px] text-faint'>r{revision}</span>
     </div>
 
     <button disabled={disabled || !hasSource || running || starting} onClick={() => void start()}
-      className='mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-500 px-3 py-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40'>
+      className='mt-3 flex w-full items-center justify-center gap-2 rounded-xl btn-primary px-3 py-2.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40'>
       {running || starting ? <LoaderCircle size={15} className='animate-spin' /> : <Film size={15} />}
       {running ? PHASE_LABEL[progress.phase] : starting ? 'Starting…' : 'Export video'}
     </button>
 
     {running && <div className='mt-3'>
-      <div className='h-1 overflow-hidden rounded-full bg-white/10'>
-        <div className='h-full rounded-full bg-violet-400 transition-all duration-500'
+      <div className='h-1 overflow-hidden rounded-full bg-tint-strong'>
+        <div className='h-full rounded-full bg-brand-progress transition-all duration-500'
           style={{ width: `${progress.percent}%` }} />
       </div>
-      <p className='mt-1.5 text-[11px] text-slate-500'>
+      <p className='mt-1.5 text-[11px] text-faint'>
         {PHASE_LABEL[progress.phase]}{progress.attempt > 1 ? ` · pass ${progress.attempt}` : ''}
         {' · '}from r{progress.sourceRevision}
       </p>
     </div>}
 
-    {error && <div role='alert' className='mt-3 grid gap-2 rounded-lg border border-red-400/20 bg-red-400/10 px-3 py-2 text-[11px] text-red-200'>
+    {error && <div role='alert' className='mt-3 grid gap-2 rounded-lg border border-danger/20 bg-danger/10 px-3 py-2 text-[11px] text-danger-soft'>
       <p className='flex gap-2'><AlertTriangle size={13} className='mt-px shrink-0' />{error}</p>
       {!running && hasSource && <button type='button' disabled={disabled || starting}
         onClick={() => void start()}
-        className='justify-self-start rounded-md border border-red-300/30 px-2 py-1 font-semibold text-red-100 disabled:opacity-40'>
+        className='justify-self-start rounded-md border border-danger/30 px-2 py-1 font-semibold text-danger-soft disabled:opacity-40'>
         Try the export again</button>}
-      {exports.length > 0 && <p className='text-red-200/70'>
+      {exports.length > 0 && <p className='text-danger-soft/70'>
         Your previous export{exports.length > 1 ? 's are' : ' is'} still listed below and can
         still be downloaded.</p>}
     </div>}
 
-    {!hasSource && <p className='mt-3 text-[11px] text-slate-500'>
+    {!hasSource && <p className='mt-3 text-[11px] text-faint'>
       Attach a source video before exporting.</p>}
 
     {exports.length > 0 && <ul className='mt-4 grid gap-2'>
       {exports.map((item, index) => {
         const meta = item.metadata;
         const version = exports.length - index;
-        return <li key={item.id} className='rounded-xl border border-white/10 bg-black/20 p-3'>
+        return <li key={item.id} className='rounded-xl border border-border bg-inset p-3'>
           <div className='flex items-center gap-2'>
             <span className='text-xs font-semibold'>v{version}</span>
             <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${item.current
-              ? 'bg-emerald-400/15 text-emerald-300' : 'bg-amber-400/15 text-amber-300'}`}>
+              ? 'bg-success/15 text-success' : 'bg-warning/15 text-warning'}`}>
               {item.current ? 'Current' : `From r${item.sourceRevision ?? '?'}`}
             </span>
-            {meta?.qa?.result && meta.qa.result !== 'PASS' && <span className='rounded-full bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-300'>
+            {meta?.qa?.result && meta.qa.result !== 'PASS' && <span className='rounded-full bg-warning/10 px-2 py-0.5 text-[10px] text-warning'>
               {meta.qa.result === 'DEGRADED_ACCEPTABLE' ? 'Minor QA notes' : meta.qa.result}</span>}
           </div>
-          <p className='mt-1.5 text-[11px] text-slate-400'>
+          <p className='mt-1.5 text-[11px] text-muted-foreground'>
             {meta?.resolution?.width ?? '—'}×{meta?.resolution?.height ?? '—'}
             {meta?.durationSec ? ` · ${clock(meta.durationSec)}` : ''}
             {item.sizeBytes ? ` · ${bytes(Number(item.sizeBytes))}` : ''}
             {meta?.codec?.video ? ` · ${meta.codec.video}${meta.codec.audio ? `/${meta.codec.audio}` : ''}` : ''}
           </p>
-          {!item.current && <p className='mt-1 text-[11px] text-amber-300/80'>
+          {!item.current && <p className='mt-1 text-[11px] text-warning/80'>
             Rendered from an older revision of this timeline.</p>}
           <div className='mt-2 flex gap-2'>
             <button onClick={() => setPreview(preview === item.id ? null : item.id)}
-              className='flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-[11px] font-medium'>
+              className='flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-medium'>
               <Play size={12} />{preview === item.id ? 'Hide' : 'Preview'}</button>
             <a href={editExportFileUrl(item.id)} download={item.originalName}
-              className='flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1.5 text-[11px] font-medium'>
+              className='flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-medium'>
               <Download size={12} />Download</a>
           </div>
           {preview === item.id && <video controls preload='metadata' className='mt-2 w-full rounded-lg bg-black'

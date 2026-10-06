@@ -45,13 +45,13 @@ export function ProcessingPipeline({
     : 'Processing engine: built-in deterministic rules';
 
   return (
-    <div className='grid gap-4 rounded-2xl border border-white/[.08] bg-[#0d111c] p-4 sm:p-5' aria-label='Video processing pipeline'>
+    <div className='grid gap-4 rounded-2xl border border-border bg-surface p-4 sm:p-5' aria-label='Video processing pipeline'>
       <div className='flex items-center justify-between gap-3 text-sm'>
         <span className='font-medium'>
           {failed ? 'Processing failed' : completed ? 'Processing complete' :
             activeLabel ? `${activeLabel}...` : 'Processing video'}
         </span>
-        <span className='text-lg font-bold tabular-nums text-violet-300'>{progress}%</span>
+        <span className='text-lg font-bold tabular-nums text-primary-soft'>{progress}%</span>
       </div>
       <p className='text-xs text-muted-foreground'>Processing mode: {' '}
         <span className='font-medium text-foreground'>
@@ -59,8 +59,8 @@ export function ProcessingPipeline({
         </span>
       </p>
       <p className='text-xs text-muted-foreground'>{sourceLabel}</p>
-      <div className='h-2 overflow-hidden rounded-full bg-white/[.08]' role='progressbar' aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
-        <motion.div className={cn('h-full rounded-full', failed ? 'bg-destructive' : 'bg-gradient-to-r from-violet-500 to-cyan-400')} initial={{ width: 0 }} animate={{ width: progress + '%' }} transition={{ duration: .6 }} />
+      <div className='h-2 overflow-hidden rounded-full bg-tint-strong' role='progressbar' aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
+        <motion.div className={cn('h-full rounded-full', failed ? 'bg-destructive' : 'bg-brand-progress')} initial={{ width: 0 }} animate={{ width: progress + '%' }} transition={{ duration: .6 }} />
       </div>
       <ol className='grid gap-2 sm:grid-cols-2 xl:grid-cols-3'>
         {stages.map((stage) => {
@@ -74,20 +74,20 @@ export function ProcessingPipeline({
           return (
             <li
               className={cn(
-                'flex min-w-0 items-center gap-2 rounded-lg border border-white/[.05] bg-white/[.02] px-3 py-2 text-xs',
+                'flex min-w-0 items-center gap-2 rounded-lg border border-border bg-tint-subtle px-3 py-2 text-xs',
                 done || active ? 'text-foreground' : 'text-muted-foreground',
                 failedStage && 'text-destructive'
               )}
               key={stage.label}
               title={record?.error ?? undefined}
             >
-              <Icon className={cn('h-3.5 w-3.5 shrink-0', active && 'animate-spin text-primary', done && 'text-emerald-400')} aria-hidden />
+              <Icon className={cn('h-3.5 w-3.5 shrink-0', active && 'animate-spin text-primary', done && 'text-success')} aria-hidden />
               <span>{stage.label}: {status.toLowerCase()}{active ? ' (' + (record?.progress ?? 0) + '%)' : ''}</span>
             </li>
           );
         })}
       </ol>
-      {job?.error ? <details className='text-xs text-red-300'><summary className='cursor-pointer'>Processing failed · Show details</summary><p className='mt-2 break-words'>{job.error}</p></details> : null}
+      {job?.error ? <details className='text-xs text-danger'><summary className='cursor-pointer'>Processing failed · Show details</summary><p className='mt-2 break-words'>{job.error}</p></details> : null}
     </div>
   );
 }

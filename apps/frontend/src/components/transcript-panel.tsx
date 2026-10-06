@@ -36,14 +36,14 @@ export function TranscriptPanel({ video }: { video: Video }) {
   return <WorkspaceAccordion title='Transcript' summary={summary} icon={FileText}>
     <div className='grid gap-3 text-sm'>
       {isLoading && <div className='grid gap-2' aria-label='Loading transcript'><div className='skeleton h-5 w-full' /><div className='skeleton h-5 w-3/4' /></div>}
-      {error && <div role='alert' className='flex items-center justify-between gap-3 text-red-300'><span>{error}</span><Button size='sm' variant='outline' onClick={() => void loadTranscript()}>Retry</Button></div>}
-      {!isComplete && <p className='text-slate-400'>Transcript pending.</p>}
+      {error && <div role='alert' className='flex items-center justify-between gap-3 text-danger'><span>{error}</span><Button size='sm' variant='outline' onClick={() => void loadTranscript()}>Retry</Button></div>}
+      {!isComplete && <p className='text-muted-foreground'>Transcript pending.</p>}
       {transcript && <>
-        <div className='flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400'><span>{transcript.language ? 'Source language: ' + transcript.language : 'Source language unavailable'}</span><span>{transcript.segments.length} segments</span></div>
-        {transcript.segments.map((segment) => <div className='grid grid-cols-[48px_minmax(0,1fr)] gap-3' key={segment.id}><span className='font-mono text-xs text-slate-400'>{formatTime(segment.start)}</span><p>{segment.text}</p></div>)}
+        <div className='flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground'><span>{transcript.language ? 'Source language: ' + transcript.language : 'Source language unavailable'}</span><span>{transcript.segments.length} segments</span></div>
+        {transcript.segments.map((segment) => <div className='grid grid-cols-[48px_minmax(0,1fr)] gap-3' key={segment.id}><span className='font-mono text-xs text-muted-foreground'>{formatTime(segment.start)}</span><p>{segment.text}</p></div>)}
         {transcript.segments.length === 0 && <p>{transcript.text}</p>}
       </>}
-      {isComplete && !isLoading && !error && !transcript && <p className='text-slate-400'>No transcript data.</p>}
+      {isComplete && !isLoading && !error && !transcript && <p className='text-muted-foreground'>No transcript data.</p>}
     </div>
   </WorkspaceAccordion>;
 }

@@ -217,61 +217,61 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
     : uploadProgress == null ? 'Uploading video...' : `Uploading video... ${uploadProgress}%`;
   const advancedSummary = `${TARGET_PLATFORM_LABELS[settings.platform]}, ${settings.aspectRatio}${settings.brief.trim() ? ', with a description' : ''}`;
 
-  return <form className='grid gap-6' onSubmit={onSubmit} aria-label='Generate clips'>
+  return <form className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-6' onSubmit={onSubmit} aria-label='Generate clips'>
     {showHeading ? <div><p className='eyebrow'>Create short clips</p><h2 className='mt-2 text-xl font-bold tracking-tight sm:text-2xl'>Generate clips</h2>
-      <p className='mt-1.5 text-sm leading-6 text-slate-400'>Add a video, pick a template and how many clips you want. We handle the rest and show each clip as it is ready.</p></div> : null}
+      <p className='mt-1.5 text-sm leading-6 text-muted-foreground'>Add a video, pick a template and how many clips you want. We handle the rest and show each clip as it is ready.</p></div> : null}
 
-    {notice ? <p role='status' className='rounded-xl border border-amber-400/20 bg-amber-400/5 p-3 text-sm text-amber-100'>{notice}</p> : null}
+    {notice ? <p role='status' className='rounded-xl border border-warning/20 bg-warning/5 p-3 text-sm text-warning-soft'>{notice}</p> : null}
 
     <section className='grid gap-3' aria-label='Video source'>
       <p className='eyebrow'>Source</p>
-      <div className='grid w-full grid-cols-2 rounded-2xl border border-white/10 bg-[#0b0f1a] p-1 sm:inline-grid sm:w-fit' role='tablist' aria-label='Video source'>
+      <div className='grid w-full grid-cols-2 rounded-2xl border border-border bg-sunken p-1 sm:inline-grid sm:w-fit' role='tablist' aria-label='Video source'>
         {([['file', 'Upload file', Upload], ['youtube', 'YouTube link', Link2]] as const).map(([value, label, Icon]) =>
           <button key={value} type='button' role='tab' aria-selected={source === value} disabled={busy || (value === 'youtube' && youtubeEnabled === false)}
             onClick={() => { setSource(value); setError(null); }}
-            className={cn('flex h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 sm:h-9',
-              source === value ? 'bg-violet-500/20 text-white shadow-inner shadow-violet-400/10' : 'text-slate-400 hover:text-white')}>
-            <Icon size={16} aria-hidden />{label}</button>)}
+            className={cn('flex h-11 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-3 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:h-9 sm:px-4',
+              source === value ? 'bg-primary/20 text-foreground ring-1 ring-inset ring-primary/40' : 'text-muted-foreground hover:bg-tint hover:text-foreground')}>
+            <Icon size={16} className='shrink-0' aria-hidden />{label}</button>)}
       </div>
 
       {source === 'youtube' && youtubeEnabled !== false ? <div className='grid gap-3'>
         <label htmlFor={`youtube-url-${formKey}`} className='text-sm font-medium'>Paste a public YouTube link</label>
         <div className='relative'>
-          <Link2 size={18} aria-hidden className='pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500' />
+          <Link2 size={18} aria-hidden className='pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-faint' />
           <input id={`youtube-url-${formKey}`} type='url' inputMode='url' autoComplete='off' autoCapitalize='off'
             autoCorrect='off' spellCheck={false} enterKeyHint='go' value={sourceUrl} disabled={busy}
             onChange={(event) => { setSourceUrl(event.target.value); setError(null); setNotice(null); }}
             placeholder='https://www.youtube.com/watch?v=...'
-            className='h-12 w-full min-w-0 rounded-xl border border-white/10 bg-[#0b0f1a] pl-11 pr-24 text-sm text-slate-100 placeholder:text-slate-600 focus:border-violet-400/60 focus:outline-none focus:ring-2 focus:ring-violet-400/20 md:h-11' />
+            className='field h-12 w-full min-w-0 pl-11 pr-24 text-sm md:h-11' />
           <div className='absolute inset-y-0 right-1 flex items-center'>
             {sourceUrl ? <button type='button' aria-label='Clear link' disabled={busy}
               onClick={() => { setSourceUrl(''); setError(null); }}
-              className='grid h-10 w-10 place-items-center rounded-lg text-slate-400 hover:bg-white/10 hover:text-white'><X size={18} aria-hidden /></button>
+              className='grid h-10 w-10 place-items-center rounded-lg text-muted-foreground hover:bg-tint-strong hover:text-foreground'><X size={18} aria-hidden /></button>
               : canPaste ? <button type='button' onClick={() => void pasteLink()} disabled={busy}
-                className='flex h-10 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-violet-200 hover:bg-violet-500/10'><ClipboardPaste size={15} aria-hidden />Paste</button> : null}
+                className='flex h-10 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold text-primary-soft hover:bg-primary/10'><ClipboardPaste size={15} aria-hidden />Paste</button> : null}
           </div>
         </div>
-        {linkDetected ? <p className='flex items-center gap-1.5 text-xs text-violet-300'><CheckCircle2 size={14} aria-hidden />YouTube video detected.</p>
-          : <p className='text-xs leading-5 text-slate-500'>Private, members-only, age-restricted and live videos can't be imported.</p>}
-        <label className='flex min-h-[44px] cursor-pointer items-center gap-3 rounded-xl border border-white/[.07] bg-white/[.02] px-3 py-2 text-sm text-slate-300'>
-          <input type='checkbox' className='h-5 w-5 shrink-0 accent-violet-500'
+        {linkDetected ? <p className='flex items-center gap-1.5 text-xs text-primary-soft'><CheckCircle2 size={14} aria-hidden />YouTube video detected.</p>
+          : <p className='text-xs leading-5 text-faint'>Private, members-only, age-restricted and live videos can't be imported.</p>}
+        <label className='flex min-h-[44px] cursor-pointer items-center gap-3 rounded-xl border border-border bg-tint-subtle px-3 py-2 text-sm text-soft'>
+          <input type='checkbox' className='h-5 w-5 shrink-0 accent-primary'
             checked={rightsConfirmed} disabled={busy} onChange={(event) => setRightsConfirmed(event.target.checked)} />
           I have the right to process this video.</label>
       </div> : <div className='grid gap-3'>
         <div onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { event.preventDefault(); setDragging(false); }} onDrop={handleDrop}
-          className={cn('rounded-2xl border border-dashed p-5 text-center transition-colors sm:p-7', dragging ? 'border-violet-400 bg-violet-500/10' : 'border-white/15 bg-[#0b0f1a] hover:border-violet-400/50', file && 'hidden sm:block')}>
-          <span className='mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-violet-500/10 text-violet-300'><Upload size={22} aria-hidden /></span>
+          className={cn('rounded-2xl border border-dashed p-5 text-center transition-colors sm:p-7', dragging ? 'border-primary bg-primary/10' : 'border-border-strong bg-sunken hover:border-primary/50', file && 'hidden sm:block')}>
+          <span className='mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-primary/10 text-primary-soft'><Upload size={22} aria-hidden /></span>
           <p className='mt-3 text-sm font-semibold'><span className='fine:hidden'>Choose a video from your phone</span><span className='hidden fine:inline'>Drag and drop your video here</span></p>
-          <p className='mt-1 text-xs text-slate-400'>Gallery or Files · Maximum video length: 2 hours</p>
+          <p className='mt-1 text-xs text-muted-foreground'>Gallery or Files · Maximum video length: 2 hours</p>
           <input ref={inputRef} id='file' name='file' type='file' accept='video/*' className='sr-only' aria-label='Video file' onChange={handleFile} />
           <Button type='button' variant='outline' className='mt-4 h-12 w-full sm:h-10 sm:w-auto' disabled={busy} onClick={() => inputRef.current?.click()}><FolderOpen size={17} aria-hidden /><span className='sm:hidden'>Choose video</span><span className='hidden sm:inline'>Browse files</span></Button>
         </div>
-        {file && <div className='flex min-w-0 items-center gap-3 rounded-2xl border border-violet-400/25 bg-violet-500/[.07] p-3'>
-          <span className='grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-violet-500/15 text-violet-200'><FileVideo size={20} aria-hidden /></span>
+        {file && <div className='flex min-w-0 items-center gap-3 rounded-2xl border border-primary/25 bg-primary/[.07] p-3'>
+          <span className='grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary-soft'><FileVideo size={20} aria-hidden /></span>
           <span className='min-w-0 flex-1'><span className='block truncate text-sm font-medium'>{file.name}</span>
-            <span className='block text-xs text-slate-400'>{formatBytes(file.size)}{fileDuration ? ` · ${clipDuration(fileDuration)}` : ''}</span></span>
+            <span className='block text-xs text-muted-foreground'>{formatBytes(file.size)}{fileDuration ? ` · ${clipDuration(fileDuration)}` : ''}</span></span>
           <button type='button' aria-label='Remove selected file' onClick={clearFile} disabled={busy}
-            className='grid h-11 w-11 shrink-0 place-items-center rounded-xl text-slate-400 hover:bg-white/10 hover:text-white disabled:opacity-40'><X size={18} aria-hidden /></button>
+            className='grid h-11 w-11 shrink-0 place-items-center rounded-xl text-muted-foreground hover:bg-tint-strong hover:text-foreground disabled:opacity-40'><X size={18} aria-hidden /></button>
         </div>}
       </div>}
     </section>
@@ -283,15 +283,15 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
           const selected = settings.template === option.value;
           const Indicator = selected ? CheckCircle2 : Circle;
           return <label key={option.value} data-entry-template={option.value}
-            className={cn('pressable flex min-h-[56px] cursor-pointer items-start gap-3 rounded-2xl border p-3 text-left transition-colors focus-within:ring-2 focus-within:ring-violet-400 sm:block sm:rounded-xl',
-              selected ? 'border-violet-400 bg-violet-500/10' : 'border-white/10 bg-[#0b0f1a] hover:border-white/25')}>
+            className={cn('pressable flex min-h-[56px] cursor-pointer items-start gap-3 rounded-2xl border p-3 text-left transition-colors focus-within:ring-2 focus-within:ring-ring sm:block sm:rounded-xl',
+              selected ? 'border-primary bg-primary/10' : 'border-border bg-sunken hover:border-border-strong')}>
             <input type='radio' className='sr-only' name={`entry-template-${formKey}`} value={option.value}
               checked={selected} onChange={() => update({ template: option.value })} />
-            <Indicator size={20} className={cn('mt-0.5 shrink-0 sm:hidden', selected ? 'text-violet-300' : 'text-slate-600')} aria-hidden />
+            <Indicator size={20} className={cn('mt-0.5 shrink-0 sm:hidden', selected ? 'text-primary-soft' : 'text-faint')} aria-hidden />
             <span className='min-w-0 flex-1'>
-              <span className='flex items-center justify-between gap-2 text-sm font-semibold'>{option.title}
-                <Indicator size={16} className={cn('hidden sm:block', selected ? 'text-violet-300' : 'text-slate-600')} aria-hidden /></span>
-              <span className='mt-0.5 block text-xs leading-5 text-slate-400 sm:mt-1'>{option.description}</span>
+              <span className='flex items-center justify-between gap-2 font-display text-sm font-semibold'>{option.title}
+                <Indicator size={16} className={cn('hidden sm:block', selected ? 'text-primary-soft' : 'text-faint')} aria-hidden /></span>
+              <span className='mt-0.5 block text-xs leading-5 text-muted-foreground sm:mt-1'>{option.description}</span>
             </span>
           </label>;
         })}
@@ -303,18 +303,27 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
       <div className='grid gap-2 sm:grid-cols-2'>
         {([{ value: 'FALLBACK_ONLY', title: 'XeeFree', description: "Fast clip creation using XeeClip's built-in editing intelligence." },
           { value: 'ONLINE', title: 'XeePro', description: 'Advanced AI understanding for stronger moment selection and creative decisions.' }] as const).map((option) =>
-          <label key={option.value} className={cn('cursor-pointer rounded-2xl border p-3 text-sm', settings.aiMode === option.value ? 'border-violet-400 bg-violet-500/10' : 'border-white/10 bg-[#0b0f1a]')}>
-            <input type='radio' className='sr-only' name={`entry-mode-${formKey}`} checked={settings.aiMode === option.value}
+          { const selected = settings.aiMode === option.value;
+          const Indicator = selected ? CheckCircle2 : Circle;
+          return <label key={option.value} data-entry-mode={option.value}
+            className={cn('pressable flex min-h-[56px] cursor-pointer items-start gap-3 rounded-2xl border p-3 text-sm transition-colors focus-within:ring-2 focus-within:ring-ring',
+              selected ? 'border-primary bg-primary/10' : 'border-border bg-sunken hover:border-border-strong')}>
+            <input type='radio' className='sr-only' name={`entry-mode-${formKey}`} checked={selected}
               onChange={() => update({ aiMode: option.value })} />
-            <span className='block font-semibold'>{option.title}</span><span className='mt-1 block text-xs leading-5 text-slate-400'>{option.description}</span>
-          </label>)}
+            <Indicator size={20} className={cn('mt-0.5 shrink-0', selected ? 'text-primary-soft' : 'text-faint')} aria-hidden />
+            <span className='min-w-0 flex-1'>
+              <span className='flex items-center gap-1.5 font-display font-semibold'>{option.title}
+                {option.value === 'ONLINE' ? <Sparkles size={14} className='text-accent' aria-hidden /> : null}</span>
+              <span className='mt-1 block text-xs leading-5 text-muted-foreground'>{option.description}</span>
+            </span>
+          </label>; })}
       </div>
     </fieldset>
 
     <div className='grid gap-2'>
       <div className='flex items-center justify-between gap-4'>
         <span className='text-sm font-medium' id={`entry-count-${formKey}`}>Number of clips</span>
-        <div className='flex items-center gap-1.5 rounded-2xl border border-white/10 bg-[#0b0f1a] p-1' role='group' aria-labelledby={`entry-count-${formKey}`}>
+        <div className='flex items-center gap-1.5 rounded-2xl border border-border bg-sunken p-1' role='group' aria-labelledby={`entry-count-${formKey}`}>
           <Button type='button' size='icon' variant='ghost' className='h-11 w-11 rounded-xl sm:h-9 sm:w-9' aria-label='Fewer clips' disabled={busy || settings.count <= 1}
             onClick={() => update({ count: Math.max(1, settings.count - 1) })}><Minus size={17} /></Button>
           <span className='w-9 text-center text-lg font-semibold tabular-nums' aria-live='polite' data-testid='entry-clip-count'>{settings.count}</span>
@@ -322,60 +331,60 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
             onClick={() => update({ count: Math.min(maxClips, settings.count + 1) })}><Plus size={17} /></Button>
         </div>
       </div>
-      <p className='text-xs leading-5 text-slate-500'><span className='font-medium text-slate-400'>1–{maxClips}{source === 'file' && fileDuration ? ' for this video' : ''}.</span> {CLIP_LIMIT_HINT} You get exactly the number you choose.</p>
+      <p className='text-xs leading-5 text-faint'><span className='font-medium text-muted-foreground'>1–{maxClips}{source === 'file' && fileDuration ? ' for this video' : ''}.</span> {CLIP_LIMIT_HINT} You get exactly the number you choose.</p>
     </div>
 
-    <details className='group rounded-2xl border border-white/10 bg-[#0b0f1a]'>
+    <details className='group rounded-2xl border border-border bg-sunken'>
       <summary className='flex min-h-[48px] cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden'>
-        <SlidersHorizontal size={16} className='shrink-0 text-violet-300' aria-hidden />
+        <SlidersHorizontal size={16} className='shrink-0 text-primary-soft' aria-hidden />
         <span className='shrink-0'>More options</span>
-        <span className='min-w-0 flex-1 truncate font-normal text-slate-500'>· {advancedSummary}</span>
-        <ChevronDown size={16} className='shrink-0 text-slate-400 transition-transform group-open:rotate-180' aria-hidden /></summary>
-      <div className='grid gap-4 border-t border-white/[.06] p-4 sm:grid-cols-3'>
+        <span className='min-w-0 flex-1 truncate font-normal text-faint'>· {advancedSummary}</span>
+        <ChevronDown size={16} className='shrink-0 text-muted-foreground transition-transform group-open:rotate-180' aria-hidden /></summary>
+      <div className='grid gap-4 border-t border-border p-4 sm:grid-cols-3'>
         <label className='grid gap-1.5 text-sm font-medium'>Platform
           <select value={settings.platform} disabled={busy} onChange={(event) => update({ platform: event.target.value as TargetPlatform })}
-            className='h-11 rounded-xl border border-white/10 bg-[#111827] px-3 text-sm font-normal text-slate-100 md:h-10'>
+            className='field h-11 bg-surface px-3 text-sm font-normal md:h-10'>
             {(Object.keys(TARGET_PLATFORM_LABELS) as TargetPlatform[]).map((value) =>
               <option key={value} value={value}>{TARGET_PLATFORM_LABELS[value]}</option>)}
           </select>
         </label>
         <label className='grid gap-1.5 text-sm font-medium'>Clip shape
           <select value={settings.aspectRatio} disabled={busy} onChange={(event) => update({ aspectRatio: event.target.value as OutputAspectRatio })}
-            className='h-11 rounded-xl border border-white/10 bg-[#111827] px-3 text-sm font-normal text-slate-100 md:h-10'>
+            className='field h-11 bg-surface px-3 text-sm font-normal md:h-10'>
             {(['9:16', '16:9', '4:5', '1:1'] as const).map((value) => <option key={value}>{value}</option>)}
           </select>
         </label>
-        <label className='grid gap-1.5 text-sm font-medium sm:col-span-3'>Describe what you want <span className='-mt-1 font-normal text-slate-500'>Optional</span>
+        <label className='grid gap-1.5 text-sm font-medium sm:col-span-3'>Describe what you want <span className='-mt-1 font-normal text-faint'>Optional</span>
           <textarea data-testid='entry-brief' value={settings.brief} disabled={busy} maxLength={1500} rows={2}
             onChange={(event) => update({ brief: event.target.value })}
             placeholder='e.g. "find the funny moments"'
-            className='rounded-xl border border-white/10 bg-[#111827] p-3 text-sm font-normal text-slate-200 placeholder:text-slate-600' />
+            className='field bg-surface p-3 text-sm font-normal' />
         </label>
       </div>
     </details>
 
-    {error ? <div role='alert' className='grid gap-2 rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200'>
+    {error ? <div role='alert' className='grid gap-2 rounded-xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger-soft'>
       <p className='break-words [overflow-wrap:anywhere]'>{error.message}{error.fallback && !error.message.includes(FALLBACK_HINT) ? ` ${FALLBACK_HINT}` : ''}</p>
       {error.fallback ? <Button type='button' size='sm' variant='outline' className='h-10 w-fit' onClick={switchToUpload}>
         <Upload size={14} aria-hidden />Upload file instead</Button> : null}
     </div> : null}
 
-    <div className={cn('grid gap-2', stickyCta && 'sticky bottom-[calc(var(--nav-offset,0px)+12px)] z-20 -mx-4 bg-gradient-to-t from-[#0d111c] via-[#0d111c]/95 to-transparent px-4 pb-1 pt-6 sm:-mx-6 sm:px-6 lg:static lg:mx-0 lg:bg-none lg:p-0')}>
+    <div className={cn('grid gap-2', stickyCta && 'sticky bottom-[calc(var(--nav-offset,0px)+12px)] z-20 -mx-4 bg-gradient-to-t from-surface via-surface/95 to-transparent px-4 pb-1 pt-6 sm:-mx-6 sm:px-6 lg:static lg:mx-0 lg:bg-none lg:p-0')}>
       {uploading ? <div className='grid gap-1.5' role='status' aria-live='polite'>
-        <div className='h-2 w-full overflow-hidden rounded-full bg-white/10'>
-          <div className={cn('h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-all duration-300', uploadProgress == null && 'w-1/3 animate-pulse')}
+        <div className='h-2 w-full overflow-hidden rounded-full bg-tint-strong'>
+          <div className={cn('h-full rounded-full bg-brand-progress transition-all duration-300', uploadProgress == null && 'w-1/3 animate-pulse')}
             style={uploadProgress == null ? undefined : { width: `${Math.max(4, uploadProgress)}%` }} /></div>
-        <div className='flex items-center justify-between gap-2 text-xs text-slate-400'>
+        <div className='flex items-center justify-between gap-2 text-xs text-muted-foreground'>
           <span className='min-w-0 truncate'>{busyLabel}</span>
-          <button type='button' onClick={() => abortRef.current?.abort()} className='h-9 shrink-0 rounded-lg px-3 font-semibold text-slate-200 hover:bg-white/10'>Cancel</button>
+          <button type='button' onClick={() => abortRef.current?.abort()} className='h-9 shrink-0 rounded-lg px-3 font-semibold text-soft hover:bg-tint-strong'>Cancel</button>
         </div>
       </div> : null}
       <Button disabled={busy || !ready || offline} type='submit' className='h-14 w-full rounded-2xl text-base sm:h-12 sm:rounded-xl sm:text-sm'>
         {busy ? <><Loader2 className='animate-spin' size={18} aria-hidden />{busyLabel}</>
           : <><Sparkles size={18} aria-hidden />Generate {settings.count} Clip{settings.count === 1 ? '' : 's'}</>}
       </Button>
-      {offline ? <p className='text-center text-xs text-amber-200/80'>Generation is paused while the processing server is offline.</p>
-        : !ready && !busy ? <p className='text-center text-xs text-slate-500'>{source === 'youtube' ? 'Paste a link and confirm your rights to continue.' : 'Choose a video to continue.'}</p> : null}
+      {offline ? <p className='text-center text-xs text-warning-soft/80'>Generation is paused while the processing server is offline.</p>
+        : !ready && !busy ? <p className='text-center text-xs text-faint'>{source === 'youtube' ? 'Paste a link and confirm your rights to continue.' : 'Choose a video to continue.'}</p> : null}
     </div>
   </form>;
 }

@@ -32,10 +32,10 @@ export function StageSteps({ stage, styleName, className }: {
       const done = index < current || (step === 'READY' && current === index);
       const active = index === current && step !== 'READY';
       return <li key={step} aria-current={active ? 'step' : undefined}
-        className={cn('flex min-w-0 items-center gap-1', index > 0 && 'before:h-px before:w-2 before:shrink-0 before:bg-white/15 sm:before:w-4',
-          active ? 'shrink-0 text-violet-100' : 'text-slate-500', done && 'text-emerald-300/90')}>
+        className={cn('flex min-w-0 items-center gap-1', index > 0 && 'before:h-px before:w-2 before:shrink-0 before:bg-tint-active sm:before:w-4',
+          active ? 'shrink-0 text-foreground' : 'text-faint', done && 'text-success/90')}>
         <span className={cn('grid h-5 w-5 shrink-0 place-items-center rounded-full border',
-          active ? 'border-violet-400/60 bg-violet-500/20' : done ? 'border-emerald-400/40 bg-emerald-400/10' : 'border-white/10')}>
+          active ? 'border-secondary/60 bg-secondary/15 text-secondary' : done ? 'border-success/40 bg-success/10' : 'border-border')}>
           {active ? <Loader2 size={11} className='animate-spin' aria-hidden /> : done ? <Check size={11} aria-hidden /> : <span className='h-1 w-1 rounded-full bg-current' />}
         </span>
         <span className={cn('truncate', !active && 'hidden sm:inline')}>{labels[step]}</span>

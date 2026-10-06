@@ -21,11 +21,11 @@ export function MobileDisclosure({ title, summary, children, defaultOpen = false
   const panelId = useId();
   return <div className={cn('grid min-w-0 gap-6', className)}>
     <button type='button' aria-expanded={open} aria-controls={panelId} onClick={() => setOpen((value) => !value)}
-      className='flex min-h-[48px] w-full min-w-0 items-center gap-2 rounded-2xl border border-white/10 bg-[#111827] px-4 py-3 text-left text-sm font-medium md:hidden'>
-      <SlidersHorizontal size={16} className='shrink-0 text-violet-300' aria-hidden />
+      className='flex min-h-[48px] w-full min-w-0 items-center gap-2 rounded-2xl border border-border bg-surface px-4 py-3 text-left text-sm font-medium md:hidden'>
+      <SlidersHorizontal size={16} className='shrink-0 text-primary-soft' aria-hidden />
       <span className='shrink-0'>{title}</span>
-      {summary ? <span className='min-w-0 flex-1 truncate font-normal text-slate-500'>· {summary}</span> : <span className='flex-1' />}
-      <ChevronDown size={16} className={cn('shrink-0 text-slate-400 transition-transform', open && 'rotate-180')} aria-hidden />
+      {summary ? <span className='min-w-0 flex-1 truncate font-normal text-faint'>· {summary}</span> : <span className='flex-1' />}
+      <ChevronDown size={16} className={cn('shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} aria-hidden />
     </button>
     <div id={panelId} className={cn('grid min-w-0 content-start gap-6', !open && 'hidden md:grid')}>{children}</div>
   </div>;

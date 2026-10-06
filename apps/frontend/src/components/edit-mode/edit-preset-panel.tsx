@@ -54,70 +54,70 @@ export function EditPresetPanel({ projectId, revision, style, disabled, hasSourc
     } finally { setBusy(null); }
   };
 
-  return <section className='rounded-2xl border border-violet-300/20 bg-[#0d111c] p-4'>
+  return <section className='rounded-2xl border border-primary/20 bg-surface p-4'>
     <div className='flex items-center gap-2'>
-      <Wand2 size={16} className='text-violet-300' />
+      <Wand2 size={16} className='text-primary-soft' />
       <h2 className='text-sm font-semibold'>Preset</h2>
-      {active && active === presetId && <span className='ml-auto rounded-full bg-violet-400/10 px-2 py-0.5 text-[10px] font-semibold text-violet-200'>Applied</span>}
+      {active && active === presetId && <span className='ml-auto rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary-soft'>Applied</span>}
     </div>
 
-    <label className='mt-3 block text-[10px] text-slate-500'>Preset
+    <label className='mt-3 block text-[10px] text-faint'>Preset
       <select value={presetId} disabled={locked}
         onChange={(event) => { setPresetId(event.target.value as EditPresetId); setProposal(null); }}
-        className='mt-1 w-full rounded-lg border border-white/10 bg-black/40 px-2 py-2 text-xs text-slate-100 disabled:opacity-40'>
+        className='mt-1 w-full rounded-lg border border-border bg-inset px-2 py-2 text-xs text-foreground disabled:opacity-40'>
         {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.displayName}</option>)}
       </select>
     </label>
-    {selected && <p className='mt-2 text-[11px] leading-relaxed text-slate-400'>{selected.description}</p>}
-    {!hasSource && <p className='mt-2 text-[11px] text-amber-200'>Attach a source video to use presets.</p>}
+    {selected && <p className='mt-2 text-[11px] leading-relaxed text-muted-foreground'>{selected.description}</p>}
+    {!hasSource && <p className='mt-2 text-[11px] text-warning-soft'>Attach a source video to use presets.</p>}
 
     <div className='mt-3 flex gap-2'>
       <button onClick={() => void preview()} disabled={locked}
-        className='flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-white/10 px-3 py-2 text-xs font-semibold disabled:opacity-40'>
+        className='flex flex-1 items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-xs font-semibold disabled:opacity-40'>
         {busy === 'preview' ? <LoaderCircle size={13} className='animate-spin' /> : <Sparkles size={13} />}
         Preview changes
       </button>
       <button onClick={() => void apply()} disabled={locked || !proposal}
-        className='flex flex-1 items-center justify-center rounded-xl bg-violet-400 px-3 py-2 text-xs font-bold text-slate-950 disabled:cursor-not-allowed disabled:opacity-40'>
+        className='flex flex-1 items-center justify-center rounded-xl btn-primary px-3 py-2 text-xs font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40'>
         {busy === 'apply' ? <LoaderCircle size={13} className='animate-spin' /> : 'Apply'}
       </button>
     </div>
 
-    {proposal && <div className='mt-4 grid gap-3 rounded-xl border border-white/10 bg-black/30 p-3'>
+    {proposal && <div className='mt-4 grid gap-3 rounded-xl border border-border bg-inset p-3'>
       <div>
-        <p className='text-xs font-semibold text-slate-100'>{proposal.displayName}</p>
-        <p className='mt-1 text-[11px] leading-relaxed text-slate-400'>{proposal.summary}</p>
+        <p className='text-xs font-semibold text-foreground'>{proposal.displayName}</p>
+        <p className='mt-1 text-[11px] leading-relaxed text-muted-foreground'>{proposal.summary}</p>
       </div>
       <div>
-        <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-500'>Planned changes</p>
+        <p className='text-[10px] font-semibold uppercase tracking-wider text-faint'>Planned changes</p>
         <ul className='mt-1 grid gap-1'>{proposal.plannedChanges.map((change, index) =>
-          <li key={index} className='text-[11px] leading-relaxed text-slate-300'>· {change}</li>)}
+          <li key={index} className='text-[11px] leading-relaxed text-soft'>· {change}</li>)}
         </ul>
       </div>
       {proposal.warnings.length > 0 && <div>
-        <p className='flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-amber-300'>
+        <p className='flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-warning'>
           <AlertTriangle size={11} />Notes
         </p>
         <ul className='mt-1 grid gap-1'>{proposal.warnings.map((warning, index) =>
-          <li key={index} className='text-[11px] leading-relaxed text-amber-200/80'>· {warning}</li>)}
+          <li key={index} className='text-[11px] leading-relaxed text-warning-soft/80'>· {warning}</li>)}
         </ul>
       </div>}
       <div className='flex gap-2'>
         <button onClick={() => void apply()} disabled={locked}
-          className='flex-1 rounded-lg bg-violet-400 px-3 py-1.5 text-[11px] font-bold text-slate-950 disabled:opacity-40'>Apply</button>
+          className='flex-1 rounded-lg btn-primary px-3 py-1.5 text-[11px] font-bold text-primary-foreground disabled:opacity-40'>Apply</button>
         <button onClick={() => setProposal(null)} disabled={!!busy}
-          className='flex-1 rounded-lg border border-white/10 px-3 py-1.5 text-[11px] font-semibold disabled:opacity-40'>Cancel</button>
+          className='flex-1 rounded-lg border border-border px-3 py-1.5 text-[11px] font-semibold disabled:opacity-40'>Cancel</button>
       </div>
     </div>}
 
-    {style && <dl className='mt-4 grid gap-1 border-t border-white/5 pt-3'>
+    {style && <dl className='mt-4 grid gap-1 border-t border-border pt-3'>
       {([['Aspect', style.aspectRatio], ['Subtitles', style.subtitlePolicy],
         ['Framing', style.reframePolicy], ['Zoom', style.zoomPolicy],
         ['Grading', style.gradingPolicy], ['Music', style.musicPolicy],
         ['Hook', style.hookText ?? style.hookPolicy]] as const).map(([label, value]) =>
         <div key={label} className='flex justify-between gap-3 text-[10px]'>
-          <dt className='text-slate-600'>{label}</dt>
-          <dd className='truncate text-right text-slate-400'>{String(value)}</dd>
+          <dt className='text-faint'>{label}</dt>
+          <dd className='truncate text-right text-muted-foreground'>{String(value)}</dd>
         </div>)}
     </dl>}
   </section>;

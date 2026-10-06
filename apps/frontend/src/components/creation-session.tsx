@@ -28,24 +28,24 @@ export function CreationSession({ initialProject }: { initialProject: Project })
   const video = project.videos[0];
   const job = video?.processingJobs?.[0];
   const pendingImport = imports.find((item) => item.status !== 'READY');
-  return <div className='grid min-w-0 gap-5'>
+  return <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-5'>
     {video ? <>
-      <div className='rounded-2xl border border-white/[.08] bg-[#0d111c] p-4 sm:p-5'>
+      <div className='rounded-2xl border border-border bg-surface p-4 sm:p-5'>
         <p className='truncate text-sm font-semibold'>{video.originalName}</p>
-        <p className='mt-1 text-sm text-slate-400'>
+        <p className='mt-1 text-sm text-muted-foreground'>
           {job?.status === 'COMPLETED' ? 'Your video is ready.' : job?.status === 'FAILED' ? 'Something went wrong.' : analysisProgressLabel(video.processingStages)}
         </p>
-        {job?.status !== 'COMPLETED' && job?.status !== 'FAILED' ? <div className='mt-3 h-1.5 overflow-hidden rounded-full bg-white/10'><div className='h-full rounded-full bg-violet-400 transition-all' style={{ width: `${Math.max(4, job?.progress ?? 0)}%` }} /></div> : null}
-        {job?.status === 'FAILED' && job.retryable !== false ? <button className='mt-3 rounded-xl border border-white/10 px-4 py-2 text-sm font-semibold' disabled={retrying} onClick={() => { setRetrying(true); void retryVideo(video.id).catch(() => setError('Could not try again.')).finally(() => setRetrying(false)); }}>{retrying ? 'Trying again…' : 'Try again'}</button> : null}
+        {job?.status !== 'COMPLETED' && job?.status !== 'FAILED' ? <div className='mt-3 h-1.5 overflow-hidden rounded-full bg-tint-strong'><div className='h-full rounded-full bg-brand-progress transition-all' style={{ width: `${Math.max(4, job?.progress ?? 0)}%` }} /></div> : null}
+        {job?.status === 'FAILED' && job.retryable !== false ? <button className='mt-3 rounded-xl border border-border px-4 py-2 text-sm font-semibold' disabled={retrying} onClick={() => { setRetrying(true); void retryVideo(video.id).catch(() => setError('Could not try again.')).finally(() => setRetrying(false)); }}>{retrying ? 'Trying again…' : 'Try again'}</button> : null}
       </div>
-      {error ? <p role='alert' className='text-sm text-red-200'>{error}</p> : null}
+      {error ? <p role='alert' className='text-sm text-danger-soft'>{error}</p> : null}
       <ClipCreationPanel video={video} />
-      <Link href='/history' className='w-fit text-sm font-semibold text-violet-300 hover:text-violet-200'>View History →</Link>
-    </> : pendingImport ? <div className='grid gap-4 rounded-2xl border border-white/[.08] bg-[#0d111c] p-5'>
+      <Link href='/history' className='w-fit text-sm font-semibold text-primary-soft hover:text-primary-soft'>View History →</Link>
+    </> : pendingImport ? <div className='grid gap-4 rounded-2xl border border-border bg-surface p-5'>
       {pendingImport.status === 'IMPORT_FAILED' || pendingImport.status === 'CANCELLED' ? <>
-        <p role='alert' className='text-sm text-amber-200'>This YouTube video could not be imported. Upload the video file to continue.</p>
+        <p role='alert' className='text-sm text-warning-soft'>This YouTube video could not be imported. Upload the video file to continue.</p>
         <UploadVideoForm projectId={project.id} initialSource='file' initialSettings={settingsFromImport(pendingImport)} showHeading={false} />
-      </> : <p role='status' className='flex items-center gap-3 text-sm text-slate-300'><Loader2 size={18} className='animate-spin text-violet-300' />{importProgressLabel(pendingImport)}</p>}
-    </div> : <div role='status' className='flex items-center gap-3 rounded-2xl border border-white/[.08] bg-[#0d111c] p-5 text-sm text-slate-300'><Loader2 size={18} className='animate-spin text-violet-300' />Preparing your video…</div>}
+      </> : <p role='status' className='flex items-center gap-3 text-sm text-soft'><Loader2 size={18} className='animate-spin text-secondary' />{importProgressLabel(pendingImport)}</p>}
+    </div> : <div role='status' className='flex items-center gap-3 rounded-2xl border border-border bg-surface p-5 text-sm text-soft'><Loader2 size={18} className='animate-spin text-secondary' />Preparing your video…</div>}
   </div>;
 }

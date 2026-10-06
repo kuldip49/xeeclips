@@ -17,13 +17,13 @@ export function DeveloperDiagnostics({ video, visualAnalysisEnabled }: {
   visualAnalysisEnabled: boolean;
 }) {
   return (
-    <div className='grid gap-2 border-t border-white/[.07] pt-4'>
-      <p className='mb-1 text-xs font-semibold uppercase tracking-wider text-slate-500'>Developer diagnostics</p>
+    <div className='grid gap-2 border-t border-border pt-4'>
+      <p className='mb-1 text-xs font-semibold uppercase tracking-wider text-faint'>Developer diagnostics</p>
       <WorkspaceAccordion title='Processing details' summary={`${video.processingStages?.filter((stage) => stage.status === 'COMPLETED').length ?? 0} stages complete`} icon={Activity}>
         <ProcessingPipeline video={video} visualAnalysisEnabled={visualAnalysisEnabled} />
       </WorkspaceAccordion>
       <WorkspaceAccordion title='Media details' summary={video.duration != null ? `${video.duration.toFixed(1)} sec` : 'Pending'} icon={SlidersHorizontal}>
-        <div className='grid grid-cols-2 gap-3 text-xs text-slate-400 sm:grid-cols-4'>
+        <div className='grid grid-cols-2 gap-3 text-xs text-muted-foreground sm:grid-cols-4'>
           <span>{video.duration != null ? video.duration.toFixed(1) + ' sec' : 'Duration pending'}</span>
           <span>{video.width && video.height ? video.width + 'x' + video.height : 'Resolution pending'}</span>
           <span>{video.fps != null ? video.fps.toFixed(2) + ' fps' : 'FPS pending'}</span>

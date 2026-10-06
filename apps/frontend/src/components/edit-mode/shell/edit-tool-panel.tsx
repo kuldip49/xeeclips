@@ -41,20 +41,20 @@ function AssetSection({ role, label, assets, busy, disabled, onUpload, onAdd, on
         event.target.value = '';
       }} />
     <button disabled={busy || disabled} onClick={() => input.current?.click()}
-      className='flex items-center justify-center gap-1.5 rounded-lg border border-white/10 py-2 text-[11px] font-medium text-slate-200 hover:bg-white/5 disabled:opacity-30'>
+      className='flex items-center justify-center gap-1.5 rounded-lg border border-border py-2 text-[11px] font-medium text-soft hover:bg-tint disabled:opacity-30'>
       <Plus size={12} />{label}
     </button>
-    {list.map((asset) => <div key={asset.id} className='min-w-0 rounded-lg bg-white/[.035] p-2'>
+    {list.map((asset) => <div key={asset.id} className='min-w-0 rounded-lg bg-tint-subtle p-2'>
       <div className='flex items-center gap-2'>
-        {role === 'AUDIO' ? <FileAudio size={13} className='shrink-0 text-emerald-300' />
-          : <FileImage size={13} className='shrink-0 text-cyan-300' />}
+        {role === 'AUDIO' ? <FileAudio size={13} className='shrink-0 text-success' />
+          : <FileImage size={13} className='shrink-0 text-secondary' />}
         <span className='min-w-0 flex-1 truncate text-[11px]'>{asset.originalName}</span>
         <button aria-label={`Delete ${asset.originalName}`} disabled={busy}
-          onClick={() => onDelete(asset)} className='p-0.5 text-slate-500 hover:text-red-300'>
+          onClick={() => onDelete(asset)} className='p-0.5 text-faint hover:text-danger'>
           <Trash2 size={11} /></button>
       </div>
       <button disabled={busy || disabled} onClick={() => onAdd(asset)}
-        className='mt-1.5 w-full rounded-md bg-white/[.06] py-1 text-[10px] font-semibold hover:bg-white/10 disabled:opacity-30'>
+        className='mt-1.5 w-full rounded-md bg-tint py-1 text-[10px] font-semibold hover:bg-tint-strong disabled:opacity-30'>
         Add to timeline</button>
     </div>)}
   </div>;
@@ -104,11 +104,11 @@ export type EditToolPanelProps = {
 export function EditToolPanel(props: EditToolPanelProps) {
   const definition = editTool(props.tool);
   return <aside aria-label={`${definition.label} panel`}
-    className='flex w-[268px] shrink-0 flex-col border-r border-white/10 bg-[#0b0f1a] max-md:hidden max-lg:absolute max-lg:bottom-0 max-lg:left-[72px] max-lg:top-0 max-lg:z-30'>
-    <div className='flex h-10 shrink-0 items-center justify-between border-b border-white/10 px-3'>
-      <h2 className='text-xs font-semibold uppercase tracking-wider text-slate-300'>{definition.label}</h2>
+    className='flex w-[268px] shrink-0 flex-col border-r border-border bg-sunken max-md:hidden max-lg:absolute max-lg:bottom-0 max-lg:left-[72px] max-lg:top-0 max-lg:z-30'>
+    <div className='flex h-10 shrink-0 items-center justify-between border-b border-border px-3'>
+      <h2 className='text-xs font-semibold uppercase tracking-wider text-soft'>{definition.label}</h2>
       <button onClick={props.onClose} aria-label={`Close ${definition.label} panel`}
-        className='rounded p-1 text-slate-500 hover:bg-white/10 hover:text-slate-200'><X size={14} /></button>
+        className='rounded p-1 text-faint hover:bg-tint-strong hover:text-soft'><X size={14} /></button>
     </div>
     <div className='min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3'>
       <EditToolPanelBody {...props} />
@@ -168,12 +168,12 @@ export function EditToolPanelBody({ tool, assets, elements, busy, hasSource, sel
 
       {tool === 'OVERLAY' && <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4'>
         <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>
-          <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-500'>Logo</p>
+          <p className='text-[10px] font-semibold uppercase tracking-wider text-faint'>Logo</p>
           <AssetSection role='LOGO' label='Upload logo' assets={assets} busy={busy}
             disabled={!hasSource} onUpload={onUploadAsset} onAdd={onAddAsset} onDelete={onDeleteAsset} />
         </div>
         <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2'>
-          <p className='text-[10px] font-semibold uppercase tracking-wider text-slate-500'>Images</p>
+          <p className='text-[10px] font-semibold uppercase tracking-wider text-faint'>Images</p>
           <AssetSection role='IMAGE' label='Upload image' assets={assets} busy={busy}
             disabled={!hasSource} onUpload={onUploadAsset} onAdd={onAddAsset} onDelete={onDeleteAsset} />
         </div>

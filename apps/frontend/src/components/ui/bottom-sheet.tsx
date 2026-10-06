@@ -26,6 +26,8 @@ export type BottomSheetProps = {
   tone?: 'default' | 'media';
   className?: string;
   bodyClassName?: string;
+  /** `alertdialog` for confirmations that interrupt the user (e.g. deleting). */
+  role?: 'dialog' | 'alertdialog';
 };
 
 /**
@@ -37,7 +39,7 @@ export type BottomSheetProps = {
  * field and its button stay visible. From the `md` breakpoint up it is a centred dialog.
  */
 export function BottomSheet({ open, onClose, title, hideTitle = false, description, children, footer,
-  size = 'auto', desktopWidth = 'md:max-w-lg', tone = 'default', className, bodyClassName }: BottomSheetProps) {
+  size = 'auto', desktopWidth = 'md:max-w-lg', tone = 'default', className, bodyClassName, role = 'dialog' }: BottomSheetProps) {
   const [mounted, setMounted] = useState(false);
   const titleId = useId();
   const descriptionId = useId();
@@ -82,14 +84,14 @@ export function BottomSheet({ open, onClose, title, hideTitle = false, descripti
   return createPortal(<AnimatePresence>
     {open && <div className='fixed inset-0 z-[80] flex items-end justify-center md:items-center md:p-6'
       style={phone && viewport.keyboardInset ? { bottom: viewport.keyboardInset } : undefined}>
-      <motion.div aria-hidden className={cn('absolute inset-0', tone === 'media' ? 'bg-black/90' : 'bg-black/65 backdrop-blur-[2px]')}
+      <motion.div aria-hidden className={cn('absolute inset-0', tone === 'media' ? 'bg-black/90' : 'bg-scrim backdrop-blur-[2px]')}
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: .18 }}
         onClick={onClose} />
-      <motion.div ref={panel} role='dialog' aria-modal='true' aria-labelledby={titleId}
+      <motion.div ref={panel} role={role} aria-modal='true' aria-labelledby={titleId}
         aria-describedby={description ? descriptionId : undefined} tabIndex={-1}
         data-testid='bottom-sheet'
-        className={cn('relative flex w-full min-w-0 flex-col overflow-hidden border-white/10 outline-none',
-          tone === 'media' ? 'bg-[#05070d]' : 'bg-[#0f1422]',
+        className={cn('relative flex w-full min-w-0 flex-col overflow-hidden border-border outline-none',
+          tone === 'media' ? 'bg-stage' : 'bg-elevated shadow-sheet',
           size === 'full' ? 'rounded-none md:rounded-2xl' : 'rounded-t-[22px] md:rounded-2xl',
           'border-t md:border', desktopWidth, className)}
         style={{ maxHeight, ...(size === 'full' && phone ? { height: visible } : {}),
@@ -102,21 +104,21 @@ export function BottomSheet({ open, onClose, title, hideTitle = false, descripti
         dragConstraints={{ top: 0, bottom: 0 }} dragElastic={{ top: 0, bottom: .7 }} onDragEnd={dragEnd}>
         <div className={cn('shrink-0 touch-none select-none', size === 'full' && phone ? 'pt-safe' : '')}
           onPointerDown={(event) => { if (phone) drag.start(event); }}>
-          {size !== 'full' && <div aria-hidden className='mx-auto mt-2.5 h-1.5 w-10 rounded-full bg-white/20 md:hidden' />}
+          {size !== 'full' && <div aria-hidden className='mx-auto mt-2.5 h-1.5 w-10 rounded-full bg-tint-active md:hidden' />}
           <div className={cn('flex min-h-[52px] items-center gap-2 pl-4 pr-1.5', hideTitle && 'min-h-[48px]')}>
             <div className={cn('min-w-0 flex-1', hideTitle && 'sr-only')}>
               <h2 id={titleId} className='truncate text-base font-semibold tracking-tight'>{title}</h2>
-              {description ? <p id={descriptionId} className='truncate text-xs text-slate-400'>{description}</p> : null}
+              {description ? <p id={descriptionId} className='truncate text-xs text-muted-foreground'>{description}</p> : null}
             </div>
             <button type='button' onClick={onClose} aria-label='Close'
               onPointerDown={(event) => event.stopPropagation()}
-              className='ml-auto grid h-11 w-11 shrink-0 place-items-center rounded-full text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400'>
+              className='ml-auto grid h-11 w-11 shrink-0 place-items-center rounded-full text-soft transition-colors hover:bg-tint-strong hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'>
               <X size={20} aria-hidden /></button>
           </div>
         </div>
         <div className={cn('min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4',
           !footer && 'pb-[max(1rem,var(--safe-bottom))]', bodyClassName)}>{children}</div>
-        {footer ? <div className='shrink-0 border-t border-white/[.07] bg-inherit px-4 pt-3 pb-[max(.75rem,var(--safe-bottom))]'>
+        {footer ? <div className='shrink-0 border-t border-border bg-inherit px-4 pt-3 pb-[max(.75rem,var(--safe-bottom))]'>
           {footer}</div> : null}
       </motion.div>
     </div>}

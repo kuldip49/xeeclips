@@ -5,6 +5,7 @@ import { isAutomaticLook } from '@/lib/automatic-looks';
 import { useRouter } from 'next/navigation';
 import { Bot, ChevronDown, Download, Expand, Loader2, Minus, Pencil, Plus, Sparkles, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { GenerationSetup, type GenerationChoices } from '@/components/generation/generation-setup';
 import { ClipPlayerSheet, LazyVideo } from '@/components/generation/lazy-video';
 import { StageSteps, stageFromAnalysisLabel } from '@/components/generation/stage-steps';
@@ -56,7 +57,7 @@ function CardSection({ title, copyValue, children }: {
 }) {
   return <section className='grid gap-1.5'>
     <div className='flex items-center justify-between gap-2'>
-      <h5 className='text-xs font-semibold uppercase tracking-wider text-slate-400'>{title}</h5>
+      <h5 className='text-xs font-semibold uppercase tracking-wider text-muted-foreground'>{title}</h5>
       <CopyButton label='Copy' value={copyValue} />
     </div>
     {children}
@@ -114,11 +115,11 @@ function Automatic2Pending({ clip }: { clip: ClipCard }) {
         {hookEmphasisRuns(clip.hook, A2_HOOK_TEXT, [A2_HOOK_HIGHLIGHT]).map((run, index) =>
           <span key={index} style={{ color: run.color }}>{run.text}</span>)}</span>
     </div>
-    <div className='absolute left-0 grid w-full place-items-center bg-white/[.04]'
+    <div className='absolute left-0 grid w-full place-items-center bg-tint'
       style={{ top: `${A2_MEDIA.top * 100}%`, height: `${A2_MEDIA.height * 100}%` }}>
-      <span className='flex flex-col items-center gap-2 text-center text-xs text-slate-300'>
-        <Loader2 className='animate-spin text-violet-300' size={22} aria-hidden />{stage}
-        <span className='text-[11px] text-slate-500'>The finished clip appears here automatically.</span>
+      <span className='flex flex-col items-center gap-2 text-center text-xs text-soft'>
+        <Loader2 className='animate-spin text-secondary' size={22} aria-hidden />{stage}
+        <span className='text-[11px] text-faint'>The finished clip appears here automatically.</span>
       </span>
     </div>
   </div>;
@@ -130,6 +131,7 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
   const [editError, setEditError] = useState<string | null>(null);
   const [retryingStyle, setRetryingStyle] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [playerOpen, setPlayerOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const styled = STYLE_READY_STATUSES.has(clip.style?.status ?? '') &&
@@ -146,9 +148,9 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
   const paragraphs = clip.synopsis.split(/\n\s*\n/u).map((part) => part.trim()).filter(Boolean);
   const styleBusy = ['STYLE_APPLYING', 'STYLE_READY', 'STYLING', 'RENDERING'].includes(clip.style?.status ?? '');
   const playable = !styleFailed && !styleBlocked;
-  const status = styleFailed ? { label: 'Style failed', tone: 'border-amber-400/30 bg-amber-400/10 text-amber-200' }
-    : styleBlocked || styleBusy ? { label: 'Processing', tone: 'border-violet-400/30 bg-violet-500/10 text-violet-200' }
-      : { label: 'Ready', tone: 'border-emerald-400/25 bg-emerald-400/10 text-emerald-200' };
+  const status = styleFailed ? { label: 'Style failed', tone: 'border-warning/30 bg-warning/10 text-warning-soft' }
+    : styleBlocked || styleBusy ? { label: 'Processing', tone: 'border-secondary/30 bg-secondary/10 text-secondary-soft' }
+      : { label: 'Ready', tone: 'border-success/25 bg-success/10 text-success-soft' };
   async function open(target: 'EDIT' | 'AI') {
     if (!clip.isEditable || opening) return;
     setOpening(target);
@@ -162,10 +164,10 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
     }
   }
   const action = 'h-11 w-full rounded-xl text-sm md:h-10';
-  return <article data-testid='clip-result' className='flex min-w-0 flex-col overflow-hidden rounded-[20px] border border-white/[.08] bg-[#111827]'>
-    <div className='bg-[#090c15] p-2'>
+  return <article data-testid='clip-result' className='flex min-w-0 flex-col overflow-hidden rounded-[20px] border border-border bg-surface shadow-card transition-colors hover:border-border-strong'>
+    <div className='bg-background p-2'>
       {styleFailed
-        ? <div className='mx-auto grid aspect-[9/16] max-h-[72svh] w-full max-w-[calc(72svh*9/16)] place-items-center rounded-xl bg-black px-6 text-center text-sm text-slate-400 md:max-h-[560px] md:max-w-[315px]'>
+        ? <div className='mx-auto grid aspect-[9/16] max-h-[72svh] w-full max-w-[calc(72svh*9/16)] place-items-center rounded-xl bg-black px-6 text-center text-sm text-muted-foreground md:max-h-[560px] md:max-w-[315px]'>
           StyleOne could not be applied. Try again when the clip is ready.
         </div>
         : styleBlocked ? <Automatic2Pending clip={clip} />
@@ -173,10 +175,10 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
     </div>
     <div className='flex flex-1 flex-col gap-4 p-4'>
       <div className='flex min-w-0 items-center gap-2'>
-        <p className='text-xs font-semibold uppercase tracking-wider text-slate-400'>Clip {clip.position}</p>
-        {clip.durationSec ? <span className='text-xs tabular-nums text-slate-500'>· {clipDuration(clip.durationSec)}</span> : null}
+        <p className='font-display text-xs font-semibold uppercase tracking-wider text-muted-foreground'>Clip {clip.position}</p>
+        {clip.durationSec ? <span className='text-xs tabular-nums text-faint'>· {clipDuration(clip.durationSec)}</span> : null}
         <span className={cn('rounded-full border px-2 py-0.5 text-[11px] font-medium', status.tone)}>{status.label}</span>
-        <Button type='button' size='icon' variant='ghost' className='ml-auto h-10 w-10 shrink-0 rounded-xl text-slate-300'
+        <Button type='button' size='icon' variant='ghost' className='ml-auto h-10 w-10 shrink-0 rounded-xl text-soft'
           disabled={!playable} aria-label={`Open clip ${clip.position} full screen`} onClick={() => setPlayerOpen(true)}>
           <Expand size={17} aria-hidden /></Button>
       </div>
@@ -195,15 +197,18 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
             <a href={`${src}${src.includes('?') ? '&' : '?'}download=1`} download aria-label={`Export clip ${clip.position}`}><Download size={15} />Export</a>
           </Button>}
       </div>
-      <Button type='button' variant='ghost' className='h-10 w-fit justify-start px-2 text-red-200 hover:bg-red-400/10'
-        disabled={deleting || styleBusy} onClick={() => {
-          if (!window.confirm('Delete this clip?\n\nThis removes the clip from your history and cannot be undone.')) return;
+      <Button type='button' variant='ghost' className='h-10 w-fit justify-start px-2 text-danger-soft hover:bg-danger/10'
+        disabled={deleting || styleBusy} onClick={() => setConfirmDelete(true)}><Trash2 size={15} />{deleting ? 'Deleting…' : 'Delete'}</Button>
+      <ConfirmDialog open={confirmDelete} title='Delete this clip?' busy={deleting}
+        description='This removes the clip from your history and cannot be undone.' confirmLabel='Delete' busyLabel='Deleting…'
+        onCancel={() => setConfirmDelete(false)} onConfirm={() => {
           setDeleting(true); setEditError(null);
-          void deleteHistoryClip(clip.id).then(onRetry).catch(() => setEditError('This clip could not be deleted. Try again.'))
+          void deleteHistoryClip(clip.id).then(() => { setConfirmDelete(false); return onRetry(); })
+            .catch(() => { setConfirmDelete(false); setEditError('This clip could not be deleted. Try again.'); })
             .finally(() => setDeleting(false));
-        }}><Trash2 size={15} />{deleting ? 'Deleting…' : 'Delete'}</Button>
+        }} />
       {clip.style && !STYLE_READY_STATUSES.has(clip.style.status) ? <div className='flex flex-wrap items-center gap-2'>
-        <p role='status' className={`flex items-center gap-2 text-xs ${['FAILED', 'STYLE_FAILED'].includes(clip.style.status) ? 'text-amber-300' : 'text-slate-400'}`}>
+        <p role='status' className={`flex items-center gap-2 text-xs ${['FAILED', 'STYLE_FAILED'].includes(clip.style.status) ? 'text-warning' : 'text-muted-foreground'}`}>
           {styleBusy ? <Loader2 className='animate-spin' size={12} /> : null}{STYLE_STATUS[clip.style.status] ?? 'Applying style…'}</p>
         {['FAILED', 'STYLE_FAILED'].includes(clip.style.status) ? <Button type='button' size='sm' variant='outline' className='h-10'
           disabled={retryingStyle} onClick={() => { setRetryingStyle(true); setEditError(null);
@@ -212,28 +217,28 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
               .finally(() => setRetryingStyle(false)); }}>
           {retryingStyle ? <Loader2 className='animate-spin' size={12} /> : null}Retry styling</Button> : null}
       </div> : null}
-      {editError ? <p className='break-words text-xs text-red-400 [overflow-wrap:anywhere]' role='alert'>{editError}</p> : null}
+      {editError ? <p className='break-words text-xs text-danger [overflow-wrap:anywhere]' role='alert'>{editError}</p> : null}
       <CardSection title='Hook' copyValue={clip.hook}>
-        <p className='text-lg font-semibold leading-snug'>{clip.hook}</p>
+        <p className='font-display text-lg font-semibold leading-snug'>{clip.hook}</p>
       </CardSection>
       {/* Phones: the long copy waits behind one tap; desktop shows it as before. */}
       <button type='button' aria-expanded={detailsOpen} onClick={() => setDetailsOpen((value) => !value)}
-        className='flex min-h-[44px] items-center justify-between gap-2 rounded-xl border border-white/[.08] px-3 text-sm font-medium text-slate-300 md:hidden'>
+        className='flex min-h-[44px] items-center justify-between gap-2 rounded-xl border border-border px-3 text-sm font-medium text-soft md:hidden'>
         Synopsis, caption & hashtags<ChevronDown size={16} className={cn('transition-transform', detailsOpen && 'rotate-180')} aria-hidden /></button>
       <div className={cn('grid gap-4', !detailsOpen && 'hidden md:grid')}>
         <CardSection title='Synopsis' copyValue={paragraphs.join('\n\n')}>
-          <div className='space-y-2 text-sm leading-relaxed text-slate-300'>
+          <div className='space-y-2 text-sm leading-relaxed text-soft'>
             {paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
           </div>
         </CardSection>
         <CardSection title='Caption' copyValue={clip.caption}>
-          <p className='whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-300'>{clip.caption}</p>
+          <p className='whitespace-pre-wrap break-words text-sm leading-relaxed text-soft'>{clip.caption}</p>
         </CardSection>
         <CardSection title='Hashtags' copyValue={clip.hashtags.join(' ')}>
-          <p className='break-words text-sm text-violet-300'>{clip.hashtags.join(' ')}</p>
+          <p className='break-words text-sm text-primary-soft'>{clip.hashtags.join(' ')}</p>
         </CardSection>
       </div>
-      <p className='mt-auto border-t border-white/[.06] pt-3 text-xs text-slate-500'>{clip.aiModeUsed === 'Online' ? 'XeePro' : 'XeeFree'}</p>
+      <p className='mt-auto border-t border-border pt-3 text-xs text-faint'>{clip.aiModeUsed === 'Online' ? 'XeePro' : 'XeeFree'}</p>
     </div>
     {playable ? <ClipPlayerSheet open={playerOpen} onClose={() => setPlayerOpen(false)} src={src} poster={poster}
       title={`Clip ${clip.position}`} /> : null}
@@ -376,27 +381,27 @@ export function ClipCreationPanel({ video }: { video: Video }) {
   if (!analysisDone && autoRequest) {
     const requested = Number(autoRequest.requestedClipCount);
     const label = analysisProgressLabel(video.processingStages);
-    return <div className='grid gap-3 rounded-2xl border border-violet-400/15 bg-[#0b0f1a] p-4 sm:p-5' data-testid='entry-progress'>
+    return <div className='grid gap-3 rounded-2xl border border-secondary/15 bg-sunken p-4 sm:p-5' data-testid='entry-progress'>
       <p role='status' className='flex items-center gap-2 text-sm font-semibold'>
-        <Loader2 className='animate-spin text-violet-300' size={16} aria-hidden />{label}</p>
+        <Loader2 className='animate-spin text-secondary' size={16} aria-hidden />{label}</p>
       <StageSteps stage={stageFromAnalysisLabel(label)} styleName={autoTemplate === 'AUTOMATIC_2' ? 'StyleOne' : null} />
-      <div className='h-1.5 w-full overflow-hidden rounded-full bg-white/[.08]'><div className='h-full rounded-full bg-gradient-to-r from-violet-500 to-cyan-400 transition-all duration-500'
+      <div className='h-1.5 w-full overflow-hidden rounded-full bg-tint-strong'><div className='h-full rounded-full bg-brand-progress transition-all duration-500'
         style={{ width: `${Math.max(3, Math.min(100, job.progress ?? 0))}%` }} /></div>
-      <p className='text-xs leading-5 text-slate-400'>Then {requested} clip{requested === 1 ? '' : 's'}{autoTemplateLabel ? ` with ${autoTemplateLabel}` : ''} will be created automatically. You can leave this page — progress is saved.</p>
+      <p className='text-xs leading-5 text-muted-foreground'>Then {requested} clip{requested === 1 ? '' : 's'}{autoTemplateLabel ? ` with ${autoTemplateLabel}` : ''} will be created automatically. You can leave this page — progress is saved.</p>
     </div>;
   }
   if (!analysisDone) {
-    return <div className='empty-state'><Loader2 className='animate-spin text-violet-300' size={25} />
+    return <div className='empty-state'><Loader2 className='animate-spin text-secondary' size={25} />
       <h3 className='mt-3 font-semibold'>Analyzing your video</h3>
-      <p className='mt-1 text-sm text-slate-400'>We are reviewing the entire video. You can choose your clips as soon as this finishes.</p>
+      <p className='mt-1 text-sm text-muted-foreground'>We are reviewing the entire video. You can choose your clips as soon as this finishes.</p>
     </div>;
   }
   if (!analysis) {
-    return error ? <p role='alert' className='rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200'>{error}</p>
+    return error ? <p role='alert' className='rounded-xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger-soft'>{error}</p>
       : <div className='grid gap-3'><div className='skeleton h-8 w-48' /><div className='skeleton h-24 w-full' /></div>;
   }
   if (analysis.analysisStatus === 'REJECTED') {
-    return <p role='alert' className='rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200'>{analysis.rejectionMessage}</p>;
+    return <p role='alert' className='rounded-xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger-soft'>{analysis.rejectionMessage}</p>;
   }
 
   const max = analysis.maxClipCount;
@@ -421,19 +426,19 @@ export function ClipCreationPanel({ video }: { video: Video }) {
       : rendering ? `Rendering ${Math.min(clips.length + 1, requestedTotal)} / ${requestedTotal}...`
         : styling ? `Applying ${styleName}... ${results?.deliveredClipCount ?? 0} / ${requestedTotal} ready`
           : request?.status === 'COMPLETED' ? 'Ready' : null;
-  const setup = <div className='grid min-w-0 gap-6 rounded-2xl border border-violet-400/15 bg-[#0b0f1a] p-4 sm:p-5'>
+  const setup = <div className='grid min-w-0 gap-6 rounded-2xl border border-primary/15 bg-sunken p-4 sm:p-5'>
       <div className='flex items-start gap-3'>
-        <Sparkles className='mt-0.5 shrink-0 text-violet-300' size={20} aria-hidden />
+        <Sparkles className='mt-0.5 shrink-0 text-primary-soft' size={20} aria-hidden />
         <div><h3 className='text-lg font-semibold'>Create clips</h3>
-          <p className='text-sm text-slate-400'>Everything below is optional — pick a count and go, or shape the look and tell us what to find.</p></div>
+          <p className='text-sm text-muted-foreground'>Everything below is optional — pick a count and go, or shape the look and tell us what to find.</p></div>
       </div>
       <GenerationSetup videoId={video.id} catalog={catalog} savedStyles={savedStyles} choices={choices}
         onChange={setChoices} resolution={resolution} resolving={resolving} disabled={submitting} />
-      <div className='grid gap-3 border-t border-white/[.06] pt-5'>
-        <p className='text-sm text-slate-300'>Maximum clips for this video: <span className='font-semibold text-white'>{max}</span></p>
+      <div className='grid gap-3 border-t border-border pt-5'>
+        <p className='text-sm text-soft'>Maximum clips for this video: <span className='font-semibold text-foreground'>{max}</span></p>
         <div className='flex items-center justify-between gap-4 sm:justify-start'>
           <span className='text-sm font-medium'>Number of clips</span>
-          <div className='flex items-center gap-1.5 rounded-2xl border border-white/10 bg-[#111827] p-1'>
+          <div className='flex items-center gap-1.5 rounded-2xl border border-border bg-surface p-1'>
             <Button type='button' size='icon' variant='ghost' className='h-11 w-11 rounded-xl sm:h-9 sm:w-9' aria-label='Fewer clips'
               disabled={busy || count <= 1} onClick={() => setCount((value) => clampClipCount(value - 1, max))}><Minus size={17} /></Button>
             <span className='w-9 text-center text-lg font-semibold tabular-nums' aria-live='polite'>{count}</span>
@@ -446,38 +451,38 @@ export function ClipCreationPanel({ video }: { video: Video }) {
           {busy ? <><Loader2 className='animate-spin' size={16} />Creating clips...</>
             : `${regenerating ? 'Regenerate' : 'Create'} ${count} Clip${count === 1 ? '' : 's'}`}
         </Button>
-        {!outputStyle ? <p className='text-xs text-slate-500'>Choose a look to continue.</p> : null}
-        {outputStyle && max < 1 ? <p className='text-xs text-slate-500'>No clips can be created from this video.</p> : null}
+        {!outputStyle ? <p className='text-xs text-faint'>Choose a look to continue.</p> : null}
+        {outputStyle && max < 1 ? <p className='text-xs text-faint'>No clips can be created from this video.</p> : null}
       </div>
     </div>;
-  return <section className='grid min-w-0 gap-5' aria-label='Create clips'>
-    {flowLabel ? <div className='grid gap-2.5 rounded-xl border border-violet-400/15 bg-[#0b0f1a] px-4 py-3'>
+  return <section className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-5' aria-label='Create clips'>
+    {flowLabel ? <div className={cn('grid gap-2.5 rounded-xl border bg-sunken px-4 py-3', flowLabel === 'Ready' ? 'border-success/20' : 'border-secondary/15')}>
       <p role='status' data-testid='entry-flow-status' className='flex items-center gap-2 text-sm font-semibold'>
-        {flowLabel === 'Ready' ? <Sparkles className='text-violet-300' size={16} aria-hidden />
-          : <Loader2 className='animate-spin text-violet-300' size={16} aria-hidden />}{flowLabel}</p>
+        {flowLabel === 'Ready' ? <Sparkles className='text-success' size={16} aria-hidden />
+          : <Loader2 className='animate-spin text-secondary' size={16} aria-hidden />}{flowLabel}</p>
       {flowLabel !== 'Ready' ? <StageSteps styleName={request?.generation?.templateId === 'AUTOMATIC_2' || autoTemplate === 'AUTOMATIC_2' ? 'StyleOne' : null}
         stage={flowLabel.startsWith('Finding') ? 'FINDING' : flowLabel.startsWith('Applying') ? 'STYLING' : 'CREATING'} /> : null}
     </div> : null}
-    {autoRequest?.adjustedFrom ? <p role='status' className='rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100'>
+    {autoRequest?.adjustedFrom ? <p role='status' className='rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning-soft'>
       You asked for {autoRequest.adjustedFrom} clips. This video allows up to {String(autoRequest.requestedClipCount)}, so {String(autoRequest.requestedClipCount)} are being made.</p> : null}
-    {autoStatus === 'FAILED' && job?.autoGenerationError ? <p role='alert' className='rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100'>
+    {autoStatus === 'FAILED' && job?.autoGenerationError ? <p role='alert' className='rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning-soft'>
       Clips could not start automatically. Your choices are kept below so you can try again.</p> : null}
-    {autoFlow ? <details className='group rounded-2xl border border-white/[.08] bg-[#0b0f1a]'>
-      <summary className='flex min-h-[48px] cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-slate-300 sm:px-5 [&::-webkit-details-marker]:hidden'>Change template or regenerate
+    {autoFlow ? <details className='group rounded-2xl border border-border bg-sunken'>
+      <summary className='flex min-h-[48px] cursor-pointer list-none items-center justify-between gap-2 px-4 py-3 text-sm font-medium text-soft sm:px-5 [&::-webkit-details-marker]:hidden'>Change template or regenerate
         <ChevronDown size={16} className='shrink-0 transition-transform group-open:rotate-180' aria-hidden /></summary>
       <div className='p-1'>{setup}</div>
     </details> : setup}
 
-    {error ? <p role='alert' className='rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200'>{error}</p> : null}
-    {request?.status === 'FAILED' && request.error ? <p role='alert' className='rounded-xl border border-red-400/20 bg-red-400/10 p-3 text-sm text-red-200'>{request.error}</p> : null}
-    {request?.status === 'COMPLETED' && request.error ? <p role='status' className='rounded-xl border border-amber-400/20 bg-amber-400/10 p-3 text-sm text-amber-100'>{request.error}</p> : null}
-    {rendering && !autoFlow ? <p className='text-sm text-slate-400' role='status'>
+    {error ? <p role='alert' className='rounded-xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger-soft'>{error}</p> : null}
+    {request?.status === 'FAILED' && request.error ? <p role='alert' className='rounded-xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger-soft'>{request.error}</p> : null}
+    {request?.status === 'COMPLETED' && request.error ? <p role='status' className='rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning-soft'>{request.error}</p> : null}
+    {rendering && !autoFlow ? <p className='text-sm text-muted-foreground' role='status'>
       {results?.deliveredClipCount ?? 0} / {request?.requestedClipCount ?? count} clips ready</p> : null}
-    {request?.status === 'COMPLETED' && !submitting ? <p className='text-sm text-slate-300' role='status'>
+    {request?.status === 'COMPLETED' && !submitting ? <p className='text-sm text-soft' role='status'>
       {results?.deliveredClipCount ?? clips.length} of {request.requestedClipCount ?? clips.length} clip{request.requestedClipCount === 1 ? '' : 's'} generated
       {results?.deliveryStatus === 'PARTIAL' ? ' (partial delivery).' : results?.deliveryStatus === 'FAILED' ? ' (failed).' : '.'}</p> : null}
 
-    {clips.length ? <div className='grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3'>
+    {clips.length ? <div className='grid grid-cols-[minmax(0,1fr)] items-start gap-4 md:grid-cols-2 xl:grid-cols-3'>
       {clips.map((clip) => <ResultCard clip={clip} key={clip.id}
         onRetry={async () => { await refresh(); }} />)}
     </div> : null}

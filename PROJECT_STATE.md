@@ -1236,6 +1236,39 @@ Frontend-only pass; no backend, API contract, pipeline, template or export chang
   dashboard is still server-rendered, so an offline backend shows the notice only after SSR fails;
   timeline pinch-zoom is not implemented (zoom buttons remain).
 
+## Unified dark design system (2026-10-06)
+
+Frontend-only; no backend, API contract, generation, editor command, template, subtitle or export
+change. Generated media and the Automatic 1/2 previews keep their own colours and fonts.
+
+- **Tokens.** Every chrome colour is a CSS variable in `globals.css` (RGB channels, so Tailwind
+  opacity works) exposed as semantic Tailwind colours in `tailwind.config.ts`: surfaces
+  `background` #080B14 / `sunken` #0B0F1A / `surface` #121827 / `elevated` #1C2436, `border`
+  #2A3042 (+`border-strong`), text `foreground` #F8FAFC / `soft` / `muted-foreground` #94A3B8 /
+  `faint`, brand `primary` #8B5CF6 (`-hover` #7C3AED, `-soft` for text on dark), `secondary`
+  #22D3EE (progress, live/active indicators, spinners), `accent` #F472B6 (decoration only),
+  status `success` #34D399 / `warning` #FBBF24 / `danger` #FB7185, neutral washes `tint-*`,
+  `inset`, `scrim`, editor lane identities `track-*`, and `stage` #05070D behind video. No raw
+  palette (`slate-*`, `violet-*`…) or hex surface classes remain; the only black/white left are
+  video stages and media handles. The editor preview canvas stays `rgb(0,0,0)`.
+- **Shared pieces.** `.panel`, `.field`, `.btn-primary`, `.eyebrow`, `.empty-state`; `Button`
+  gains `destructive`/`lg`; one `ConfirmDialog` (a `BottomSheet` on phones, `role=alertdialog`)
+  replaces the native `window.confirm` on result cards and the bespoke History dialog.
+- **Type.** `next/font` self-hosts Inter (body, forms; `--font-sans`) and Manrope (headings,
+  nav, CTAs, option titles; `--font-display`), both variable with metric-matched fallbacks. The
+  editor's caption fonts are untouched: next/font registers hashed family names, so the literal
+  `Inter` in caption stacks still resolves exactly as before.
+- **Layout fixes found on the way.** Implicit `auto` grid columns let min-content push Create
+  (320px), result cards and the editor Inspector rows past their container (already true in
+  production, worse with the wider fonts); those grids are now `grid-cols-[minmax(0,1fr)]`. The
+  video lane relied on CSS order for `track.color` vs `bg-transparent`; it now uses the tint only.
+- **Verification.** Typecheck + production build; all 173 semantic classes present in the built
+  CSS; 49 page×width screenshots (320/375/390/430/768/1024/1440) with Inter/Manrope computed and no
+  page or element overflow; read-only phone check of Create, History, results, Edit, Ask AI
+  consent→chat, Export and delete-confirm/cancel (38/38). The Playwright suites have 8 failures
+  that fail identically on the previous commit (stale expectations: Ask AI consent, empty History,
+  removed test ids); none are new.
+
 ## Explicitly deferred
 
 - LLM features

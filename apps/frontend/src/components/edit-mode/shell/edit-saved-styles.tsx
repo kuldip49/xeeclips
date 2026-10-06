@@ -46,32 +46,32 @@ export function EditSavedStyles({ projectId, hasCaptions, busy }: {
   }
 
   const mine = styles.filter((style) => style.category === 'CAPTIONS' || style.category === 'COLOR');
-  return <section data-testid='saved-styles' className='grid min-w-0 gap-2 border-t border-white/10 pt-4'>
-    <h3 className='flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400'>
+  return <section data-testid='saved-styles' className='grid min-w-0 gap-2 border-t border-border pt-4'>
+    <h3 className='flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground'>
       <Bookmark size={12} aria-hidden />My styles</h3>
-    <p className='text-[11px] leading-relaxed text-slate-500'>Save this clip’s look as a reusable style.</p>
+    <p className='text-[11px] leading-relaxed text-faint'>Save this clip’s look as a reusable style.</p>
     <div className='flex gap-1.5'>
       <select aria-label='Style to save' value={category} disabled={busy || saving}
         onChange={(event) => setCategory(event.target.value as Capturable)}
-        className='h-8 rounded-md border border-white/10 bg-black/30 px-1.5 text-[11px] text-slate-200'>
+        className='h-8 rounded-md border border-border bg-inset px-1.5 text-[11px] text-soft'>
         {(Object.keys(LABELS) as Capturable[]).map((value) =>
           <option key={value} value={value} disabled={value === 'CAPTIONS' && !hasCaptions}>{LABELS[value]}</option>)}
       </select>
       <input aria-label='Style name' value={name} maxLength={60} disabled={busy || saving}
         onChange={(event) => setName(event.target.value)} placeholder={`My ${LABELS[category].toLowerCase()}`}
         onKeyDown={(event) => { if (event.key === 'Enter') void save(); }}
-        className='h-8 min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-2 text-[11px] text-slate-200' />
+        className='h-8 min-w-0 flex-1 rounded-md border border-border bg-inset px-2 text-[11px] text-soft' />
       <button type='button' onClick={() => void save()} disabled={busy || saving || !name.trim()}
-        className='h-8 rounded-md bg-violet-500/80 px-2.5 text-[11px] font-semibold text-white disabled:opacity-40'>
+        className='h-8 rounded-md bg-primary/80 px-2.5 text-[11px] font-semibold text-foreground disabled:opacity-40'>
         {saving ? <Loader2 size={12} className='animate-spin' /> : 'Save'}</button>
     </div>
     {message ? <p role={message.error ? 'alert' : 'status'}
-      className={`text-[11px] ${message.error ? 'text-red-300' : 'text-emerald-300'}`}>{message.text}</p> : null}
+      className={`text-[11px] ${message.error ? 'text-danger' : 'text-success'}`}>{message.text}</p> : null}
     {mine.length ? <ul className='grid gap-1'>
-      {mine.map((style) => <li key={style.id} className='flex items-center justify-between gap-2 rounded-md bg-white/[.03] px-2 py-1 text-[11px]'>
-        <span className='min-w-0 truncate text-slate-300'>{style.name} <span className='text-slate-600'>· {LABELS[style.category as Capturable]}</span></span>
+      {mine.map((style) => <li key={style.id} className='flex items-center justify-between gap-2 rounded-md bg-tint-subtle px-2 py-1 text-[11px]'>
+        <span className='min-w-0 truncate text-soft'>{style.name} <span className='text-faint'>· {LABELS[style.category as Capturable]}</span></span>
         <button type='button' aria-label={`Delete ${style.name}`} disabled={busy} onClick={() => void remove(style.id)}
-          className='text-slate-500 hover:text-red-300'><Trash2 size={12} /></button>
+          className='text-faint hover:text-danger'><Trash2 size={12} /></button>
       </li>)}
     </ul> : null}
   </section>;

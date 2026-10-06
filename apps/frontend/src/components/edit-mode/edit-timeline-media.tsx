@@ -40,7 +40,7 @@ export const ThumbnailStrip = memo(function ThumbnailStrip({ blocks, viewport, e
     {slots.map((slot) => {
       const frame = peekThumbnail(slot.key);
       return <div key={`${slot.elementId}:${slot.key}:${Math.round(slot.leftPx)}`}
-        className='absolute inset-y-0 bg-slate-800/60 bg-cover bg-center'
+        className='absolute inset-y-0 bg-elevated/60 bg-cover bg-center'
         style={{ left: `${slot.leftPx}px`, width: `${slot.widthPx}px`,
           backgroundImage: frame ? `url(${frame})` : undefined }} />;
     })}

@@ -1,6 +1,12 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
+import { Inter, Manrope } from "next/font/google";
 import "./globals.css";
+
+// Self-hosted at build time with metric-matched fallbacks, so text never shifts when they load.
+// Both are variable fonts: one file each covers every weight the UI uses.
+const inter = Inter({ subsets: ["latin"], display: "swap", variable: "--font-sans" });
+const manrope = Manrope({ subsets: ["latin"], display: "swap", variable: "--font-display" });
 
 export const metadata: Metadata = {
   title: { default: "XeeClip — Turn long videos into short clips", template: "%s · XeeClip" },
@@ -22,7 +28,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
   interactiveWidget: "resizes-content",
-  themeColor: "#070a12",
+  themeColor: "#080B14",
   colorScheme: "dark"
 };
 
@@ -32,7 +38,7 @@ export default function RootLayout({
   children: ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${inter.variable} ${manrope.variable}`}>
       <body>{children}</body>
     </html>
   );

@@ -24,11 +24,11 @@ const Button = ({ label, hint, onClick, disabled, active, danger, children }: {
   disabled={disabled} aria-pressed={active === undefined ? undefined : active}
   data-testid={`timeline-tool-${label.toLowerCase().replace(/[^a-z]+/gu, '-')}`}
   className={`flex shrink-0 items-center justify-center gap-1 rounded-lg px-2 py-1.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-30 coarse:min-h-[40px] coarse:min-w-[40px] ${
-    active ? 'bg-cyan-400/20 text-cyan-100 ring-1 ring-cyan-300/40'
-      : danger ? 'text-red-300 hover:bg-red-400/10' : 'text-slate-300 hover:bg-white/10'}`}>
+    active ? 'bg-secondary/20 text-secondary-soft ring-1 ring-secondary/40'
+      : danger ? 'text-danger hover:bg-danger/10' : 'text-soft hover:bg-tint-strong'}`}>
   {children}</button>;
 
-const Divider = () => <span aria-hidden className='mx-0.5 h-5 w-px shrink-0 bg-white/10' />;
+const Divider = () => <span aria-hidden className='mx-0.5 h-5 w-px shrink-0 bg-tint-strong' />;
 
 const clock = (seconds: number) => {
   const safe = Math.max(0, seconds);
@@ -79,7 +79,7 @@ export const EditTimelineToolbar = memo(function EditTimelineToolbar({
     <Divider />
     <Button label='Zoom out' hint='Zoom out (−)' disabled={!canZoomOut} onClick={onZoomOut}>
       <ZoomOut size={14} /></Button>
-    <span data-testid='timeline-zoom' className='min-w-[3.2rem] text-center text-[10px] tabular-nums text-slate-500'>
+    <span data-testid='timeline-zoom' className='min-w-[3.2rem] text-center text-[10px] tabular-nums text-faint'>
       {zoomPercent}%</span>
     <Button label='Zoom in' hint='Zoom in (+)' disabled={!canZoomIn} onClick={onZoomIn}>
       <ZoomIn size={14} /></Button>
@@ -93,11 +93,11 @@ export const EditTimelineToolbar = memo(function EditTimelineToolbar({
 
     <div className={`ml-auto flex shrink-0 items-center gap-2 pl-2 ${compact ? 'pl-1' : ''}`}>
       {selectedCount > 1 && <span data-testid='timeline-selection-count'
-        className='rounded-md border border-cyan-300/25 px-1.5 py-0.5 text-[10px] font-medium text-cyan-200'>
+        className='rounded-md border border-secondary/25 px-1.5 py-0.5 text-[10px] font-medium text-secondary-soft'>
         {selectedCount} selected</span>}
-      <span data-testid='timeline-clock' className='text-[11px] tabular-nums text-slate-400'>
-        <span className='text-slate-200'>{clock(playheadSec)}</span>
-        <span className='text-slate-600'> / {clock(durationSec)}</span>
+      <span data-testid='timeline-clock' className='text-[11px] tabular-nums text-muted-foreground'>
+        <span className='text-soft'>{clock(playheadSec)}</span>
+        <span className='text-faint'> / {clock(durationSec)}</span>
       </span>
       <Button label={collapsed ? 'Expand timeline' : 'Collapse timeline'}
         hint={collapsed ? 'Expand the timeline' : 'Collapse the timeline'}

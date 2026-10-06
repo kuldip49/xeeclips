@@ -597,7 +597,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
   const keyboardFrame = isMobile && viewport.keyboardOpen && viewport.height
     ? { position: 'fixed' as const, left: 0, right: 0, top: viewport.offsetTop, height: viewport.height } : undefined;
 
-  return <div className='flex h-[100dvh] min-h-0 flex-col overflow-hidden overscroll-none bg-[#070a12] text-[#f8fafc]'
+  return <div className='flex h-[100dvh] min-h-0 flex-col overflow-hidden overscroll-none bg-background text-foreground'
     style={keyboardFrame} data-mobile-layout={isMobile ? 'true' : 'false'}>
     <EditTopBar projectName={project.name} revision={project.revision} busy={busy}
       exportPhase={exportPhase} canUndo={availability.canUndo} canRedo={availability.canRedo}
@@ -606,10 +606,10 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
       onExport={() => isMobile ? openMobilePanel('EXPORT') : setExportOpen(true)} exportDisabled={!source || !!busy} />
 
     {error && <div role='alert'
-      className='flex shrink-0 items-start gap-2 border-b border-red-400/20 bg-red-400/10 py-1 pl-4 pr-1 text-xs text-red-200'>
+      className='flex shrink-0 items-start gap-2 border-b border-danger/20 bg-danger/10 py-1 pl-4 pr-1 text-xs text-danger-soft'>
       <span className='min-w-0 flex-1 break-words py-1 [overflow-wrap:anywhere] max-md:line-clamp-3'>{error}</span>
       <button type='button' aria-label='Dismiss error' onClick={() => setError('')}
-        className='grid h-8 w-8 shrink-0 place-items-center rounded-lg text-red-200/80 hover:bg-red-400/10 coarse:h-10 coarse:w-10'><X size={14} /></button></div>}
+        className='grid h-8 w-8 shrink-0 place-items-center rounded-lg text-danger-soft/80 hover:bg-danger/10 coarse:h-10 coarse:w-10'><X size={14} /></button></div>}
 
     {/* Rail, optional tool panel, preview and inspector share one row; the
         timeline takes the bottom band. Only this row scrolls internally, so the
@@ -619,7 +619,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
         onSelect={selectTool} />
       {!isMobile && activeTool && <EditToolPanel {...toolProps} tool={activeTool} />}
 
-      <main className='flex min-w-0 flex-1 flex-col bg-[#05070d]'>
+      <main className='flex min-w-0 flex-1 flex-col bg-stage'>
         <div className='flex min-h-0 flex-1 items-center justify-center p-2 max-md:p-0'>
           <EditPreview ref={previewRef} source={source} assets={project.assets}
             aspectRatio={style?.aspectRatio} reframePolicy={style?.reframePolicy}
@@ -640,10 +640,10 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
               sourceHeight: cropSession.sourceHeight, sourceAssetId: cropSession.sourceAssetId,
               onChange: setCropRect } : null} />
         </div>
-        {source && !source.analysis && !mobileDrawer && <div className='shrink-0 border-t border-white/10 px-3 py-2'>
+        {source && !source.analysis && !mobileDrawer && <div className='shrink-0 border-t border-border px-3 py-2'>
           <button disabled={!!busy}
             onClick={() => void run('analyze', () => analyzeEditSource(project.id, project.revision))}
-            className='flex items-center gap-1.5 rounded-lg border border-cyan-300/25 px-2.5 py-1.5 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-400/10 disabled:opacity-40 coarse:min-h-[40px] coarse:px-3 coarse:text-xs'>
+            className='flex items-center gap-1.5 rounded-lg border border-secondary/25 px-2.5 py-1.5 text-[11px] font-semibold text-secondary-soft hover:bg-secondary/10 disabled:opacity-40 coarse:min-h-[40px] coarse:px-3 coarse:text-xs'>
             <ScanSearch size={13} />Analyze source</button>
         </div>}
       </main>
@@ -665,12 +665,12 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
       title='Drag to resize the preview and timeline' onPointerDown={resizeTimeline}
       onDoubleClick={() => { setTimelineHeight(null);
         try { window.localStorage.removeItem(TIMELINE_HEIGHT_KEY); } catch { /* ignore */ } }}
-      className='group relative z-10 h-1.5 shrink-0 cursor-row-resize bg-transparent hover:bg-violet-400/30 max-md:hidden'>
-      <span aria-hidden className='absolute left-1/2 top-1/2 h-1 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/15 group-hover:bg-violet-300/70' />
+      className='group relative z-10 h-1.5 shrink-0 cursor-row-resize bg-transparent hover:bg-primary/30 max-md:hidden'>
+      <span aria-hidden className='absolute left-1/2 top-1/2 h-1 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-tint-active group-hover:bg-primary/70' />
     </div>}
     <div style={!isMobile && !timelineCollapsed && timelineHeight ? { height: `${timelineHeight}px` } : undefined}
       data-testid='timeline-band'
-      className={`shrink-0 overflow-hidden border-t border-white/10 bg-[#0b0f1a] ${
+      className={`shrink-0 overflow-hidden border-t border-border bg-sunken ${
       timelineCollapsed ? 'h-auto' : timelineHeight && !isMobile ? ''
         : 'h-[38vh] min-h-[248px] max-h-[440px] max-md:h-[30dvh] max-md:min-h-[168px] max-md:max-h-[280px]'}`}>
       <EditTimeline elements={project.elements ?? []} assets={project.assets}

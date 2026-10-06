@@ -35,25 +35,25 @@ export function EditCaptionsPanel({ elements, source, busy, hasSource, selectedE
 
   return <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3'>
     <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5'>
-      <label className='text-[10px] font-semibold uppercase tracking-wider text-slate-500'>
+      <label className='text-[10px] font-semibold uppercase tracking-wider text-faint'>
         Caption style
         <select value={styleId} onChange={(event) =>
           setStyleId(event.target.value as CaptionStylePresetId)}
-          className='mt-1 w-full rounded-lg border border-white/10 bg-black/20 px-2 py-1.5 text-xs font-normal normal-case tracking-normal text-slate-200'>
+          className='mt-1 w-full rounded-lg border border-border bg-inset px-2 py-1.5 text-xs font-normal normal-case tracking-normal text-soft'>
           {CAPTION_STYLE_PRESETS.map((preset) =>
             <option key={preset.id} value={preset.id}>{preset.label}</option>)}
         </select>
       </label>
-      <p className='text-[10px] leading-4 text-slate-500'>
+      <p className='text-[10px] leading-4 text-faint'>
         {CAPTION_STYLE_PRESETS.find((preset) => preset.id === styleId)?.description}</p>
       <button disabled={disabled || !hasTranscript}
         onClick={() => onCommand({ action: 'generate-captions', captionStyleId: styleId })}
-        className='flex items-center justify-center gap-1.5 rounded-lg bg-sky-500 py-2 text-[11px] font-bold text-white hover:bg-sky-400 disabled:opacity-30'>
+        className='flex items-center justify-center gap-1.5 rounded-lg bg-secondary py-2 text-[11px] font-bold text-secondary-foreground hover:bg-secondary disabled:opacity-30'>
         <Wand2 size={12} />{captions.length ? 'Regenerate captions' : 'Generate captions'}</button>
-      {!hasTranscript && <p className='text-[10px] leading-4 text-amber-200/70'>
+      {!hasTranscript && <p className='text-[10px] leading-4 text-warning-soft/70'>
         Run &ldquo;Analyze source&rdquo; first — captions are built from the cached transcript and
         nothing is re-transcribed.</p>}
-      {captions.length > 0 && <p className='text-[10px] leading-4 text-slate-500'>
+      {captions.length > 0 && <p className='text-[10px] leading-4 text-faint'>
         Regenerating replaces the caption track, including manual corrections.</p>}
     </div>
 
@@ -61,29 +61,29 @@ export function EditCaptionsPanel({ elements, source, busy, hasSource, selectedE
       <div className='grid grid-cols-2 gap-1.5'>
         <button disabled={busy}
           onClick={() => onCommand({ action: 'set-captions-visible', visible: hidden })}
-          className='flex items-center justify-center gap-1.5 rounded-lg border border-white/10 py-1.5 text-[11px] text-slate-200 hover:bg-white/5 disabled:opacity-30'>
+          className='flex items-center justify-center gap-1.5 rounded-lg border border-border py-1.5 text-[11px] text-soft hover:bg-tint disabled:opacity-30'>
           {hidden ? <Eye size={12} /> : <EyeOff size={12} />}{hidden ? 'Show' : 'Hide'}</button>
         <button disabled={busy} onClick={() => onCommand({ action: 'remove-captions' })}
-          className='flex items-center justify-center gap-1.5 rounded-lg border border-red-400/20 py-1.5 text-[11px] text-red-300 hover:bg-red-400/10 disabled:opacity-30'>
+          className='flex items-center justify-center gap-1.5 rounded-lg border border-danger/20 py-1.5 text-[11px] text-danger hover:bg-danger/10 disabled:opacity-30'>
           <Trash2 size={12} />Remove all</button>
       </div>
       <button disabled={busy || !selected}
         title={selected ? undefined : 'Select a caption first'}
         onClick={() => selected && onCommand({ action: 'apply-caption-style-to-all',
           elementId: selected.id })}
-        className='flex items-center justify-center gap-1.5 rounded-lg border border-sky-300/25 py-1.5 text-[11px] font-semibold text-sky-200 hover:bg-sky-400/10 disabled:opacity-30'>
+        className='flex items-center justify-center gap-1.5 rounded-lg border border-secondary/25 py-1.5 text-[11px] font-semibold text-secondary-soft hover:bg-secondary/10 disabled:opacity-30'>
         <Sparkles size={12} />Apply selected style to all</button>
     </div>}
 
     {captions.length > 0 && <div className='grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1'>
       <label className='relative block'>
         <Search size={12} aria-hidden
-          className='pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-500' />
+          className='pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-faint' />
         <input value={query} onChange={(event) => setQuery(event.target.value)}
           placeholder='Search captions' aria-label='Search captions'
-          className='w-full rounded-lg border border-white/10 bg-black/20 py-1.5 pl-7 pr-2 text-xs text-slate-200 placeholder:text-slate-600' />
+          className='w-full rounded-lg border border-border bg-inset py-1.5 pl-7 pr-2 text-xs text-soft placeholder:text-faint' />
       </label>
-      <p className='text-[10px] text-slate-500'>
+      <p className='text-[10px] text-faint'>
         {mode === 'ALL' ? `${total} caption${total === 1 ? '' : 's'}`
           : `Showing ${rows.length} of ${total}${mode === 'WINDOW' ? ' around the playhead' : ' matches'}`}
       </p>
@@ -93,18 +93,18 @@ export function EditCaptionsPanel({ elements, source, busy, hasSource, selectedE
           const style = readTextStyle(element.properties);
           return <button key={element.id} onClick={() => onSelectElement(element.id)}
             className={`flex items-center gap-2 rounded-md px-2 py-1 text-left text-[11px] transition-colors ${
-              element.id === selectedElementId ? 'bg-sky-500/15 text-sky-100'
-                : 'text-slate-300 hover:bg-white/5'}`}>
-            <Captions size={11} className='shrink-0 text-slate-500' />
+              element.id === selectedElementId ? 'bg-secondary/15 text-secondary-soft'
+                : 'text-soft hover:bg-tint'}`}>
+            <Captions size={11} className='shrink-0 text-faint' />
             <span className='min-w-0 flex-1 truncate'
               style={{ textTransform: style.uppercase ? 'uppercase' : 'none',
                 fontFamily: textStyleCss(element.properties, 600).fontFamily }}>
               {String(element.properties.content ?? '')}</span>
             {element.properties.manualEdited === true &&
               <span title='Edited by hand' aria-label='Edited by hand'
-                className='shrink-0 rounded bg-amber-300/15 px-1 text-[9px] font-semibold text-amber-200'>
+                className='shrink-0 rounded bg-warning/15 px-1 text-[9px] font-semibold text-warning-soft'>
                 edited</span>}
-            <span className='shrink-0 tabular-nums text-slate-500'>
+            <span className='shrink-0 tabular-nums text-faint'>
               {element.startTime.toFixed(1)}s</span>
           </button>;
         })}

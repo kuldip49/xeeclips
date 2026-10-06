@@ -27,9 +27,9 @@ const Toggle = ({ label, hint, on, mixed, onClick, disabled, children }: {
 }) => <button type='button' aria-label={label} title={hint} onClick={onClick} disabled={disabled}
   aria-pressed={on} data-testid={`timeline-track-toggle-${label.toLowerCase().replace(/[^a-z]+/gu, '-')}`}
   className={`relative rounded p-1 transition disabled:opacity-25 ${
-    on ? 'text-amber-300 hover:bg-amber-300/10' : 'text-slate-500 hover:bg-white/10 hover:text-slate-300'}`}>
+    on ? 'text-warning hover:bg-warning/10' : 'text-faint hover:bg-tint-strong hover:text-soft'}`}>
   {children}
-  {mixed && <span aria-hidden className='absolute right-0.5 top-0.5 h-1 w-1 rounded-full bg-amber-300' />}
+  {mixed && <span aria-hidden className='absolute right-0.5 top-0.5 h-1 w-1 rounded-full bg-warning' />}
 </button>;
 
 export const EditTimelineTrackHeader = memo(function EditTimelineTrackHeader({ track, count,
@@ -44,19 +44,19 @@ export const EditTimelineTrackHeader = memo(function EditTimelineTrackHeader({ t
   const empty = count === 0;
   if (compact) return <div data-testid={`timeline-track-header-${track.id}`}
     data-hidden={hidden} data-locked={locked} data-muted={muted} title={track.label}
-    className='flex items-center gap-1 border-b border-white/[.04] px-1.5 last:border-0'
+    className='flex items-center gap-1 border-b border-border px-1.5 last:border-0'
     style={{ height: `${track.heightPx}px` }}>
     <span aria-hidden className={`h-5 w-1 shrink-0 rounded-full ${track.chip} ${empty ? 'opacity-25' : 'opacity-80'}`} />
-    <span className='min-w-0 truncate text-[10px] font-medium text-slate-300'>{track.label}</span>
+    <span className='min-w-0 truncate text-[10px] font-medium text-soft'>{track.label}</span>
   </div>;
   return <div data-testid={`timeline-track-header-${track.id}`}
     data-hidden={hidden} data-locked={locked} data-muted={muted}
-    className='flex items-center gap-1.5 border-b border-white/[.04] px-2 last:border-0'
+    className='flex items-center gap-1.5 border-b border-border px-2 last:border-0'
     style={{ height: `${track.heightPx}px` }}>
     <span aria-hidden className={`h-6 w-1 shrink-0 rounded-full ${track.chip} ${empty ? 'opacity-25' : 'opacity-80'}`} />
     <span className='min-w-0 flex-1'>
-      <span className='block truncate text-[11px] font-medium text-slate-200'>{track.label}</span>
-      <span className='block text-[9px] tabular-nums text-slate-600'>
+      <span className='block truncate text-[11px] font-medium text-soft'>{track.label}</span>
+      <span className='block text-[9px] tabular-nums text-faint'>
         {empty ? 'empty' : `${count} item${count === 1 ? '' : 's'}`}</span>
     </span>
     <span className='flex shrink-0 items-center'>
