@@ -174,6 +174,14 @@ string lists are still read). Sessions from V1 open on the Crop step with their 
   `product-simplification` still expects an "Edit" desktop-nav link that the V1 commit replaced with Quick
   Reframe.
 
+## Deployment
+
+Commit `7a39bc2` on `main`. Backend: the existing laptop Docker stack (`https://api.xeeclip.me`); the additive
+migration applied on restart and existing sessions/volumes were kept. Frontend: static build deployed to
+Cloudflare (Worker version `ed1a1bb0-5aa3-4327-8f19-b15158d2a3cb`). `https://xeeclip.me/quick-reframe` returned
+200, and `e2e/quick-reframe-flow.spec.ts` passed 3/3 against production (both full journeys with real
+downloads, plus phone widths); its disposable sessions were deleted.
+
 ## Limits
 
 - Smart crop and caption detection sample one frame per second and are confidence-based; moving or
