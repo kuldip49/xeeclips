@@ -6,13 +6,24 @@ export type ReframeAnalysis = { regions: ReframeRegion[];
   frames: { t: number; faces: ReframeBox[]; persons: ReframeBox[]; information: ReframeBox[] }[];
   boundaries: number[]; subtitleState: 'EXISTING_READABLE' | 'MISSING' | 'PARTIAL_OR_UNREADABLE';
   warnings: string[]; appearance?: { brightness: number; contrast: number };
-  bars: { top: number; bottom: number; left: number; right: number } };
-export type ReframeAspect = 'SOURCE' | '9:16' | '1:1' | '16:9' | '4:5' | 'STYLEONE' | 'CUSTOM';
+  bars: { top: number; bottom: number; left: number; right: number };
+  /** False when OCR was unavailable, so "no captions" could not be established. */
+  ocrAvailable?: boolean };
+/**
+ * Crop shape: SOURCE = locked to the original ratio, CUSTOM = Free Crop (no lock), "W:H" = a preset or
+ * user-entered ratio. STYLEONE (StyleOne's 1080x700 window) is only kept for sessions saved by V2.
+ */
+export type ReframeAspect = 'SOURCE' | 'CUSTOM' | 'STYLEONE' | `${number}:${number}`;
+/** Overlay drawn over the crop area while adjusting. Display only: never changes the crop. */
+export type ReframeCropGrid = 'THIRDS' | 'GRID3' | 'GRID4' | 'CROSSHAIR' | 'GOLDEN' | 'NONE';
 export type ReframeCleanup = ReframeBox & { regionId: string; start: number; end: number; method: 'BLUR' | 'COVER';
   intensity: number; authorized: boolean; ownedBranding?: boolean };
 export type ReframePlan = { version: 1; aspect: ReframeAspect;
+  /** Normalized to the uploaded frame and fixed for the whole video: exactly what the user chose. */
   crop: ReframeBox; framing: 'CROP' | 'FIT';
+  /** V1/V2 subject tracking. V3 never creates it and saving a crop removes it. */
   tracking?: { t: number; x: number; y: number }[];
+  grid?: ReframeCropGrid;
   cleanup: ReframeCleanup[];
   hook: { enabled: boolean; text: string; y: number };
   captions: { enabled: boolean; replaceExisting: boolean; font: string; size: number; y: number; color: string;

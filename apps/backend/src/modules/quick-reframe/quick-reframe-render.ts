@@ -99,11 +99,15 @@ export function quickCleanRender(input: PlanInput, p: ReframePlan, sourcePath: s
   return {args,ass:null,plan};
 }
 
+/** Longest export side: a very narrow or wide Free Crop scales down rather than exceed common H.264 decoders. */
+export const QUICK_MAX_LONG_SIDE = 3840;
 /** The output canvas for a project at a target short side (720/1080, or 540 for previews). */
 export function quickOutputCanvas(settings: unknown, sourceWidth: number, sourceHeight: number, shortSide: number) {
   const style=readEditProjectStyle(settings);
-  const base=resolveCanvas((style.aspectRatio||'SOURCE') as EditAspectRatio,sourceWidth,sourceHeight);
-  const scale=shortSide/Math.min(base.width,base.height);
+  // SOURCE keeps the confirmed crop's exact shape (resolveCanvas would widen a very narrow crop to 128 px).
+  const aspect=(style.aspectRatio||'SOURCE') as EditAspectRatio;
+  const base=aspect==='SOURCE'&&sourceWidth>0&&sourceHeight>0?{width:sourceWidth,height:sourceHeight}:resolveCanvas(aspect,sourceWidth,sourceHeight);
+  const scale=Math.min(shortSide/Math.min(base.width,base.height),QUICK_MAX_LONG_SIDE/Math.max(base.width,base.height));
   const even=(n:number)=>Math.max(16,Math.round(n/2)*2);
   return {width:even(base.width*scale),height:even(base.height*scale)};
 }

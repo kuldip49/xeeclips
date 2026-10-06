@@ -4,6 +4,13 @@ Last updated: 2026-10-07
 
 ## Milestones
 
+- Quick Reframe V3 (2026-10-07): the Crop step is fully manual. No detection, OCR, smart crop, tracking or
+  crop restrictions before Done Cropping (only finite, inside the frame, ≥16×16 px; low-resolution warning).
+  Original/Free/9:16/16:9/1:1/4:5/5:4/3:4/4:3/2:3/3:2/21:9 + custom W:H, six grid overlays, corner/edge/move
+  drags, pinch+pan, numeric edges/size/zoom/pan, full-screen workspace. Upload runs a deterministic `PLAYBACK`
+  job; the local `ANALYZE` job (faces/OCR/Whisper, cached per upload) starts only when StyleOne or Manual is
+  chosen, and the caption state is reported for the confirmed crop. `/suggest` removed; Clean overlays left
+  the crop step (legacy cleanup kept). Details: `docs/quick-reframe.md`.
 - Quick Reframe AI V2 (2026-10-07): guided 1. Crop → 2. Choose Style → 3. Edit → 4. Export on `/quick-reframe`.
   The confirmed crop/cleanup is baked once into the SOURCE asset in place (ORIGINAL kept as a reference), so it
   is never applied twice and survives re-edits/undo. StyleOne = the actual AUTOMATIC_2 compiler as one undoable

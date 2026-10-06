@@ -14,8 +14,8 @@ export class QuickReframeController {
   @Post('uploads/:uploadId/complete') complete(@Param('uploadId') id:string){return this.service.uploads.complete(id);}
   @Delete('uploads/:uploadId') cancelUpload(@Param('uploadId') id:string){return this.service.uploads.cancel(id).then(()=>({canceled:true}));}
   @Post(':id/import') import(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.start(id,'IMPORT',body);}
+  @Post(':id/playback') playback(@Param('id') id:string){return this.service.start(id,'PLAYBACK');}
   @Post(':id/analyze') analyze(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.start(id,'ANALYZE',body);}
-  @Post(':id/suggest') suggest(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.suggest(id,body);}
   @Post(':id/confirm-crop') confirm(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.start(id,'PREPARE',body);}
   @Post(':id/revert-crop') revert(@Param('id') id:string){return this.service.revert(id);}
   @Post(':id/hooks') hooks(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.hooks(id,body);}

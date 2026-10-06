@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { statSync } from 'node:fs';
 /**
  * Real browser journeys against the live stack with an owned/authorized video (E2E_REFRAME_SOURCE):
- * crop first -> StyleOne -> export -> download -> History -> re-edit, and crop -> Manual editor ->
+ * manual crop first -> StyleOne -> export -> download -> History -> re-edit, and crop -> Manual editor ->
  * suggested hook -> captions -> filter -> shared export -> download. Sessions are deleted afterwards.
  */
 const source = process.env.E2E_REFRAME_SOURCE;
@@ -20,22 +20,34 @@ async function uploadAndCrop(page: Page) {
   await page.locator('button', { hasText: 'Upload video' }).click();
   await expect(page.getByTestId('crop-stage')).toBeVisible({ timeout: 15 * 60 * 1000 });
   const id = new URL(page.url()).searchParams.get('video')!; created.push(id);
-  // Nothing but crop tools before Done.
+  // Nothing but manual crop tools before Done Cropping, and no AI request.
   await expect(page.getByRole('button', { name: 'Apply StyleOne' })).toHaveCount(0);
-  // Crop from the sides with the edge sliders, and drag the box's top handle down a little.
-  await page.getByLabel('From left', { exact: true }).fill('0.02');
-  await page.getByLabel('From right', { exact: true }).fill('0.02');
-  const handle = page.getByLabel('Crop handle n', { exact: true }); const box = (await handle.boundingBox())!;
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2 + 6, { steps: 4 }); await page.mouse.up();
+  await expect(page.getByRole('button', { name: /Smart crop/i })).toHaveCount(0);
+  // Free Crop: from the sides with the edge sliders, then drag the top and a corner handle.
+  await page.getByRole('group', { name: 'Aspect ratio' }).getByRole('button', { name: 'Free', exact: true }).click();
+  await page.getByLabel('Crop left', { exact: true }).fill('0.1');
+  await page.getByLabel('Crop right', { exact: true }).fill('0.05');
+  await page.getByTestId('crop-stage').evaluate((el) => el.scrollIntoView({ block: 'center' }));
+  for (const [label, dx, dy] of [['Crop handle: top edge', 0, 40], ['Crop handle: bottom-right corner', -15, -30]] as const) {
+    const box = (await page.getByLabel(label, { exact: true }).boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2); await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy, { steps: 5 }); await page.mouse.up();
+  }
   await page.getByRole('button', { name: 'Preview result' }).click();
   await expect(page.getByTestId('crop-result')).toBeVisible();
   await page.getByRole('button', { name: 'Adjust crop' }).click();
   await page.waitForTimeout(1200); // let the debounced draft save land, as a user would
+  const drawn = await page.getByTestId('crop-box').evaluate((el: HTMLElement) => ['left', 'top', 'width', 'height'].map((k) => parseFloat(el.style.getPropertyValue(k)) / 100));
   await page.reload(); await expect(page.getByTestId('crop-stage')).toBeVisible();
-  await expect(page.getByLabel('From left', { exact: true })).toHaveValue(/^0\.02/);
+  await expect(page.getByLabel('Crop left', { exact: true })).toHaveValue(/^0\.1/);
+  const before = await (await page.request.get(`${api}/quick-reframe/${id}`)).json();
+  expect(before.analysis).toBeNull(); expect(before.hasTranscript).toBe(false);
   await page.locator('[data-testid^="crop-done"]:visible').click();
   await expect(page.getByRole('heading', { name: 'How would you like to edit your video?' })).toBeVisible({ timeout: 10 * 60 * 1000 });
+  // The confirmed crop is exactly the rectangle that was on screen.
+  const s = await (await page.request.get(`${api}/quick-reframe/${id}`)).json();
+  const c = s.confirmed.crop; [c.x, c.y, c.w, c.h].forEach((v: number, i: number) => expect(v).toBeCloseTo(drawn[i], 4));
+  expect(s.analysis).toBeNull();
   return id;
 }
 async function exportAndDownload(page: Page, quality: '720p' | '1080p') {
@@ -77,6 +89,8 @@ test('Manual: crop -> Manual editor -> suggested hook -> captions -> filter -> e
   await expect(page).toHaveURL(/\/edit-mode\//, { timeout: 60000 });
   const hooks = page.getByRole('region', { name: 'Suggested Hooks' });
   await expect(hooks).toBeVisible({ timeout: 60000 });
+  // The speech/caption check starts only now; the panel follows it.
+  await expect(hooks.getByTestId('generate-hooks')).toBeVisible({ timeout: 10 * 60 * 1000 });
   await hooks.getByTestId('generate-hooks').click();
   const first = hooks.getByTestId('hook-card').first(); await expect(first).toBeVisible({ timeout: 120000 });
   await expect(hooks.getByText('Recommended')).toHaveCount(1);
@@ -109,7 +123,8 @@ test('phones: crop handles, editor hooks drawer and export fit at 320-768px', as
     await page.setViewportSize({ width, height: width < 768 ? 800 : 1024 });
     await page.goto(`/quick-reframe?video=${id}&step=crop`);
     await expect(page.getByTestId('crop-stage')).toBeVisible();
-    await expect(page.getByLabel('Crop handle se', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Crop handle: bottom-right corner', { exact: true })).toBeVisible();
+    await expect(page.locator('[data-testid="crop-done"]:visible')).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
     await page.goto(`/edit-mode/${s.editProjectId}?tool=hooks`);
     if (width < 768) {

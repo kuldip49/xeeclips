@@ -1,7 +1,7 @@
 import { getPublicApiBaseUrl } from './api';
 export type { ReframeSession, ReframePlan, ReframeRegion, ReframeBox, ReframeHook, ReframeHookCategory, ReframeAspect,
-  ReframeCleanup, ReframeExport, ReframeEditPath, ReframePreparation, ReframeAnalysis } from '@ai-content-platform/shared';
-import type { ReframeAspect, ReframeBox, ReframeCleanup, ReframeHook, ReframeHookCategory, ReframePlan, ReframeSession } from '@ai-content-platform/shared';
+  ReframeCleanup, ReframeExport, ReframeEditPath, ReframePreparation, ReframeAnalysis, ReframeCropGrid } from '@ai-content-platform/shared';
+import type { ReframeHook, ReframeHookCategory, ReframePlan, ReframeSession } from '@ai-content-platform/shared';
 export async function reframeRequest<T=ReframeSession>(path='',method='GET',body?:unknown,signal?:AbortSignal):Promise<T>{
   const response=await fetch(`${getPublicApiBaseUrl()}/quick-reframe${path}`,{method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined,signal,cache:'no-store'});
   if(!response.ok){const error=await response.json().catch(()=>({}));throw new Error(typeof error.message==='string'?error.message:'The video could not be processed. Please retry.');}
@@ -27,10 +27,12 @@ export async function uploadReframe(id:string,file:File,progress:(percent:number
     return await reframeRequest(`/uploads/${session.id}/complete`,'POST',undefined,signal);
   }catch(error){await reframeRequest(`/uploads/${session.id}`,'DELETE').catch(()=>undefined);throw error;}
 }
-export const ACTIVE_STATUSES=['ANALYZE','PREPARE','PREVIEW','EXPORT','IMPORT'];
+export const ACTIVE_STATUSES=['PLAYBACK','ANALYZE','PREPARE','PREVIEW','EXPORT','IMPORT'];
 export const isProcessing=(s:ReframeSession|null)=>!!s&&ACTIVE_STATUSES.includes(s.status);
-export type CropSuggestion={aspect:ReframeAspect;crop:ReframeBox;framing:ReframePlan['framing'];tracking:ReframePlan['tracking']|null;reasons:string[];cleanup:ReframeCleanup[]};
-export const suggestCrop=(id:string,aspect:ReframeAspect,cleanupAuthorized=false)=>reframeRequest<CropSuggestion>(`/${id}/suggest`,'POST',{aspect,cleanupAuthorized});
+/** Readies an upload for the manual crop step (browser playback + whole-frame draft). No AI runs. */
+export const preparePlayback=(id:string)=>reframeRequest(`/${id}/playback`,'POST');
+/** The local AI pass (speech + on-screen captions). Only allowed after Done Cropping and a chosen mode. */
+export const analyzeReframe=(id:string)=>reframeRequest(`/${id}/analyze`,'POST');
 export const savePlan=(s:ReframeSession,plan:ReframePlan)=>reframeRequest(`/${s.id}/plan`,'PUT',{revision:s.revision,plan});
 export const confirmCrop=(s:ReframeSession)=>reframeRequest(`/${s.id}/confirm-crop`,'POST',{revision:s.revision});
 export const revertCrop=(s:ReframeSession)=>reframeRequest(`/${s.id}/revert-crop`,'POST');

@@ -1,6 +1,6 @@
 /**
  * Run after `docker restart ai-content-backend` with a disposable exported session kept by
- * `KEEP=1 node scripts/verify-quick-reframe-v2.cjs ...`:  REFRAME_LIVE_ID=<id> node scripts/verify-quick-reframe-persistence.cjs
+ * `KEEP=1 node scripts/verify-quick-reframe-v3.cjs ...`:  REFRAME_LIVE_ID=<id> node scripts/verify-quick-reframe-persistence.cjs
  * Checks the confirmed crop, editing path, export currency, History and ranged playback survive a restart;
  * REFRAME_DELETE=true then deletes the session and checks every owned file is gone.
  */

@@ -1,29 +1,70 @@
 'use client';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, ChevronDown, Eye, EyeOff, Pause, Play, RotateCcw, ScanText, Sparkles, Wand2, X } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { Check, Grid3x3, Maximize2, Minimize2, Pause, Play, RotateCcw, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { mediaUrl, suggestCrop, type ReframePlan, type ReframeSession, type ReframeBox, type ReframeAspect } from '@/lib/quick-reframe-api';
-import { boxOf, CROP_SHAPES, cropProblems, dragCrop, fitRatio, FULL, insetsOf, isFull, shapeRatio, zoomCrop, type Handle, type Insets } from '@/lib/quick-reframe-crop';
+import { mediaUrl, type ReframeAspect, type ReframeBox, type ReframeCropGrid, type ReframePlan, type ReframeSession } from '@/lib/quick-reframe-api';
+import { CROP_GRIDS, CROP_SHAPES, cropWarnings, dragCrop, edgesOf, FULL, isFull, isPreset, maxZoomOf, panTo, parseRatio, ratioOf, setEdge, setSize,
+  setZoom, withRatio, zoomCrop, zoomOf, type Edge, type Handle } from '@/lib/quick-reframe-crop';
 import { cn } from '@/lib/utils';
 
-const HANDLES: Array<{ id: Handle; style: React.CSSProperties; cursor: string }> = [
-  { id: 'nw', style: { left: 0, top: 0 }, cursor: 'nwse-resize' }, { id: 'ne', style: { left: '100%', top: 0 }, cursor: 'nesw-resize' },
-  { id: 'sw', style: { left: 0, top: '100%' }, cursor: 'nesw-resize' }, { id: 'se', style: { left: '100%', top: '100%' }, cursor: 'nwse-resize' },
-  { id: 'n', style: { left: '50%', top: 0 }, cursor: 'ns-resize' }, { id: 's', style: { left: '50%', top: '100%' }, cursor: 'ns-resize' },
-  { id: 'w', style: { left: 0, top: '50%' }, cursor: 'ew-resize' }, { id: 'e', style: { left: '100%', top: '50%' }, cursor: 'ew-resize' }
+const HANDLES: Array<{ id: Handle; style: React.CSSProperties; cursor: string; label: string }> = [
+  { id: 'nw', style: { left: 0, top: 0 }, cursor: 'nwse-resize', label: 'top-left corner' }, { id: 'ne', style: { left: '100%', top: 0 }, cursor: 'nesw-resize', label: 'top-right corner' },
+  { id: 'sw', style: { left: 0, top: '100%' }, cursor: 'nesw-resize', label: 'bottom-left corner' }, { id: 'se', style: { left: '100%', top: '100%' }, cursor: 'nwse-resize', label: 'bottom-right corner' },
+  { id: 'n', style: { left: '50%', top: 0 }, cursor: 'ns-resize', label: 'top edge' }, { id: 's', style: { left: '50%', top: '100%' }, cursor: 'ns-resize', label: 'bottom edge' },
+  { id: 'w', style: { left: 0, top: '50%' }, cursor: 'ew-resize', label: 'left edge' }, { id: 'e', style: { left: '100%', top: '50%' }, cursor: 'ew-resize', label: 'right edge' }
 ];
+const EDGES: Array<{ id: Edge; label: string }> = [{ id: 'top', label: 'Crop top' }, { id: 'bottom', label: 'Crop bottom' }, { id: 'left', label: 'Crop left' }, { id: 'right', label: 'Crop right' }];
 const pct = (v: number) => `${v * 100}%`;
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
-const chip = (active: boolean) => cn('min-h-10 rounded-xl border px-3 text-xs font-semibold transition-colors',
+const chip = (active: boolean) => cn('min-h-10 rounded-xl border px-3 text-xs font-semibold transition-colors disabled:opacity-40',
   active ? 'border-primary/60 bg-primary/15 text-foreground' : 'border-border bg-surface text-muted-foreground hover:bg-tint hover:text-foreground');
+const field = 'min-h-10 w-full min-w-0 rounded-lg border border-border bg-background px-2 text-sm tabular-nums';
+const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
 
-function Slider({ label, value, max, onChange }: { label: string; value: number; max: number; onChange: (v: number) => void }) {
-  return <label className='grid gap-1.5 text-xs'>
-    <span className='flex justify-between text-muted-foreground'><span>{label}</span><span className='tabular-nums text-soft'>{Math.round(value * 100)}%</span></span>
-    <input aria-label={label} type='range' min={0} max={max} step={0.005} value={value} onChange={(e) => onChange(Number(e.target.value))} className='min-h-8 w-full accent-primary' />
-  </label>;
+/** A pixel field that commits on Enter/blur, so typing is never fought by the live crop. */
+function PixelField({ label, value, min, max, disabled, hideLabel, onCommit }: { label: string; value: number; min: number; max: number; disabled?: boolean; hideLabel?: boolean; onCommit: (px: number) => void }) {
+  const [text, setText] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { if (!editing) setText(String(value)); }, [value, editing]);
+  const commit = () => { setEditing(false); const n = Number(text); if (Number.isFinite(n)) onCommit(Math.max(min, Math.min(max, Math.round(n)))); else setText(String(value)); };
+  return <label className='grid gap-1 text-[11px] text-muted-foreground'><span className={hideLabel ? 'sr-only' : undefined}>{label}</span>
+    <input aria-label={label} inputMode='numeric' className={field} value={text} disabled={disabled} onFocus={() => setEditing(true)}
+      onChange={(e) => setText(e.target.value.replace(/[^\d]/gu, ''))} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} /></label>;
 }
 
+/** Lines drawn over the crop area only. Changing the grid never changes the crop. */
+function GridLines({ grid }: { grid: ReframeCropGrid }) {
+  const lines = grid === 'THIRDS' || grid === 'GRID3' ? [1 / 3, 2 / 3] : grid === 'GRID4' ? [0.25, 0.5, 0.75] : grid === 'GOLDEN' ? [0.382, 0.618] : grid === 'CROSSHAIR' ? [0.5] : [];
+  const line = grid === 'THIRDS' || grid === 'GOLDEN' ? 'bg-white/55' : 'bg-white/35';
+  return <div aria-hidden data-testid='crop-grid' data-grid={grid} className='pointer-events-none absolute inset-0'>
+    {lines.map((p) => <Fragment key={p}><span className={cn('absolute inset-y-0 w-px', line)} style={{ left: pct(p) }} /><span className={cn('absolute inset-x-0 h-px', line)} style={{ top: pct(p) }} /></Fragment>)}
+    {grid === 'THIRDS' && [1 / 3, 2 / 3].flatMap((x) => [1 / 3, 2 / 3].map((y) => <span key={`${x}-${y}`} className='absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/80' style={{ left: pct(x), top: pct(y) }} />))}
+    {grid === 'CROSSHAIR' && <span className='absolute left-1/2 top-1/2 h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/80' />}
+  </div>;
+}
+
+/** The cropped picture, drawn live from the playing video. Display only. */
+function LivePreview({ video, crop, aspect }: { video: React.RefObject<HTMLVideoElement | null>; crop: ReframeBox; aspect: number }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const width = aspect >= 1 ? 240 : Math.max(24, Math.round(240 * aspect)), height = aspect >= 1 ? Math.max(24, Math.round(240 / aspect)) : 240;
+  useEffect(() => {
+    let frame = 0;
+    const draw = () => {
+      const v = video.current, c = canvas.current, context = c?.getContext('2d');
+      if (v && c && context && v.readyState >= 2 && v.videoWidth) context.drawImage(v, crop.x * v.videoWidth, crop.y * v.videoHeight, crop.w * v.videoWidth, crop.h * v.videoHeight, 0, 0, c.width, c.height);
+      frame = requestAnimationFrame(draw);
+    };
+    frame = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frame);
+  }, [video, crop]);
+  return <canvas ref={canvas} width={width} height={height} data-testid='crop-live-preview' aria-label='Live crop preview' className='mx-auto max-h-60 max-w-full rounded-lg bg-black' style={{ aspectRatio: `${width} / ${height}` }} />;
+}
+
+/**
+ * Quick Reframe step 1: a fully manual crop. Nothing is detected, suggested or corrected here; the crop
+ * is exactly what the user drags, pinches or types, fixed for the whole video.
+ */
 export function CropStep({ session, plan, busy, onChange, onDone, onCancel, confirmed }: {
   session: ReframeSession; plan: ReframePlan; busy: boolean; confirmed: boolean;
   onChange: (plan: ReframePlan) => void; onDone: () => void; onCancel: () => void;
@@ -34,15 +75,19 @@ export function CropStep({ session, plan, busy, onChange, onDone, onCancel, conf
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [view, setView] = useState<'before' | 'after'>('before');
-  const [showText, setShowText] = useState(false);
-  const [cleanOpen, setCleanOpen] = useState(plan.cleanup.length > 0);
-  const [suggesting, setSuggesting] = useState<ReframeAspect | null>(null);
-  const [note, setNote] = useState('');
+  const [expanded, setExpanded] = useState(false);
+  const [ratioText, setRatioText] = useState(isPreset(plan.aspect) || plan.aspect === 'STYLEONE' ? '' : plan.aspect);
+  const [ratioError, setRatioError] = useState('');
+  const lastGrid = useRef<ReframeCropGrid>(plan.grid && plan.grid !== 'NONE' ? plan.grid : 'THIRDS');
   const W = session.width || 16, H = session.height || 9;
-  // The whole frame must always be visible: size the picture in pixels from the measured stage,
-  // rather than relying on percentage heights (which do not resolve inside the centred grid).
+  const grid = plan.grid ?? 'THIRDS';
+  const ratio = ratioOf(plan.aspect, W, H);
+  // The whole frame must always be visible: size the picture in pixels from the measured stage.
   const frame = useRef<HTMLDivElement>(null);
   const [room, setRoom] = useState({ width: 0, height: 0 });
+  const scrolled = useRef(false);
+  /** Full screen remounts the workspace in a portal; playback resumes where it was. */
+  const resumeAt = useRef(0);
   useEffect(() => {
     const element = frame.current; if (!element) return;
     const measure = () => { const style = getComputedStyle(element);
@@ -50,121 +95,131 @@ export function CropStep({ session, plan, busy, onChange, onDone, onCancel, conf
       setRoom({ width: Math.max(0, element.clientWidth - padX), height: Math.max(0, element.clientHeight - padY) }); };
     measure(); const observer = new ResizeObserver(measure); observer.observe(element);
     // Phones/tablets: bring the whole picture above the docked Cancel/Done bar instead of under it.
-    if (window.innerWidth < 1024) element.scrollIntoView({ block: 'start' });
+    if (!scrolled.current && window.innerWidth < 1024) element.scrollIntoView({ block: 'start' });
+    scrolled.current = true;
     return () => observer.disconnect();
-  }, []);
+  }, [expanded]);
+  // Full-screen workspace: lock page scroll; Escape leaves it.
+  useEffect(() => {
+    if (!expanded) return;
+    const previous = document.body.style.overflow; document.body.style.overflow = 'hidden';
+    const key = (event: KeyboardEvent) => { if (event.key === 'Escape') setExpanded(false); };
+    window.addEventListener('keydown', key);
+    return () => { document.body.style.overflow = previous; window.removeEventListener('keydown', key); };
+  }, [expanded]);
   const fit = (aspect: number) => { if (!room.width || !room.height) return { width: 0, height: 0 };
     const scale = Math.min(room.width / aspect, room.height); return { width: Math.floor(scale * aspect), height: Math.floor(scale) }; };
-  const ratio = shapeRatio(plan.aspect);
-  const problems = useMemo(() => cropProblems(plan, session.analysis), [plan, session.analysis]);
   const src = mediaUrl(session.originalUrl);
   const setCrop = useCallback((crop: ReframeBox, aspect: ReframeAspect = plan.aspect) =>
     onChange({ ...plan, crop, aspect, framing: 'CROP', tracking: undefined }), [onChange, plan]);
 
-  // --- Gestures: one pointer drags a handle or moves the box; two pointers pinch-zoom. -------------
+  // --- Gestures: one pointer drags a handle or moves the box; two pointers pinch-zoom and pan together. ---
   const pointers = useRef(new Map<number, { x: number; y: number }>());
-  const gesture = useRef<{ box: ReframeBox; x: number; y: number; handle: Handle; distance?: number } | null>(null);
+  const gesture = useRef<{ box: ReframeBox; x: number; y: number; handle: Handle | 'pinch'; distance?: number } | null>(null);
+  const centroid = () => { const p = [...pointers.current.values()]; return { x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2, d: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y) }; };
   const down = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (view !== 'before') return;
+    if (view !== 'before' || busy) return;
     event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
     pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    const points = [...pointers.current.values()];
+    if (pointers.current.size === 2) { const c = centroid(); gesture.current = { box: { ...plan.crop }, x: c.x, y: c.y, handle: 'pinch', distance: c.d }; return; }
+    if (pointers.current.size > 2) return;
     const handle = ((event.target as HTMLElement).closest('[data-handle]') as HTMLElement | null)?.dataset.handle as Handle | undefined;
-    gesture.current = { box: { ...plan.crop }, x: event.clientX, y: event.clientY, handle: handle ?? 'move',
-      distance: points.length === 2 ? Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y) : undefined };
+    gesture.current = { box: { ...plan.crop }, x: event.clientX, y: event.clientY, handle: handle ?? 'move' };
   };
   const move = (event: React.PointerEvent<HTMLDivElement>) => {
     const g = gesture.current; if (!g || !pointers.current.has(event.pointerId)) return;
     pointers.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-    const rect = event.currentTarget.getBoundingClientRect(); const points = [...pointers.current.values()];
-    if (points.length === 2 && g.distance) {
-      const now = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
-      setCrop(zoomCrop(g.box, g.distance / Math.max(1, now), ratio, W, H), plan.aspect === 'SOURCE' ? 'CUSTOM' : plan.aspect);
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (g.handle === 'pinch') {
+      if (pointers.current.size !== 2 || !g.distance) return;
+      const c = centroid();
+      const zoomed = zoomCrop(g.box, g.distance / Math.max(1, c.d), W, H);
+      setCrop(panTo(zoomed, zoomed.x + zoomed.w / 2 + (c.x - g.x) / rect.width, zoomed.y + zoomed.h / 2 + (c.y - g.y) / rect.height));
       return;
     }
-    const next = dragCrop(g.box, g.handle, (event.clientX - g.x) / rect.width, (event.clientY - g.y) / rect.height, ratio, W, H);
-    setCrop(next, plan.aspect === 'SOURCE' && g.handle !== 'move' ? 'CUSTOM' : plan.aspect);
+    setCrop(dragCrop(g.box, g.handle, (event.clientX - g.x) / rect.width, (event.clientY - g.y) / rect.height, ratio, W, H));
   };
-  const up = (event: React.PointerEvent<HTMLDivElement>) => { pointers.current.delete(event.pointerId);
-    if (pointers.current.size === 0) gesture.current = null;
-    else { const [rest] = [...pointers.current.values()]; gesture.current = { box: { ...plan.crop }, x: rest.x, y: rest.y, handle: 'move' }; } };
-  // Wheel zoom on desktop; passive listeners cannot preventDefault, so it is attached manually.
+  const up = (event: React.PointerEvent<HTMLDivElement>) => {
+    pointers.current.delete(event.pointerId);
+    if (pointers.current.size === 0) { gesture.current = null; return; }
+    // Lifting one finger of a pinch continues as a move from where the crop is now.
+    const [rest] = [...pointers.current.values()]; gesture.current = { box: { ...plan.crop }, x: rest.x, y: rest.y, handle: 'move' };
+  };
+  // Desktop: Ctrl + wheel (and trackpad pinch, reported as Ctrl + wheel) zooms; plain scrolling still scrolls the page.
   useEffect(() => {
     const element = stage.current; if (!element) return;
-    // Ctrl + wheel (and trackpad pinch, which browsers report as Ctrl + wheel); plain scrolling still scrolls the page.
     const wheel = (event: WheelEvent) => { if (view !== 'before' || !event.ctrlKey) return; event.preventDefault();
-      setCrop(zoomCrop(plan.crop, event.deltaY > 0 ? 1.04 : 0.96, ratio, W, H), plan.aspect === 'SOURCE' ? 'CUSTOM' : plan.aspect); };
+      setCrop(zoomCrop(plan.crop, event.deltaY > 0 ? 1.04 : 0.96, W, H)); };
     element.addEventListener('wheel', wheel, { passive: false });
     return () => element.removeEventListener('wheel', wheel);
-  }, [plan.crop, plan.aspect, ratio, W, H, view, setCrop]);
-
-  const insets = insetsOf(plan.crop);
-  const setInset = (edge: keyof Insets, value: number) => {
-    const next = { ...insets, [edge]: value };
-    if (next.left + next.right > 0.7 || next.top + next.bottom > 0.7) return;
-    setCrop(boxOf(next), 'CUSTOM');
+  }, [plan.crop, W, H, view, setCrop]);
+  /** Arrow keys move the focused crop by one source pixel (Shift: ten). */
+  const nudge = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 10 : 1;
+    const delta = { ArrowLeft: [-step / W, 0], ArrowRight: [step / W, 0], ArrowUp: [0, -step / H], ArrowDown: [0, step / H] }[event.key];
+    if (!delta) return; event.preventDefault(); setCrop(dragCrop(plan.crop, 'move', delta[0], delta[1], ratio, W, H));
   };
-  const chooseShape = async (aspect: ReframeAspect) => {
-    setNote('');
-    if (aspect === 'CUSTOM') { onChange({ ...plan, aspect, tracking: undefined, framing: 'CROP' }); return; }
-    setSuggesting(aspect);
-    try {
-      const suggestion = await suggestCrop(session.id, aspect);
-      const target = shapeRatio(aspect);
-      // When a safe crop of that exact shape does not exist, the closest safe shape is used and explained.
-      const crop = target && suggestion.framing === 'FIT' ? fitRatio(suggestion.crop, target, W, H) : suggestion.crop;
-      onChange({ ...plan, aspect, crop, framing: 'CROP', tracking: suggestion.framing === 'CROP' ? suggestion.tracking ?? undefined : undefined });
-      setNote(suggestion.framing === 'FIT' ? 'XeeClip could not find a crop of this shape that keeps every face and important detail. Check the highlighted problems or choose another shape.' :
-        suggestion.tracking?.length ? 'Smart crop follows the main subject smoothly through the video.' : 'Smart crop keeps faces, captions and attribution inside the frame.');
-    } catch (error) { setNote(error instanceof Error ? error.message : 'Crop suggestions are unavailable.'); }
-    finally { setSuggesting(null); }
-  };
-  const smart = async () => chooseShape('SOURCE');
-  const reset = () => { setNote(''); setCrop(FULL, 'SOURCE'); };
 
-  // --- Playback shared by the before/after views. ---------------------------------------------------
+  const chooseShape = (aspect: ReframeAspect) => { setRatioError(''); setCrop(withRatio(plan.crop, ratioOf(aspect, W, H), W, H), aspect); };
+  const applyCustomRatio = () => { const aspect = parseRatio(ratioText); if (!aspect) { setRatioError('Enter a ratio such as 7:5 or 2.35:1.'); return; } setRatioText(aspect); chooseShape(aspect); };
+  const reset = () => { setRatioError(''); setRatioText(''); setCrop(FULL, 'SOURCE'); };
+  const setGrid = (next: ReframeCropGrid) => { if (next !== 'NONE') lastGrid.current = next; onChange({ ...plan, grid: next }); };
+
+  // --- Playback shared by the adjust/result views. ----------------------------------------------------
   const toggle = () => { const v = video.current; if (!v) return; if (v.paused) void v.play().catch(() => undefined); else v.pause(); };
   useEffect(() => { const a = afterVideo.current, v = video.current; if (!a || !v) return;
     if (Math.abs(a.currentTime - time) > 0.2) a.currentTime = time;
     if (playing && a.paused) void a.play().catch(() => undefined); if (!playing && !a.paused) a.pause(); }, [time, playing, view]);
-  const seek = (t: number) => { if (video.current) video.current.currentTime = t; setTime(t); };
-  const live = session.analysis?.regions.filter((r) => r.start <= time && r.end > time) ?? [];
-  const masks = plan.cleanup.filter((r) => r.start <= time && r.end > time);
-  const croppedAspect = (plan.crop.w * W) / (plan.crop.h * H);
+  const seek = (t: number) => { if (video.current) video.current.currentTime = t; setTime(t); resumeAt.current = t; };
+  const crop = plan.crop;
+  const cw = Math.round(crop.w * W), ch = Math.round(crop.h * H);
+  const croppedAspect = (crop.w * W) / (crop.h * H);
+  const divisor = gcd(cw, ch) || 1;
+  const shapeLabel = plan.aspect === 'CUSTOM' ? `Free · ${cw / divisor <= 50 ? `${cw / divisor}:${ch / divisor}` : `${croppedAspect.toFixed(2)}:1`}`
+    : plan.aspect === 'SOURCE' ? 'Original ratio' : plan.aspect === 'STYLEONE' ? '54:35' : plan.aspect;
+  const warnings = cropWarnings(crop, W, H);
+  const edges = edgesOf(crop);
+  const zoom = zoomOf(crop), maxZoom = Math.min(20, maxZoomOf(crop, W, H));
+  const done = (testId: string) => <Button type='button' size='lg' className='h-12 min-w-0 flex-1 px-3 md:flex-none md:px-8' disabled={busy} onClick={onDone} data-testid={testId}><Check size={16} />Done Cropping</Button>;
+  const cancel = <Button type='button' variant='secondary' className='h-12 px-3 sm:px-4' disabled={busy} onClick={onCancel}><X size={16} />Cancel</Button>;
+  const resetButton = <Button type='button' variant='ghost' className='h-12 px-3 sm:px-4' aria-label='Reset' disabled={busy || (isFull(crop) && plan.aspect === 'SOURCE')} onClick={reset}><RotateCcw size={16} /><span className='hidden min-[400px]:inline lg:inline'>Reset</span></Button>;
 
-  return <div className='grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_320px]'>
+  const workspace = <div data-testid='crop-workspace' data-expanded={expanded || undefined} className={cn('grid min-w-0 grid-cols-[minmax(0,1fr)] gap-5 [overflow-anchor:none] lg:grid-cols-[minmax(0,1fr)_340px]',
+    expanded && 'fixed inset-0 z-[100] content-start overflow-y-auto overscroll-contain bg-background px-3 pb-[calc(env(safe-area-inset-bottom)+96px)] pt-[max(12px,env(safe-area-inset-top))] lg:px-6 lg:pb-6')}>
     <div className='grid min-w-0 content-start gap-3'>
-      <div className='flex flex-wrap items-center gap-2' role='group' aria-label='Preview mode'>
-        <button type='button' className={chip(view === 'before')} aria-pressed={view === 'before'} onClick={() => setView('before')}>Adjust crop</button>
-        <button type='button' className={chip(view === 'after')} aria-pressed={view === 'after'} onClick={() => setView('after')}>Preview result</button>
-        <button type='button' className={cn(chip(showText), 'ml-auto inline-flex items-center gap-1.5')} aria-pressed={showText}
-          onClick={() => setShowText((v) => !v)}>{showText ? <EyeOff size={14} /> : <Eye size={14} />}Show detected text</button>
+      <div className='flex flex-wrap items-center gap-2'>
+        <div className='flex gap-2' role='group' aria-label='Preview mode'>
+          <button type='button' className={chip(view === 'before')} aria-pressed={view === 'before'} onClick={() => setView('before')}>Adjust crop</button>
+          <button type='button' className={chip(view === 'after')} aria-pressed={view === 'after'} onClick={() => setView('after')}>Preview result</button>
+        </div>
+        <div className='ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2'>
+          <button type='button' className={cn(chip(grid !== 'NONE'), 'inline-flex items-center gap-1.5')} aria-pressed={grid !== 'NONE'} onClick={() => setGrid(grid === 'NONE' ? lastGrid.current : 'NONE')}
+            aria-label={grid === 'NONE' ? 'Show grid' : 'Hide grid'}><Grid3x3 size={14} /><span className='hidden sm:inline'>{grid === 'NONE' ? 'Show grid' : 'Hide grid'}</span></button>
+          <select aria-label='Grid style' className='min-h-10 min-w-0 max-w-[9.5rem] rounded-xl border border-border bg-surface px-2 text-xs' value={grid} onChange={(e) => setGrid(e.target.value as ReframeCropGrid)}>
+            {CROP_GRIDS.map((g) => <option key={g.id} value={g.id}>{g.label}</option>)}</select>
+          <button type='button' className={cn(chip(expanded), 'inline-flex items-center gap-1.5')} aria-pressed={expanded} onClick={() => setExpanded((v) => !v)}
+            aria-label={expanded ? 'Exit full screen' : 'Full screen'}>{expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}<span className='hidden sm:inline'>{expanded ? 'Exit full screen' : 'Full screen'}</span></button>
+        </div>
       </div>
-      <div ref={frame} className='relative mx-auto grid h-[min(52vh,520px)] w-full scroll-mt-20 place-items-center overflow-hidden rounded-2xl bg-black p-3 lg:h-[clamp(320px,calc(100dvh-330px),680px)]'>
+      <div ref={frame} className={cn('relative mx-auto grid w-full scroll-mt-20 place-items-center overflow-hidden rounded-2xl bg-black p-4',
+        expanded ? 'h-[calc(100dvh-260px)] min-h-[240px] lg:h-[calc(100dvh-180px)]' : 'h-[min(52vh,520px)] lg:h-[clamp(320px,calc(100dvh-330px),680px)]')}>
         <div ref={stage} data-testid='crop-stage' className={cn('relative touch-none select-none', view === 'after' && 'hidden')}
-          style={fit(W / H)}
-          onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
-          <video ref={video} src={src} playsInline preload='metadata' className='pointer-events-none h-full w-full object-contain'
-            onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
-          {masks.map((m, i) => <div key={i} aria-hidden className='pointer-events-none absolute' style={{ left: pct(m.x), top: pct(m.y), width: pct(m.w), height: pct(m.h),
-            ...(m.method === 'COVER' ? { background: '#000' } : { backdropFilter: `blur(${Math.max(2, m.intensity)}px)`, WebkitBackdropFilter: `blur(${Math.max(2, m.intensity)}px)` }) }} />)}
-          {showText && live.map((r) => <div key={r.id} aria-hidden className={cn('pointer-events-none absolute border', r.kind === 'ATTRIBUTION' ? 'border-warning' : 'border-secondary')}
-            style={{ left: pct(r.x), top: pct(r.y), width: pct(r.w), height: pct(r.h) }}>
-            <span className='absolute left-0 top-0 max-w-full truncate bg-black/80 px-1 text-[10px] text-white'>{r.kind === 'ATTRIBUTION' ? 'attribution · kept' : r.kind.toLowerCase()} {Math.round(r.confidence * 100)}%</span></div>)}
-          <div className='absolute cursor-move border-2 border-primary shadow-[0_0_0_9999px_rgba(0,0,0,.55)]' data-testid='crop-box'
-            style={{ left: pct(plan.crop.x), top: pct(plan.crop.y), width: pct(plan.crop.w), height: pct(plan.crop.h) }}>
-            <div aria-hidden className='pointer-events-none absolute inset-0 grid grid-cols-3 grid-rows-3'>
-              {Array.from({ length: 9 }).map((_, i) => <span key={i} className='border border-white/15' />)}</div>
-            {HANDLES.map((h) => <span key={h.id} data-handle={h.id} aria-label={`Crop handle ${h.id}`} className='absolute grid h-11 w-11 -translate-x-1/2 -translate-y-1/2 place-items-center'
+          style={fit(W / H)} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
+          <video ref={video} src={src} playsInline preload='auto' className='pointer-events-none h-full w-full object-contain'
+            onLoadedMetadata={(e) => { if (resumeAt.current) e.currentTarget.currentTime = resumeAt.current; }}
+            onTimeUpdate={(e) => { setTime(e.currentTarget.currentTime); resumeAt.current = e.currentTarget.currentTime; }} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
+          <div className='absolute cursor-move border-2 border-white shadow-[0_0_0_9999px_rgba(0,0,0,.6)] outline-none focus-visible:border-primary' data-testid='crop-box'
+            tabIndex={0} role='group' aria-label={`Crop area ${cw} by ${ch} pixels. Arrow keys move it.`} onKeyDown={nudge}
+            style={{ left: pct(crop.x), top: pct(crop.y), width: pct(crop.w), height: pct(crop.h) }}>
+            {grid !== 'NONE' && <GridLines grid={grid} />}
+            {HANDLES.map((h) => <span key={h.id} data-handle={h.id} aria-label={`Crop handle: ${h.label}`} className='absolute z-10 grid h-12 w-12 -translate-x-1/2 -translate-y-1/2 place-items-center'
               style={{ ...h.style, cursor: h.cursor }}>
-              <span data-handle={h.id} className={cn('rounded-full border-2 border-white bg-primary shadow', h.id.length === 2 ? 'h-4 w-4' : 'h-3 w-6', (h.id === 'w' || h.id === 'e') && 'h-6 w-3')} /></span>)}
+              <span data-handle={h.id} className={cn('rounded-full border-2 border-white bg-primary shadow', h.id.length === 2 ? 'h-5 w-5' : 'h-3 w-7', (h.id === 'w' || h.id === 'e') && 'h-7 w-3')} /></span>)}
           </div>
         </div>
         {view === 'after' && <div className='relative overflow-hidden' data-testid='crop-result' style={fit(croppedAspect)}>
-          <video ref={afterVideo} src={src} muted playsInline preload='metadata' className='absolute max-w-none'
-            style={{ width: pct(1 / plan.crop.w), height: pct(1 / plan.crop.h), left: pct(-plan.crop.x / plan.crop.w), top: pct(-plan.crop.y / plan.crop.h) }} />
-          {masks.map((m, i) => <div key={i} aria-hidden className='pointer-events-none absolute' style={{ left: pct((m.x - plan.crop.x) / plan.crop.w), top: pct((m.y - plan.crop.y) / plan.crop.h), width: pct(m.w / plan.crop.w), height: pct(m.h / plan.crop.h),
-            ...(m.method === 'COVER' ? { background: '#000' } : { backdropFilter: `blur(${Math.max(2, m.intensity)}px)`, WebkitBackdropFilter: `blur(${Math.max(2, m.intensity)}px)` }) }} />)}
+          <video ref={afterVideo} src={src} muted playsInline preload='auto' className='absolute max-w-none'
+            style={{ width: pct(1 / crop.w), height: pct(1 / crop.h), left: pct(-crop.x / crop.w), top: pct(-crop.y / crop.h) }} />
         </div>}
       </div>
       <div className='flex min-w-0 items-center gap-3'>
@@ -173,97 +228,89 @@ export function CropStep({ session, plan, busy, onChange, onDone, onCancel, conf
         <input aria-label='Seek' type='range' min={0} max={session.duration || 0} step={0.05} value={time} onChange={(e) => seek(Number(e.target.value))} className='min-h-8 min-w-0 flex-1 accent-primary' />
         <span className='shrink-0 text-xs tabular-nums text-muted-foreground'>{clock(time)} / {clock(session.duration)}</span>
       </div>
-      <p className='text-xs text-muted-foreground'>The crop applies to the whole {session.duration.toFixed(1)}-second video. Nothing is trimmed, and the original sound is kept.
-        {' '}Drag the box or its handles{' '}<span className='hidden md:inline'>(Ctrl + scroll to zoom)</span><span className='md:hidden'>or pinch to zoom</span>.</p>
+      <div className='flex flex-wrap items-center gap-2 text-xs text-muted-foreground'>
+        <span>Check:</span>
+        {[['Start', 0], ['Middle', session.duration / 2], ['End', Math.max(0, session.duration - 0.1)]].map(([label, t]) =>
+          <button key={label as string} type='button' className={chip(false)} onClick={() => seek(t as number)}>{label}</button>)}
+        <span className='basis-full sm:basis-auto'>The crop stays fixed for the whole {session.duration.toFixed(1)}-second video. Nothing is trimmed and the original sound is kept.</span>
+      </div>
     </div>
 
-    <aside className='grid min-w-0 content-start gap-5 rounded-2xl border border-border bg-surface p-4 sm:p-5'>
+    {/* Not a scroll anchor: text reflowing here while dragging must never shift the picture under the finger. */}
+    <aside className='grid min-w-0 content-start gap-5 rounded-2xl border border-border bg-surface p-4 [overflow-anchor:none] sm:p-5'>
       <div className='hidden gap-2 lg:grid'>
-        <Button type='button' size='lg' className='h-12' disabled={busy || problems.length > 0} onClick={onDone} data-testid='crop-done-desktop'><Check size={16} />Done</Button>
-        <Button type='button' variant='secondary' disabled={busy} onClick={onCancel}><X size={16} />{confirmed ? 'Cancel' : 'Reset'}</Button>
-        <p className='text-center text-xs text-muted-foreground'>{plan.crop.w < 0.999 || plan.crop.h < 0.999 ? `Keeps ${Math.round(plan.crop.w * plan.crop.h * 100)}% of the frame` : 'Full frame'}</p>
+        {done('crop-done-desktop')}
+        <div className='grid grid-cols-2 gap-2'>{cancel}{resetButton}</div>
+      </div>
+      <div className='grid gap-1' data-testid='crop-summary'>
+        <p className='font-display text-lg font-semibold tabular-nums'>{cw} × {ch} px</p>
+        <p className='text-xs text-muted-foreground'>{shapeLabel} · {isFull(crop) ? 'full frame' : `keeps ${Math.round(crop.w * crop.h * 100)}% of the frame`}{confirmed ? '' : ' · not confirmed yet'}</p>
+        {warnings.map((w) => <p key={w} role='status' className='rounded-lg border border-warning/30 bg-warning/10 p-2 text-[11px] text-warning-soft'>{w}</p>)}
       </div>
       <div className='grid gap-2'>
-        <h2 className='font-display text-sm font-semibold'>Shape</h2>
-        <div className='flex flex-wrap gap-2'>{CROP_SHAPES.map((shape) => <button key={shape.id} type='button' className={chip(plan.aspect === shape.id)} aria-pressed={plan.aspect === shape.id}
-          disabled={busy || !!suggesting} onClick={() => void chooseShape(shape.id)}>{suggesting === shape.id ? 'Finding…' : shape.label}</button>)}</div>
-        <Button type='button' variant='secondary' className='justify-start' disabled={busy || !!suggesting} onClick={() => void smart()}><Sparkles size={15} />Smart crop suggestion</Button>
-        {note && <p className='text-xs text-muted-foreground'>{note}</p>}
+        <h2 className='font-display text-sm font-semibold'>Aspect ratio</h2>
+        <div className='flex flex-wrap gap-2' role='group' aria-label='Aspect ratio'>{CROP_SHAPES.map((shape) => <button key={shape.id} type='button' className={chip(plan.aspect === shape.id)} aria-pressed={plan.aspect === shape.id}
+          disabled={busy} onClick={() => chooseShape(shape.id)}>{shape.label}</button>)}</div>
+        <div className='flex gap-2'>
+          <input aria-label='Custom aspect ratio' placeholder='Custom, e.g. 7:5' className={field} value={ratioText} onChange={(e) => { setRatioText(e.target.value); setRatioError(''); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') applyCustomRatio(); }} />
+          <Button type='button' variant='secondary' className='shrink-0' disabled={busy || !ratioText.trim()} onClick={applyCustomRatio}>Apply</Button>
+        </div>
+        {ratioError && <p className='text-[11px] text-warning-soft'>{ratioError}</p>}
+        <p className='text-[11px] text-muted-foreground'>{ratio ? 'The shape stays locked while you resize.' : 'Free Crop: width and height change independently.'}</p>
       </div>
       <div className='grid gap-3'>
-        <h2 className='font-display text-sm font-semibold'>Crop edges</h2>
-        <Slider label='From top' value={insets.top} max={0.45} onChange={(v) => setInset('top', v)} />
-        <Slider label='From bottom' value={insets.bottom} max={0.45} onChange={(v) => setInset('bottom', v)} />
-        <Slider label='From left' value={insets.left} max={0.45} onChange={(v) => setInset('left', v)} />
-        <Slider label='From right' value={insets.right} max={0.45} onChange={(v) => setInset('right', v)} />
-        <Button type='button' variant='ghost' className='justify-start' disabled={busy || isFull(plan.crop)} onClick={reset}><RotateCcw size={15} />Reset crop</Button>
+        <h2 className='font-display text-sm font-semibold'>Size</h2>
+        <div className='grid grid-cols-2 gap-2'>
+          <PixelField label='Width (px)' value={cw} min={16} max={W} disabled={busy} onCommit={(px) => setCrop(setSize(crop, { w: px / W }, ratio, W, H))} />
+          <PixelField label='Height (px)' value={ch} min={16} max={H} disabled={busy} onCommit={(px) => setCrop(setSize(crop, { h: px / H }, ratio, W, H))} />
+        </div>
       </div>
-      <CleanOverlays session={session} plan={plan} open={cleanOpen} onToggle={() => setCleanOpen((v) => !v)} time={time} busy={busy} onChange={onChange} />
-      {problems.length > 0 && <div role='alert' className='grid gap-1 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning-soft'>{problems.map((p) => <p key={p}>{p}</p>)}</div>}
-      {plan.tracking?.length ? <p className='text-xs text-muted-foreground'>Subject tracking is on. The result preview shows the starting position; the confirmed video follows the subject.</p> : null}
+      <div className='grid gap-3'>
+        <h2 className='font-display text-sm font-semibold'>Edges</h2>
+        {EDGES.map(({ id, label }) => { const size = id === 'top' || id === 'bottom' ? H : W;
+          return <div key={id} className='grid grid-cols-[minmax(0,1fr)_72px] items-end gap-2'>
+            <label className='grid gap-1.5 text-xs'><span className='text-muted-foreground'>{label}</span>
+              <input aria-label={label} type='range' min={0} max={0.95} step={1 / size} value={edges[id]} disabled={busy}
+                onChange={(e) => setCrop(setEdge(crop, id, Number(e.target.value), ratio, W, H))} className='min-h-8 w-full accent-primary' /></label>
+            <PixelField hideLabel label={`${label} (px)`} value={Math.round(edges[id] * size)} min={0} max={size - 16} disabled={busy} onCommit={(px) => setCrop(setEdge(crop, id, px / size, ratio, W, H))} />
+          </div>; })}
+      </div>
+      <div className='grid gap-3'>
+        <h2 className='font-display text-sm font-semibold'>Zoom &amp; position</h2>
+        <label className='grid gap-1.5 text-xs'><span className='flex justify-between text-muted-foreground'><span>Zoom</span><span className='tabular-nums'>{zoom.toFixed(2)}×</span></span>
+          <input aria-label='Zoom' type='range' min={1} max={Math.max(1.01, maxZoom)} step={0.01} value={Math.min(zoom, maxZoom)} disabled={busy}
+            onChange={(e) => setCrop(setZoom(crop, Number(e.target.value), W, H))} className='min-h-8 w-full accent-primary' /></label>
+        <label className='grid gap-1.5 text-xs'><span className='text-muted-foreground'>Pan left / right</span>
+          <input aria-label='Pan horizontally' type='range' min={crop.w / 2} max={1 - crop.w / 2} step={1 / W} value={crop.x + crop.w / 2} disabled={busy || crop.w > 0.9999}
+            onChange={(e) => setCrop(panTo(crop, Number(e.target.value), crop.y + crop.h / 2))} className='min-h-8 w-full accent-primary' /></label>
+        <label className='grid gap-1.5 text-xs'><span className='text-muted-foreground'>Pan up / down</span>
+          <input aria-label='Pan vertically' type='range' min={crop.h / 2} max={1 - crop.h / 2} step={1 / H} value={crop.y + crop.h / 2} disabled={busy || crop.h > 0.9999}
+            onChange={(e) => setCrop(panTo(crop, crop.x + crop.w / 2, Number(e.target.value)))} className='min-h-8 w-full accent-primary' /></label>
+        <div className='grid grid-cols-2 gap-2'>
+          <PixelField label='Position X (px)' value={Math.round(crop.x * W)} min={0} max={W - cw} disabled={busy} onCommit={(px) => setCrop(dragCrop(crop, 'move', px / W - crop.x, 0, ratio, W, H))} />
+          <PixelField label='Position Y (px)' value={Math.round(crop.y * H)} min={0} max={H - ch} disabled={busy} onCommit={(px) => setCrop(dragCrop(crop, 'move', 0, px / H - crop.y, ratio, W, H))} />
+        </div>
+        <p className='text-[11px] text-muted-foreground'><span className='hidden md:inline'>Drag the box or its handles. Ctrl + scroll zooms. Arrow keys nudge the focused box.</span>
+          <span className='md:hidden'>Drag the box or its handles. Pinch with two fingers to zoom and move.</span></p>
+      </div>
+      <div className='grid gap-2'>
+        <h2 className='font-display text-sm font-semibold'>Live preview</h2>
+        <LivePreview video={video} crop={crop} aspect={croppedAspect} />
+      </div>
+      {plan.cleanup.length > 0 && <div className='grid gap-2 rounded-xl border border-border p-3 text-xs text-muted-foreground'>
+        <p>This video has {plan.cleanup.length} overlay cleanup region{plan.cleanup.length > 1 ? 's' : ''} from an earlier version of Quick Reframe. They are kept unless you remove them.</p>
+        <Button type='button' size='sm' variant='secondary' disabled={busy} onClick={() => onChange({ ...plan, cleanup: [] })}>Remove overlay cleanup</Button></div>}
+      <p className='text-[11px] text-muted-foreground'>You decide the crop; XeeClip does not detect or move anything here. If the video is someone else&apos;s, keep the credit they require.</p>
     </aside>
 
-    <div className='sticky bottom-[calc(var(--bottom-nav-h,0px)+env(safe-area-inset-bottom)+8px)] z-20 flex gap-2 rounded-2xl border border-border bg-background/95 p-3 backdrop-blur-xl md:bottom-4 lg:hidden'>
-      <Button type='button' variant='secondary' className='h-12 flex-1 md:flex-none' disabled={busy} onClick={onCancel}><X size={16} />{confirmed ? 'Cancel' : 'Reset'}</Button>
-      <span className='hidden flex-1 items-center text-xs text-muted-foreground md:flex'>{plan.crop.w < 0.999 || plan.crop.h < 0.999 ? `Keeps ${Math.round(plan.crop.w * plan.crop.h * 100)}% of the frame` : 'Full frame'}{plan.cleanup.length ? ` · ${plan.cleanup.length} overlay cleanup${plan.cleanup.length > 1 ? 's' : ''}` : ''}</span>
-      <Button type='button' className='h-12 flex-1 md:flex-none md:px-8' disabled={busy || problems.length > 0} onClick={onDone} data-testid='crop-done'><Check size={16} />Done</Button>
+    <div className={cn('sticky z-20 flex gap-2 rounded-2xl border border-border bg-background/95 p-3 backdrop-blur-xl lg:hidden',
+      expanded ? 'fixed inset-x-3 bottom-[max(12px,env(safe-area-inset-bottom))]' : 'bottom-[calc(var(--bottom-nav-h,0px)+env(safe-area-inset-bottom)+8px)] md:bottom-4')}>
+      {resetButton}{cancel}
+      <span className='hidden flex-1 items-center text-xs tabular-nums text-muted-foreground md:flex'>{cw} × {ch} px · {shapeLabel}</span>
+      {done('crop-done')}
     </div>
   </div>;
-}
-
-function CleanOverlays({ session, plan, open, onToggle, time, busy, onChange }: {
-  session: ReframeSession; plan: ReframePlan; open: boolean; onToggle: () => void; time: number; busy: boolean; onChange: (plan: ReframePlan) => void;
-}) {
-  const [rights, setRights] = useState(plan.cleanup.length > 0);
-  const [selected, setSelected] = useState('');
-  const [owned, setOwned] = useState(false);
-  const [manual, setManual] = useState<ReframeBox>({ x: 0.1, y: 0.05, w: 0.3, h: 0.1 });
-  const [detecting, setDetecting] = useState(false);
-  const regions = session.analysis?.regions.filter((r) => r.kind !== 'CAPTION' && r.kind !== 'INFORMATION') ?? [];
-  const region = regions.find((r) => r.id === selected);
-  const add = () => {
-    const box = region ?? manual;
-    onChange({ ...plan, cleanup: [...plan.cleanup, { x: box.x, y: box.y, w: box.w, h: box.h, regionId: region?.id ?? 'manual',
-      start: region ? region.start : Math.max(0, time - 0.01), end: region ? region.end : session.duration, method: 'BLUR', intensity: 10, authorized: true,
-      ownedBranding: region?.kind === 'ATTRIBUTION' && owned }] });
-  };
-  const auto = async () => {
-    setDetecting(true);
-    try { const suggestion = await suggestCrop(session.id, plan.aspect === 'CUSTOM' ? 'SOURCE' : plan.aspect, true);
-      const fresh = suggestion.cleanup.filter((c) => !plan.cleanup.some((d) => d.regionId === c.regionId));
-      onChange({ ...plan, cleanup: [...plan.cleanup, ...fresh].slice(0, 24) }); }
-    finally { setDetecting(false); }
-  };
-  const update = (index: number, patch: Partial<ReframePlan['cleanup'][number]>) => onChange({ ...plan, cleanup: plan.cleanup.map((c, i) => i === index ? { ...c, ...patch } : c) });
-  return <div className='grid gap-3 border-t border-border pt-4'>
-    <button type='button' onClick={onToggle} aria-expanded={open} className='flex min-h-10 items-center justify-between text-left font-display text-sm font-semibold'>
-      <span className='flex items-center gap-2'><ScanText size={16} className='text-primary-soft' />Clean overlays</span><ChevronDown size={16} className={cn('transition-transform', open && 'rotate-180')} /></button>
-    {open && <div className='grid gap-3'>
-      <p className='text-xs text-muted-foreground'>Blur or cover removable text and logos on videos you own or have permission to edit. Creator attribution is protected and stays visible.</p>
-      <label className='flex items-start gap-2 text-xs'><input type='checkbox' className='mt-0.5' checked={rights} onChange={(e) => setRights(e.target.checked)} />I own this video or have permission to remove these overlays.</label>
-      <Button type='button' variant='secondary' className='justify-start' disabled={!rights || busy || detecting} onClick={() => void auto()}><Wand2 size={15} />{detecting ? 'Detecting…' : 'Auto-detect removable overlays'}</Button>
-      <select aria-label='Overlay to clean' className='min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm' value={selected} onChange={(e) => { setSelected(e.target.value); setOwned(false); }}>
-        <option value=''>Draw a custom region</option>
-        {regions.map((r) => <option key={r.id} value={r.id}>{(r.text || r.kind.toLowerCase()).slice(0, 40)} · {r.start.toFixed(1)}–{r.end.toFixed(1)}s{r.kind === 'ATTRIBUTION' ? ' · attribution' : ''}</option>)}
-      </select>
-      {!region && <div className='grid grid-cols-2 gap-2'>{(['x', 'y', 'w', 'h'] as const).map((k) => <label key={k} className='grid gap-1 text-[11px] text-muted-foreground'>
-        {{ x: 'Left', y: 'Top', w: 'Width', h: 'Height' }[k]}
-        <input aria-label={`Region ${k}`} type='range' className='accent-primary' min={k === 'w' || k === 'h' ? 0.02 : 0} step={0.005}
-          max={k === 'w' ? 1 - manual.x : k === 'h' ? 1 - manual.y : k === 'x' ? 1 - manual.w : 1 - manual.h} value={manual[k]} onChange={(e) => setManual({ ...manual, [k]: Number(e.target.value) })} /></label>)}</div>}
-      {region?.kind === 'ATTRIBUTION' && <label className='flex items-start gap-2 text-xs'><input type='checkbox' className='mt-0.5' checked={owned} onChange={(e) => setOwned(e.target.checked)} />This branding is my own. Removing it keeps any required attribution.</label>}
-      <Button type='button' variant='secondary' disabled={!rights || busy || plan.cleanup.length >= 24 || (region?.kind === 'ATTRIBUTION' && !owned)} onClick={add}>Add cleanup region</Button>
-      {plan.cleanup.map((c, i) => <div key={`${c.regionId}-${i}`} className='grid gap-2 rounded-xl border border-border p-3'>
-        <div className='flex items-center gap-2'>
-          <select aria-label={`Cleanup ${i + 1} method`} className='min-h-10 min-w-0 flex-1 rounded-lg border border-border bg-background px-2 text-xs' value={c.method} onChange={(e) => update(i, { method: e.target.value as 'BLUR' | 'COVER' })}>
-            <option value='BLUR'>Localized blur</option><option value='COVER'>Mask (cover)</option></select>
-          <button type='button' aria-label='Remove cleanup region' className='grid h-10 w-10 place-items-center rounded-lg border border-border' onClick={() => onChange({ ...plan, cleanup: plan.cleanup.filter((_, j) => j !== i) })}><X size={14} /></button>
-        </div>
-        {c.method === 'BLUR' && <label className='grid gap-1 text-[11px] text-muted-foreground'>Blur strength<input type='range' className='accent-primary' min={1} max={30} step={1} value={c.intensity} onChange={(e) => update(i, { intensity: Number(e.target.value) })} /></label>}
-        <p className='text-[11px] text-muted-foreground'>{c.start.toFixed(1)}s – {c.end.toFixed(1)}s</p>
-      </div>)}
-      {session.analysis && session.analysis.subtitleState !== 'MISSING' && <label className='flex items-start gap-2 text-xs'>
-        <input type='checkbox' className='mt-0.5' checked={plan.captions.replaceExisting} onChange={(e) => onChange({ ...plan, captions: { ...plan.captions, replaceExisting: e.target.checked } })} />
-        I will replace the video's own captions (allows cropping them out).</label>}
-    </div>}
-  </div>;
+  // Rendered on <body> so no transformed ancestor can turn `fixed` into page-relative positioning.
+  return expanded ? createPortal(workspace, document.body) : workspace;
 }

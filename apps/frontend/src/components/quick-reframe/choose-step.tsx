@@ -16,9 +16,6 @@ export function ChooseStep({ session, busy, onChoose, onBack }: {
   session: ReframeSession; busy: boolean; onChoose: (action: ChooseAction) => void; onBack: () => void;
 }) {
   const [confirm, setConfirm] = useState<'TO_STYLEONE' | 'TO_MANUAL' | null>(null);
-  const captionsNote = session.analysis?.subtitleState === 'EXISTING_READABLE' ? 'Captions detected in your video. They are kept and no duplicates are added.'
-    : session.analysis?.subtitleState === 'MISSING' ? (session.hasTranscript ? 'No captions detected. StyleOne adds synchronized captions from the speech.' : 'No speech was found, so no captions are added.')
-      : 'Some text may already be captions. You can review captions before export.';
   const styleOne = () => { if (session.editPath === 'MANUAL') setConfirm('TO_STYLEONE'); else onChoose({ kind: 'STYLEONE' }); };
   const manual = () => { if (session.styleOneApplied) setConfirm('TO_MANUAL'); else onChoose({ kind: 'MANUAL', removeStyleOne: false }); };
   const card = 'group grid min-w-0 content-start gap-4 rounded-2xl border bg-surface p-5 text-left transition-colors sm:p-6';
@@ -29,8 +26,9 @@ export function ChooseStep({ session, busy, onChoose, onBack }: {
       </div>
       <div className='grid gap-2 text-center md:text-left'>
         <h2 className='font-display text-2xl font-bold tracking-tight sm:text-3xl'>How would you like to edit your video?</h2>
-        <p className='text-sm text-muted-foreground'>Your crop is saved. Both options keep the full video and its original sound.</p>
-        <p className='flex items-start justify-center gap-2 text-xs text-muted-foreground md:justify-start'><Captions size={14} className='mt-0.5 shrink-0 text-primary-soft' />{captionsNote}</p>
+        <p className='text-sm text-muted-foreground'>Your crop is saved exactly as you set it. Both options keep the full video and its original sound.</p>
+        <p className='flex items-start justify-center gap-2 text-xs text-muted-foreground md:justify-start'><Captions size={14} className='mt-0.5 shrink-0 text-primary-soft' />
+          After you choose, XeeClip checks the speech and any on-screen captions on its own servers to write hooks and captions. Your crop is never changed.</p>
       </div>
     </div>
     <div className='grid min-w-0 gap-4 md:grid-cols-2'>
@@ -38,7 +36,7 @@ export function ChooseStep({ session, busy, onChoose, onBack }: {
         <span className='grid h-12 w-12 place-items-center rounded-2xl bg-primary/15 text-primary-soft'><Wand2 size={22} /></span>
         <div className='grid gap-2'><p className='eyebrow'>Option A · Automatic</p><h3 className='font-display text-xl font-semibold'>StyleOne</h3>
           <p className='text-sm text-muted-foreground'>Let XeeClip automatically create a polished video with professional hooks, captions, framing and styling.</p></div>
-        <ul className='grid gap-1 text-xs text-muted-foreground'><li>· Fixed 1080 × 1920 black canvas and media window</li><li>· Serif hook written from your video</li><li>· Active-word captions when your video has none</li></ul>
+        <ul className='grid gap-1 text-xs text-muted-foreground'><li>· Fixed 1080 × 1920 black canvas and media window</li><li>· Your whole crop fitted inside the window, never re-cropped</li><li>· Serif hook written from your video</li><li>· Active-word captions when your video has none</li></ul>
         <Button type='button' size='lg' disabled={busy} onClick={styleOne} data-testid='choose-styleone'>{busy ? <Loader2 size={16} className='animate-spin' /> : <Sparkles size={16} />}Apply StyleOne</Button>
       </div>
       <div className={cn(card, session.editPath === 'MANUAL' ? 'border-primary/60' : 'border-border')}>

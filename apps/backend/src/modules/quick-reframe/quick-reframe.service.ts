@@ -19,8 +19,8 @@ import { probeMedia } from '../processing/media-probe';
 import { postAiServiceJson } from '../processing/ai-service-http';
 import { LlmRouterService } from '../processing/llm-router.service';
 import { sampleImageStats, type ImageStats } from '../editing/color-grade';
-import { analyzeRegions, isIdentityPreparation, preparationOf, proposePlan, record, REFRAME_ASPECTS, validatePlan,
-  type ReframeAnalysis, type ReframePlan } from './quick-reframe-plan';
+import { analyzeRegions, defaultPlan, isIdentityPreparation, preparationOf, record, subtitleStateFor, validatePlan,
+  type ReframeAnalysis, type ReframeBox, type ReframePlan } from './quick-reframe-plan';
 import { preparationFingerprint, quickCleanRender, quickComposeRender, quickOutputCanvas, quickStyleOneCommands,
   QUICK_REFRAME_PIPELINE } from './quick-reframe-render';
 import { suggestHooks, HOOK_CATEGORIES } from './quick-reframe-hooks';
@@ -28,10 +28,16 @@ import { downloadSocial, MAX_REFRAME_BYTES, socialSource } from './social-source
 const exec=promisify(execFile);
 const json=(v:unknown):Prisma.InputJsonValue=>JSON.parse(JSON.stringify(v));
 const include={editProject:{include:{assets:true,elements:true}}};
-type Task={id:string;operationId:string;kind:'ANALYZE'|'PREPARE'|'PREVIEW'|'EXPORT'|'IMPORT';url?:string;resolution?:720|1080};
+type StyleOneOptions={hookText?:string;captions?:string};
+/**
+ * PLAYBACK readies the upload for the manual crop step (deterministic: probe/transcode only). ANALYZE is
+ * the local AI pass (faces, OCR, Whisper); it only runs after the crop is confirmed and an editing mode chosen.
+ */
+type Task={id:string;operationId:string;kind:'PLAYBACK'|'ANALYZE'|'PREPARE'|'PREVIEW'|'EXPORT'|'IMPORT';url?:string;resolution?:720|1080;
+  next?:'STYLEONE';styleOne?:StyleOneOptions};
 type Loaded=Prisma.QuickReframeGetPayload<{include:typeof include}>;
 type Asset=Loaded['editProject']['assets'][number];
-const activeStatuses=['ANALYZE','PREPARE','PREVIEW','EXPORT','IMPORT'];
+const activeStatuses=['PLAYBACK','ANALYZE','PREPARE','PREVIEW','EXPORT','IMPORT'];
 const IMAGE_EXTENSIONS:Record<string,string>={'image/png':'.png','image/jpeg':'.jpg','image/webp':'.webp'};
 const kindOf=(a:Asset)=>record(a.metadata).quickReframeKind as string|undefined;
 const transcriptText=(t:unknown)=>{const r=record(t);if(typeof r.text==='string'&&r.text.trim())return r.text;
@@ -81,11 +87,20 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       // In a Quick Reframe project the AUTOMATIC_2 layout only ever comes from StyleOne (V1 sessions included).
       styleOneApplied:record(settings.resolvedVisualLayout).editingProfile==='AUTOMATIC_2',
       previewUrl:url(preview),exportUrl:exports[0]?.url??null,previewRevision:current(preview),exportRevision:exports[0]?.revision??null,exports,
-      status:q.status,progress:q.progress,message:q.message,error:q.error,analysis:q.analysis as ReframeSession['analysis'],plan:q.plan as ReframeSession['plan'],hooks,
+      status:q.status,progress:q.progress,message:q.message,error:q.error,analysis:this.analysisOf(q),plan:q.plan as ReframeSession['plan'],hooks,
       outputs:source?.width&&source.height&&this.cropConfirmed(q)?{720:quickOutputCanvas(project.settings,source.width,source.height,720),1080:quickOutputCanvas(project.settings,source.width,source.height,1080)}:null,
       hasAudio:record(original?.metadata).hasAudio===true,hasTranscript:!!transcriptText(original?.transcript??source?.transcript),
       captionCount:project.elements.filter(e=>e.type==='SUBTITLE').length,createdAt:q.createdAt.toISOString()};
   }
+  /** Analysis is measured on the uploaded frame; the caption situation is reported for the confirmed crop. */
+  private analysisOf(q:Loaded):ReframeSession['analysis']{
+    if(!q.analysis)return null;const analysis=q.analysis as unknown as ReframeAnalysis;
+    return {...analysis,subtitleState:subtitleStateFor(analysis,record(q.confirmed).crop as ReframeBox|undefined)};
+  }
+  /** The post-crop AI pass has not run yet (or did not finish) for this upload. */
+  private needsAnalysis(q:Loaded){const original=this.originalOf(q);
+    return !q.analysis||(record(original?.metadata).hasAudio===true&&original?.transcript==null&&this.sourceOf(q)?.transcript==null);}
+  private frameOf(q:Loaded){const original=this.originalOf(q)!;return {width:original.width!,height:original.height!};}
   async get(id:string){return this.view(await this.load(id));}
   async forProject(editProjectId:string){const q=await this.prisma.quickReframe.findUnique({where:{editProjectId},include});if(!q)throw new NotFoundException('This project is not a Quick Reframe video.');return this.view(q);}
   async history(){const rows=await this.prisma.quickReframe.findMany({where:{editProject:{assets:{some:{role:'EXPORT',metadata:{path:['quickReframeKind'],equals:'EXPORT'}}}}},include,orderBy:{createdAt:'desc'}});return rows.map(q=>this.view(q));}
@@ -113,12 +128,17 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       return this.get(id);
     }catch(error){await this.storage.removeObject(stored.bucket,stored.objectKey);throw error;}
   }
-  async start(id:string,kind:Task['kind'],body:Record<string,unknown>={}){
+  async start(id:string,kind:Task['kind'],body:Record<string,unknown>={},chain:Pick<Task,'next'|'styleOne'>={}){
     const q=await this.load(id);if(activeStatuses.includes(q.status))throw new ConflictException('Processing is already in progress.');
     if(kind!=='IMPORT' && !this.sourceOf(q))throw new BadRequestException('Upload a source video first.');
     if(kind==='PREPARE'){
-      if(!q.analysis||!q.plan)throw new BadRequestException('Wait for the crop suggestions, then press Done.');
-      validatePlan(q.plan,this.originalOf(q)!.duration!,q.analysis as unknown as ReframeAnalysis);
+      if(!q.plan)throw new BadRequestException('Wait for your video to load, then press Done Cropping.');
+      validatePlan(q.plan,this.originalOf(q)!.duration!,this.frameOf(q),q.analysis as unknown as ReframeAnalysis|null);
+    }
+    // No AI runs while cropping: the analysis starts only after Done Cropping and an editing mode.
+    if(kind==='ANALYZE'){
+      if(!this.cropConfirmed(q))throw new BadRequestException('Confirm the crop first.');
+      if(!q.editPath&&!chain.next)throw new BadRequestException('Choose StyleOne or Manual editing first.');
     }
     if(kind==='EXPORT'||kind==='PREVIEW'){
       if(!this.cropConfirmed(q))throw new BadRequestException('Confirm the crop first.');
@@ -131,10 +151,10 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       if(q.editProject.assets.length)throw new ConflictException('Start a new Quick Reframe to import another video.');
       if(process.env.QUICK_REFRAME_SOCIAL_IMPORT_APPROVED!=='true')throw new BadRequestException('Automatic social import is unavailable. Upload your authorized video file instead.');}
     const operationId=randomUUID();
-    const message={ANALYZE:'Analyzing video and preparing crop suggestions',IMPORT:'Checking video',PREPARE:'Applying your crop',PREVIEW:'Rendering preview',EXPORT:`Exporting ${resolution}p video`}[kind];
+    const message={PLAYBACK:'Preparing your video for cropping',ANALYZE:chain.next==='STYLEONE'?'Checking speech and captions for StyleOne':'Checking speech and on-screen captions',IMPORT:'Checking video',PREPARE:'Applying your crop',PREVIEW:'Rendering preview',EXPORT:`Exporting ${resolution}p video`}[kind];
     const claimed=await this.prisma.quickReframe.updateMany({where:{id,status:q.status,operationId:q.operationId},data:{status:kind,operationId,message,progress:5,error:null}});
     if(!claimed.count)throw new ConflictException('Another operation started. Refresh this video.');
-    try{await this.queue.add(kind,{id,operationId,kind,url,resolution},{jobId:operationId,attempts:1,removeOnComplete:100,removeOnFail:100});}
+    try{await this.queue.add(kind,{id,operationId,kind,url,resolution,...chain},{jobId:operationId,attempts:1,removeOnComplete:100,removeOnFail:100});}
     catch{await this.prisma.quickReframe.updateMany({where:{id,operationId},data:{status:'FAILED',error:'Processing could not start. Please retry.',operationId:null}});throw new BadRequestException('Processing could not start. Please retry.');}
     return this.get(id);
   }
@@ -153,7 +173,8 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     try{
       const q=await this.load(task.id);if(q.operationId!==task.operationId)return;
       if(task.kind==='IMPORT'){const path=join(dir,'import.mp4');await downloadSocial(task.url,path,controller.signal);await this.ingest(task.id,path,'Imported video.mp4',task.operationId);return;}
-      if(task.kind==='ANALYZE'){await this.analyze(task,q,dir,controller.signal,(v)=>{uploaded=v;});return;}
+      if(task.kind==='PLAYBACK'){await this.playback(task,q,dir,controller.signal,(v)=>{uploaded=v;});return;}
+      if(task.kind==='ANALYZE'){await this.analyze(task,q,controller.signal);if(task.next==='STYLEONE')await this.continueStyleOne(task);return;}
       if(task.kind==='PREPARE'){await this.prepare(task,q,dir,controller.signal,(v)=>{uploaded=v;});return;}
       await this.compose(task,q,dir,controller.signal,(v)=>{uploaded=v;});
     }catch(error){this.logger.warn(`Quick Reframe ${task.kind} failed: ${error instanceof Error?error.message:String(error)}`);
@@ -161,8 +182,11 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       await this.prisma.quickReframe.updateMany({where:{id:task.id,operationId:task.operationId},data:{status:'FAILED',error:message,message,operationId:null}});
     }finally{if(uploaded)await this.storage.removeObject((uploaded as {bucket:string}).bucket,(uploaded as {objectKey:string}).objectKey).catch(()=>undefined);this.aborts.delete(task.id);await rm(dir,{recursive:true,force:true});}
   }
-  /** Local-only analysis of the uploaded file, then a crop suggestion. No external AI runs here. */
-  private async analyze(task:Task,q:Loaded,dir:string,signal:AbortSignal,track:(v:{bucket:string;objectKey:string}|null)=>void){
+  /**
+   * Readies the upload for manual cropping: a browser-playable copy when the codec needs one, and the
+   * whole-frame crop draft. Deterministic media handling only; no detection or suggestion runs here.
+   */
+  private async playback(task:Task,q:Loaded,dir:string,signal:AbortSignal,track:(v:{bucket:string;objectKey:string}|null)=>void){
     const original=this.originalOf(q)!;const meta=record(original.metadata);
     if((meta.videoCodec!=='h264' || meta.hasAudio && meta.audioCodec!=='aac') && !this.latest(q,'SOURCE_PLAYBACK')){
       const input=join(dir,'original.video');const at=editAssetStorageLocation(original);await this.storage.downloadToFile(at.bucket,at.objectKey,input);
@@ -172,8 +196,16 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
         await this.prisma.$transaction(async tx=>{const current=await tx.quickReframe.findUniqueOrThrow({where:{id:task.id}});if(current.operationId!==task.operationId)throw new Error('Canceled');await tx.editAsset.create({data:{id:playbackId,editProjectId:q.editProjectId,role:'REFERENCE',...stored,originalName:'Original preview.mp4',mimeType:'video/mp4',sizeBytes:BigInt(normalized.size),duration:normalized.probe.durationSec,width:normalized.probe.width,height:normalized.probe.height,metadata:{quickReframeKind:'SOURCE_PLAYBACK'}}});});track(null);
       }
     }
+    await this.stage(task,'Adjust the crop, then press Done Cropping',100,{...(q.plan?{}:{plan:json(defaultPlan())}),status:this.cropConfirmed(q)?'CROPPED':'CROPPING',operationId:null});
+  }
+  /**
+   * Local-only AI pass, after the crop is confirmed and an editing mode chosen: faces/OCR on the uploaded
+   * frame (cached, so a re-crop never repeats it) and Whisper. Nothing here changes the crop.
+   */
+  private async analyze(task:Task,q:Loaded,signal:AbortSignal){
+    const original=this.originalOf(q)!;const meta=record(original.metadata);
     let raw:unknown=original.analysis,transcript:unknown=original.transcript;
-    await this.stage(task,'Finding faces, text and safe crop areas',25);
+    await this.stage(task,'Checking on-screen captions',25);
     const at=editAssetStorageLocation(original);
     if(!raw){raw=json(await this.post('/quick-reframe-analysis',{bucket:at.bucket,object_key:at.objectKey},signal));}
     const analysis=analyzeRegions(raw,original.duration!);
@@ -183,8 +215,17 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     await this.prisma.editAsset.update({where:{id:original.id},data:{analysis:json(raw),transcript:transcript?json(transcript):undefined}});
     // A baked SOURCE keeps the original's timing, so it shares the transcript (captions, ducking).
     if(source.id!==original.id&&transcript&&!source.transcript)await this.prisma.editAsset.update({where:{id:source.id},data:{transcript:json(transcript)}});
-    const plan=q.plan??proposePlan(analysis,original.width!,original.height!,transcript,'SOURCE',original.duration!);
-    await this.stage(task,'Adjust the crop, then press Done',100,{analysis:json(analysis),plan:json(plan),status:'ANALYZED',operationId:null});
+    // Chained into StyleOne, the operation stays claimed so the browser never sees an idle gap.
+    if(task.next==='STYLEONE')await this.stage(task,'Applying StyleOne',90,{analysis:json(analysis)});
+    else await this.stage(task,'Video checked',100,{analysis:json(analysis),status:q.editPath==='MANUAL'?'EDITING':'ANALYZED',operationId:null});
+  }
+  /** StyleOne chosen before the analysis existed: apply it now. A failure is reported like any job failure. */
+  private async continueStyleOne(task:Task){
+    try{const q=await this.load(task.id);if(q.operationId!==task.operationId)return;
+      await this.applyStyleOne(task.id,{...task.styleOne,revision:q.editProject.revision},true);}
+    catch(error){this.logger.warn(`Quick Reframe StyleOne failed: ${error instanceof Error?error.message:String(error)}`);
+      const message=error instanceof BadRequestException?error.message:'StyleOne could not be applied. Choose it again to retry.';
+      await this.prisma.quickReframe.updateMany({where:{id:task.id,operationId:task.operationId},data:{status:'FAILED',error:message,message,operationId:null}});}
   }
   /**
    * Bakes the confirmed crop/cleanup into SOURCE. The SOURCE row keeps its id (so every element,
@@ -193,7 +234,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
    */
   private async prepare(task:Task,q:Loaded,dir:string,signal:AbortSignal,track:(v:{bucket:string;objectKey:string}|null)=>void){
     const original=this.originalOf(q)!;const source=this.sourceOf(q)!;
-    const p=validatePlan(q.plan,original.duration!,q.analysis as unknown as ReframeAnalysis);const prep=preparationOf(p);const key=preparationFingerprint(prep);
+    const p=validatePlan(q.plan,original.duration!,this.frameOf(q),q.analysis as unknown as ReframeAnalysis|null);const prep=preparationOf(p);const key=preparationFingerprint(prep);
     const baked=source.id!==original.id;
     const needBake=!isIdentityPreparation(prep)||!!this.latest(q,'SOURCE_PLAYBACK');
     const finish=async(tx:Prisma.TransactionClient)=>{
@@ -292,46 +333,32 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     if(!media.hasVideo||media.videoCodec!=='h264'||Math.abs((media.durationSec||0)-duration)>.25||media.width!==canvas.width||media.height!==canvas.height||(requireAudio&&!media.hasAudio)||media.hasAudio&&media.audioCodec!=='aac')throw new Error(`Output validation failed (${media.width}x${media.height}, ${media.durationSec}s, ${media.videoCodec}/${media.audioCodec})`);
     await exec('ffmpeg',['-v','error','-xerror','-i',path,'-f','null','-'],{timeout:300000,maxBuffer:1024*1024,signal});return media;
   }
-  /** A fresh crop suggestion for a shape; nothing is saved until the user keeps it. */
-  async suggest(id:string,body:Record<string,unknown>){
-    const q=await this.load(id);const original=this.originalOf(q);if(!q.analysis||!original)throw new BadRequestException('Wait for the video analysis to finish.');
-    const aspect=(REFRAME_ASPECTS as readonly string[]).includes(String(body.aspect))?body.aspect as ReframePlan['aspect']:'SOURCE';
-    const analysis=q.analysis as unknown as ReframeAnalysis;
-    const p=proposePlan(analysis,original.width!,original.height!,original.transcript,aspect==='CUSTOM'?'SOURCE':aspect,original.duration!);
-    const cleanup:ReframePlan['cleanup']=[];
-    if(body.cleanupAuthorized===true)for(const r of analysis.regions.filter(r=>r.kind==='DECORATIVE'&&r.confidence>=.8)){
-      if(cleanup.length>=24)break;
-      const intersectsCrop=Math.min(p.crop.x+p.crop.w,r.x+r.w)>Math.max(p.crop.x,r.x)&&Math.min(p.crop.y+p.crop.h,r.y+r.h)>Math.max(p.crop.y,r.y);
-      const obstructs=analysis.frames.filter(f=>f.t>=r.start&&f.t<r.end).some(f=>[...f.faces,...f.information].some(b=>Math.min(b.x+b.w,r.x+r.w)>Math.max(b.x,r.x)&&Math.min(b.y+b.h,r.y+r.h)>Math.max(b.y,r.y)));
-      if(intersectsCrop&&!obstructs&&r.w*r.h<.2)cleanup.push({x:r.x,y:r.y,w:r.w,h:r.h,regionId:r.id,start:r.start,end:r.end,method:'BLUR',intensity:8,authorized:true});
-    }
-    return {aspect,crop:p.crop,framing:p.framing,tracking:p.tracking??null,reasons:p.reasons,cleanup};
-  }
   /** Saves the crop-step draft. It never touches the canonical timeline. */
   async save(id:string,body:Record<string,unknown>){
     const q=await this.load(id);if(activeStatuses.includes(q.status))throw new ConflictException('Wait for processing to finish before editing.');
-    const original=this.originalOf(q);if(!original||!q.analysis)throw new BadRequestException('Wait for the video analysis to finish.');
-    const p=validatePlan(body.plan,original.duration!,q.analysis as unknown as ReframeAnalysis);
+    const original=this.originalOf(q);if(!original)throw new BadRequestException('Upload a video first.');
+    const p=validatePlan(body.plan,original.duration!,this.frameOf(q),q.analysis as unknown as ReframeAnalysis|null);
     const undo=Array.isArray(q.undo)?q.undo:[];
-    await this.prisma.quickReframe.update({where:{id},data:{plan:json(p),undo:json([...undo,...(q.plan?[q.plan]:[])].slice(-30)),redo:json([]),error:null,...(q.status==='FAILED'||q.status==='CANCELED'?{status:this.cropConfirmed(q)?'CROPPED':'ANALYZED',message:''}:{})}});
+    await this.prisma.quickReframe.update({where:{id},data:{plan:json(p),undo:json([...undo,...(q.plan?[q.plan]:[])].slice(-30)),redo:json([]),error:null,...(q.status==='FAILED'||q.status==='CANCELED'?{status:this.cropConfirmed(q)?'CROPPED':'CROPPING',message:''}:{})}});
     return this.get(id);
   }
   async undo(id:string,redo=false){const q=await this.load(id);if(activeStatuses.includes(q.status))throw new ConflictException('Wait for processing to finish.');const from=(redo?q.redo:q.undo) as unknown[];const to=(redo?q.undo:q.redo) as unknown[];
-    if(!Array.isArray(from)||!from.length)throw new BadRequestException(redo?'Nothing to redo.':'No more crop changes to undo.');const p=validatePlan(from[from.length-1],this.originalOf(q)!.duration!,q.analysis as unknown as ReframeAnalysis);
+    if(!Array.isArray(from)||!from.length)throw new BadRequestException(redo?'Nothing to redo.':'No more crop changes to undo.');const p=validatePlan(from[from.length-1],this.originalOf(q)!.duration!,this.frameOf(q),q.analysis as unknown as ReframeAnalysis|null);
     await this.prisma.quickReframe.update({where:{id},data:{plan:json(p),undo:json(redo?[...(Array.isArray(to)?to:[]),q.plan]:from.slice(0,-1)),redo:json(redo?from.slice(0,-1):[...(Array.isArray(to)?to:[]),q.plan])}});return this.get(id);}
   /** Restores the last confirmed crop into the draft (crop step "Cancel"). */
   async revert(id:string){const q=await this.load(id);if(!q.confirmed||!q.plan)return this.get(id);const c=record(q.confirmed);const p=q.plan as unknown as ReframePlan;
-    return this.save(id,{plan:{...p,aspect:c.aspect,crop:c.crop,framing:c.framing,tracking:c.tracking??undefined,cleanup:c.cleanup,color:{...p.color,denoise:c.denoise===true}}});}
+    return this.save(id,{plan:{...p,aspect:c.aspect,crop:c.crop,framing:c.framing,cleanup:c.cleanup,color:{...p.color,denoise:c.denoise===true}}});}
   /** Six-category hook suggestions. OpenAI only runs when this request explicitly authorizes it. */
   async hooks(id:string,body:Record<string,unknown>){
     const q=await this.load(id);const original=this.originalOf(q);if(!original)throw new BadRequestException('Upload a video first.');
     const external=body.externalAiAuthorized===true;
+    if(this.needsAnalysis(q)&&record(original.metadata).hasAudio===true)throw new BadRequestException(activeStatuses.includes(q.status)?'XeeClip is still checking the speech in your video. Try again in a moment.':'Check the video first, then ask for hook suggestions.');
     const {hooks,warnings}=await suggestHooks(this.router,transcriptText(original.transcript??this.sourceOf(q)?.transcript),external);
     await this.prisma.quickReframe.update({where:{id},data:{hooks:json(hooks),externalAiAuthorized:external}});
     return {session:await this.get(id),warnings};
   }
-  private assertEditable(q:Loaded,revision:unknown){
-    if(activeStatuses.includes(q.status))throw new ConflictException('Wait for processing to finish.');
+  private assertEditable(q:Loaded,revision:unknown,claimed=false){
+    if(!claimed&&activeStatuses.includes(q.status))throw new ConflictException('Wait for processing to finish.');
     if(!this.cropConfirmed(q))throw new BadRequestException('Confirm the crop first.');
     if(revision!==q.editProject.revision)throw new ConflictException('Your edits changed. Refresh and try again.');
   }
@@ -340,8 +367,10 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
    * editor's Undo restores whatever was there before. Captions are generated only when the video
    * has none of its own, unless the user explicitly chooses otherwise.
    */
-  async applyStyleOne(id:string,body:Record<string,unknown>){
-    const q=await this.load(id);this.assertEditable(q,body.revision);
+  async applyStyleOne(id:string,body:Record<string,unknown>,analyzed=false){
+    const q=await this.load(id);this.assertEditable(q,body.revision,analyzed);
+    // The local AI pass runs first (once per upload); StyleOne then continues from the job.
+    if(!analyzed&&this.needsAnalysis(q))return this.start(id,'ANALYZE',{},{next:'STYLEONE',styleOne:{hookText:typeof body.hookText==='string'?body.hookText:undefined,captions:typeof body.captions==='string'?body.captions:undefined}});
     const view=this.view(q);
     const mode=['GENERATE','KEEP','OFF'].includes(String(body.captions))?String(body.captions)
       :view.analysis?.subtitleState==='MISSING'&&view.hasTranscript?'GENERATE':'KEEP';
@@ -379,6 +408,8 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       await this.retryWriteConflict(()=>this.editor.applyAssistantBundle(q.editProjectId,q.editProject.revision,{proposalId:randomUUID(),summary:'Remove StyleOne and edit manually',userMessage:'Quick Reframe: Manual editing',commands,actor:'TEMPLATE_ACTION',onInvalid:'ABORT'}));
     }
     await this.prisma.quickReframe.update({where:{id},data:{editPath:'MANUAL',status:'EDITING',message:'Manual editing',error:null}});
+    // Hook suggestions and the caption decision need the local AI pass; the editor opens meanwhile.
+    if(this.needsAnalysis(await this.load(id)))return this.start(id,'ANALYZE');
     return this.get(id);
   }
   async cancel(id:string){await this.load(id);await this.prisma.quickReframe.update({where:{id},data:{operationId:null,status:'CANCELED',message:'Processing canceled',error:null}});this.aborts.get(id)?.abort();return this.get(id);}

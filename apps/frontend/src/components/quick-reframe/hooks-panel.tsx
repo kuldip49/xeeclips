@@ -1,8 +1,8 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Captions, Check, Loader2, Pencil, RefreshCw, Sparkles, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { HOOK_CATEGORY_LABEL, requestHooks, type ReframeHook, type ReframeSession } from '@/lib/quick-reframe-api';
+import { analyzeReframe, HOOK_CATEGORY_LABEL, isProcessing, reframeRequest, requestHooks, type ReframeHook, type ReframeSession } from '@/lib/quick-reframe-api';
 import { intoCrop } from '@/lib/quick-reframe-crop';
 import type { ManualEditCommand } from '@/lib/edit-mode-api';
 import type { EditElement, EditProject } from '@/lib/edit-mode-types';
@@ -30,17 +30,35 @@ export function SuggestedHooks({ session, onSession, onApply, current, busy, com
     finally { setLoading(false); }
   };
   const hooks = session.hooks;
+  // The speech/caption check starts only after an editing mode is chosen; follow it until it finishes.
+  const checking = !session.analysis;
+  const running = isProcessing(session);
+  useEffect(() => {
+    if (!checking || !running) return;
+    const timer = window.setInterval(() => { reframeRequest(`/${session.id}`).then(onSession).catch(() => undefined); }, 2000);
+    return () => clearInterval(timer);
+  }, [checking, running, session.id, onSession]);
+  const check = async () => {
+    setLoading(true); setWarnings([]);
+    try { onSession(await analyzeReframe(session.id)); }
+    catch (error) { setWarnings([error instanceof Error ? error.message : 'The video could not be checked.']); }
+    finally { setLoading(false); }
+  };
   return <section aria-label='Suggested Hooks' className='grid min-w-0 gap-3'>
     <div className='flex items-center justify-between gap-2'>
       <h3 className={cn('font-display font-semibold', compact ? 'text-xs uppercase tracking-wider text-soft' : 'text-sm')}>Suggested Hooks</h3>
       {hooks.length > 0 && <button type='button' disabled={loading || busy} onClick={() => void generate()} className='inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs text-primary-soft hover:bg-tint disabled:opacity-40'>
         <RefreshCw size={13} className={loading ? 'animate-spin' : undefined} />Regenerate</button>}
     </div>
-    {!session.hasTranscript && <p className='text-xs text-muted-foreground'>No speech was found in this video, so hooks cannot be suggested. Write your own below.</p>}
-    {session.hasTranscript && <label className='flex items-start gap-2 text-[11px] leading-5 text-muted-foreground'>
+    {checking && (running
+      ? <p role='status' className='flex items-center gap-2 text-xs text-muted-foreground' data-testid='hooks-checking'><Loader2 size={14} className='animate-spin text-primary-soft' />Checking your video&apos;s speech and captions…</p>
+      : <div className='grid gap-2'><p className='text-xs text-muted-foreground'>{session.error || 'Your video has not been checked for speech and captions yet.'}</p>
+        <Button type='button' size='sm' variant='secondary' disabled={loading || busy} onClick={() => void check()}>Check video</Button></div>)}
+    {!checking && !session.hasTranscript && <p className='text-xs text-muted-foreground'>No speech was found in this video, so hooks cannot be suggested. Write your own below.</p>}
+    {!checking && session.hasTranscript && <label className='flex items-start gap-2 text-[11px] leading-5 text-muted-foreground'>
       <input type='checkbox' className='mt-1' checked={consent} onChange={(e) => setConsent(e.target.checked)} />
       Use OpenAI for stronger suggestions (sends up to 8,000 characters of the transcript; video stays on XeeClip). Unticked, suggestions are written locally.</label>}
-    {session.hasTranscript && !hooks.length && <Button type='button' disabled={loading || busy} onClick={() => void generate()} data-testid='generate-hooks'>
+    {!checking && session.hasTranscript && !hooks.length && <Button type='button' disabled={loading || busy} onClick={() => void generate()} data-testid='generate-hooks'>
       {loading ? <Loader2 size={15} className='animate-spin' /> : <Sparkles size={15} />}{loading ? 'Analyzing your video…' : 'Suggest hooks'}</Button>}
     {warnings.map((w) => <p key={w} className='text-[11px] text-warning-soft'>{w}</p>)}
     <ul className='grid gap-2'>{hooks.map((hook: ReframeHook) => {
@@ -171,7 +189,8 @@ export function QuickReframeHooksTool({ session, project, busy, onSession, onCom
     </section>}
     <section aria-label='Captions decision' className='grid gap-2 border-t border-border pt-4'>
       <h3 className='flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-soft'><Captions size={13} />Captions</h3>
-      {hasCaptions ? <><p className='text-xs text-muted-foreground'>Captions added to your video.</p>
+      {!session.analysis && !hasCaptions ? <p className='text-xs text-muted-foreground'>Available once XeeClip has checked the speech and on-screen captions.</p>
+        : hasCaptions ? <><p className='text-xs text-muted-foreground'>Captions added to your video.</p>
         <Button type='button' size='sm' variant='secondary' onClick={() => onOpenTool('CAPTIONS')}>Customize captions</Button></>
         : subtitleState === 'EXISTING_READABLE' ? <><p className='text-xs'>Captions detected.</p><p className='text-[11px] text-muted-foreground'>Your video already shows readable captions, so XeeClip keeps them and adds no duplicates.</p>
           <details className='text-[11px] text-muted-foreground'><summary className='cursor-pointer'>Add new captions anyway</summary>

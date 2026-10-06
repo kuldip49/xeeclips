@@ -1,10 +1,11 @@
-# Quick Reframe AI (V2: crop first)
+# Quick Reframe (V3: fully manual crop first)
 
-Implementation and acceptance report, 2026-10-07.
+Implementation and acceptance report. V2 (2026-10-07) introduced crop-first; V3 (2026-10-07) makes the crop
+stage 100% manual and moves every AI step after the editing-mode choice.
 
 ## The guided sequence
 
-**Import → Analyze → 1. Crop → 2. Choose Style → 3. Edit (StyleOne or Manual) → 4. Export → History.**
+**Import → 1. Crop (manual) → Done Cropping → 2. Choose Style → 3. Edit (StyleOne or Manual) → 4. Export → History.**
 
 `/quick-reframe` is a separate top-navigation page with its own concurrency-one BullMQ queue. It owns
 a canonical `EditProject` but never creates Video, ProcessingJob, ClipCandidate or GeneratedClip rows,
@@ -14,35 +15,63 @@ Quick Reframe projects are hidden from the editor's project list and appear only
 A step indicator (`components/quick-reframe/step-indicator.tsx`) shows the active step. Earlier and
 already-reachable steps are links back; nothing is lost by going back.
 
-### 1. Crop (`crop-step.tsx`)
+### When AI runs
 
-After upload the video is analyzed locally (faces/persons, scene boundaries, OCR at 1 fps, Whisper),
-and a smart crop suggestion is saved as the first draft. The Crop step shows only crop and source-inspection
-tools: a large playable preview, drag handles (corners and edges, mouse and touch), move, pinch zoom (Ctrl +
-wheel on desktop), edge sliders (from top/bottom/left/right), shapes (Original, Free, 9:16, 4:5, 1:1, 16:9,
-StyleOne window = 1080×700), Smart crop suggestion, Reset, Adjust/Preview-result toggle, and Cancel/Done.
-OCR boxes are hidden unless **Show detected text** is turned on.
+| Stage | What runs |
+| --- | --- |
+| Upload / import | `PLAYBACK` job: ffprobe, an H.264/AAC browser copy only when the codec needs one, and the whole-frame draft. Deterministic. |
+| 1. Crop | Nothing. No detection, OCR, face/subject tracking, suggestion or correction. The API refuses `/analyze`, `/styleone` and `/hooks` until the crop is confirmed; `/suggest` no longer exists. |
+| Done Cropping | `PREPARE` job: the exact rectangle is baked into SOURCE with FFmpeg (deterministic). |
+| Choose StyleOne / Manual | `ANALYZE` job (local only: faces/OCR on the uploaded frame, Whisper). Cached on the ORIGINAL asset, so a re-crop never repeats it. |
+| Hooks | Local generator; OpenAI only with the per-request consent box. |
 
-The crop is normalized (independent of screen size) and applies to the whole duration. The same
-protections the server enforces are shown live and block Done: detected faces/persons, important
-on-screen information, creator attribution and the video's own captions must stay inside the crop
-(captions may be cropped only after explicitly choosing to replace them). Smart suggestions remove black
-bars and decorative text, including headlines stacked in the top 40% above the picture, only where those
-checks pass; removing empty bars may leave as little as 30% of the frame, otherwise at least 60% is kept.
+The caption situation (`subtitleState`) is reported **for the confirmed crop**: burned-in captions the user
+cropped away count as missing (StyleOne then generates captions); a caption line the crop cuts through is
+"uncertain". Faces are only used afterwards for the Manual hook-position warning.
 
-**Clean overlays** lives inside the Crop step: localized blur or mask (cover) regions, timed, for videos
-the user owns or may edit (rights checkbox). Detected attribution cannot be cleaned unless the user
-explicitly selects it and declares it is their own branding. Regions overlapping faces or information
-are refused. The crop preview approximates blur with CSS; the rendered result uses FFmpeg.
+### 1. Crop (`crop-step.tsx`, geometry in `lib/quick-reframe-crop.ts`)
 
-The draft autosaves (debounced) so a refresh keeps it. **Done** bakes the crop and cleanup into the
-source (below) and opens step 2. **Cancel** restores the last confirmed crop.
+Opens immediately after upload: large playable preview, full-frame stage with the dimmed outside area, a
+draggable crop rectangle with four corner and four edge handles (48 px touch targets), a live cropped preview
+(canvas drawn from the playing video), "Preview result" (the cropped composition playing), Start/Middle/End
+jump buttons and a seek bar. Nothing else: no StyleOne, hooks or editing tools.
+
+- **Aspect ratios:** Original (locked to the source ratio), Free, 9:16, 16:9, 1:1, 4:5, 5:4, 3:4, 4:3, 2:3,
+  3:2, 21:9, and a custom `W:H` field (`7:5`, `2.35:1`, `4x5`; 1:20…20:1). Choosing a fixed ratio keeps the
+  current crop's area and centre in the new shape (shrinking only as far as the frame requires); Free keeps
+  the crop exactly. A fixed ratio stays locked while resizing (corners follow the larger axis and anchor the
+  opposite corner; edges anchor the opposite edge); Free moves each edge independently.
+- **Grid:** Rule of thirds (with power points), 3 × 3, 4 × 4, Center crosshair, Golden ratio, None, plus a
+  Show/Hide toggle. Drawn over the crop area only, saved with the draft, never changes the crop.
+- **Precise controls (all synchronized with the rectangle):** Crop top/bottom/left/right sliders and pixel
+  fields (behave exactly like dragging that edge), Width/Height in source pixels, Zoom (1× = largest crop of
+  this shape), Pan left/right and up/down, Position X/Y, Reset (whole frame, Original), Cancel (back to the
+  confirmed crop, or to the crop the step opened with), Done Cropping. Arrow keys nudge the focused box by
+  1 px (Shift: 10 px). Rotation is not offered (the bake pipeline has no reliable rotation).
+- **Gestures:** pointer events for mouse, pen and touch. One finger drags a handle or the box; two fingers
+  pinch (spread = zoom in) and pan together; lifting one finger continues as a move. The stage is
+  `touch-action: none`, so drags never scroll the page, while the rest of the page scrolls normally; the
+  workspace is not a scroll anchor, so text reflowing beside it never shifts the picture under a finger.
+  Ctrl + wheel (and trackpad pinch) zooms on desktop.
+- **Full screen:** a viewport overlay rendered on `<body>` (so no transformed ancestor breaks `fixed`), with
+  safe-area insets, page scroll locked, Escape to leave, and Reset/Cancel/Done Cropping docked at the bottom.
+- **Only technical limits:** finite numbers, inside the frame, at least 16 × 16 source pixels. Faces, captions,
+  hooks, attribution, subject coverage and minimum area never block Done. Non-blocking notes: crops whose
+  short side is under 360 px will look soft at 720p/1080p; very narrow shapes are scaled so the export's long
+  side stays within 3840 px.
+- Coordinates are normalized to the uploaded frame (independent of screen size). The crop is fixed for the
+  whole duration; V1/V2 subject tracking is removed when a crop is saved. The draft autosaves (debounced),
+  so a refresh, a backend restart or returning to Crop restores the exact rectangle, ratio and grid.
+- The V2 "Clean overlays" tool (OCR-based blur/mask) is no longer part of the crop step. Sessions saved with
+  cleanup regions keep them (still under their rights and attribution checks) and can remove them.
+- The page notes that cropping is the user's choice and that reposted videos should keep the credit their
+  creator requires; nothing in the product hides third-party provenance automatically.
 
 ### How the crop is stored (why it is never applied twice)
 
 The canonical editor's own VIDEO crop pads the kept region back to the full source frame (a
 letterbox), which would shrink the picture inside StyleOne's window and never produce a real cropped
-canvas. So **Done** renders the confirmed crop/tracking/cleanup/denoise once (`quickCleanRender`,
+canvas. So **Done Cropping** renders the confirmed crop (plus any legacy cleanup) once (`quickCleanRender`,
 validated by ffprobe and a full decode) and updates the project's `SOURCE` EditAsset **in place**: the
 same row id now points at the cropped file, with the original duration and transcript. The uploaded file
 becomes a REFERENCE asset `quickReframeKind: ORIGINAL` (distinct identity key, `storageObjectKey` = the real
@@ -57,9 +86,12 @@ back to this step instead of stacking a second crop.
 
 ### 2. Choose Style (`choose-step.tsx`)
 
-"How would you like to edit your video?" offers **Apply StyleOne** and **Open Manual Editor**, plus the
-caption situation (detected / missing / uncertain). Neither runs before the crop is confirmed (the API
-refuses StyleOne, preview and export until then). Switching from Manual to StyleOne asks first; switching
+"How would you like to edit your video?" offers **Apply StyleOne** and **Open Manual Editor**. Neither
+runs before the crop is confirmed (the API refuses StyleOne, analysis, hooks, preview and export until then),
+and no AI result is shown here: the screen only says that the speech and captions are checked after the
+choice. Choosing either starts the `ANALYZE` job when the upload has not been analyzed yet; for StyleOne the
+job keeps the operation claimed and continues straight into StyleOne and its preview, so the browser never
+sees an idle gap. Switching from Manual to StyleOne asks first; switching
 from StyleOne to Manual offers "Keep StyleOne and edit" or "Start from the cropped video". Each switch is
 one canonical revision, so editor Undo restores the previous composition.
 
@@ -70,8 +102,9 @@ Uses the actual StyleOne engine: `resolveCreativeStyle(AUTOMATIC_2)` → `compil
 the only geometry source: black 1080×1920 canvas, fixed media window x=0 y=610 1080×700, EB Garamond hook
 with semantic emphasis above it, white/lime active-word captions in its safe box. The bundle adds the
 canonical `SET_VIDEO_FRAMING FIT`, so the whole confirmed crop is fitted inside the window (the editor
-preview and the canonical camera both honour it); choosing the "StyleOne window" crop shape fills it
-exactly. The hook is the Recommended suggestion (local unless OpenAI was authorized). Captions are
+preview and the canonical camera both honour it), with the black canvas around a crop whose shape
+differs from the window; the crop is never recalculated, re-cropped or stretched. A custom 54:35 crop
+fills the window exactly. The hook is the Recommended suggestion (local unless OpenAI was authorized). Captions are
 generated (`GENERATE_CAPTIONS`, real word timings) only when the video has none; readable existing
 captions are kept with no duplicate layer. StyleOne is rendered only after it is chosen.
 
@@ -91,7 +124,8 @@ with reset), Audio (volume, mute, fades, music, ducking), Overlay (images/logos)
 editing, Inspector (scale/position, rotation, speed), Undo/Redo and Ask AI. Export in the editor header
 goes to the shared Quick Reframe export step.
 
-The Hooks tool contains:
+The Hooks tool follows the post-choice analysis ("Checking your video's speech and captions…", with a
+**Check video** retry if it was canceled or failed). It contains:
 
 - **Suggested Hooks** (`quick-reframe-hooks.ts`): six categories — Bold, Curiosity, Question, Contrarian,
   Emotional, Professional. With the per-request consent box ticked, OpenAI (backend key, `OPENAI_MODEL`,
@@ -131,64 +165,55 @@ hook, captions and adjustments because they are all canonical state.
 ## Data
 
 `QuickReframe` gained `editPath` (STYLEONE | MANUAL) and `confirmed` (the baked preparation), migration
-`20261007010000_quick_reframe_v2` (additive). `plan` now holds only the crop-step draft (shape, crop,
-tracking, cleanup, denoise); it never rewrites the timeline. `hooks` stores ranked category objects (old
+`20261007010000_quick_reframe_v2` (additive). `plan` holds only the crop-step draft (aspect — `SOURCE`,
+`CUSTOM` = Free, or `W:H` — crop, grid, legacy cleanup, denoise); it never rewrites the timeline. V3 needs no
+migration: `grid` lives in the plan JSON and the new statuses (`PLAYBACK`, `CROPPING`) are strings. `hooks` stores ranked category objects (old
 string lists are still read). Sessions from V1 open on the Crop step with their previous crop as the draft.
 
-## Verification (2026-10-07)
+## Verification (V3, 2026-10-07)
 
-- Typechecks: shared, backend, frontend. Unit: `test-quick-reframe.cjs` (crop safety incl. repost
-  headline/bars case, attribution, captions, URL validation, mask graph with real FFmpeg) and
-  `test-quick-reframe-styleone.cjs` (baked-source identity, Manual canonical composition, actual StyleOne as
-  one undoable revision with FIT, fixed canvas/window, preview/export parity, caption styles, six-category
-  ranking, no composition after a failed crop).
-- Live, `scripts/verify-quick-reframe-v2.cjs` (HTTP like the browser, outputs inspected, self-cleaning),
-  on owned synthetic 27.2 s portrait "repost" fixtures (SAPI speech, black bars, headline, creator handle;
-  one with burned-in subtitles):
-  - Smart suggestion on the repost fixture trims bars and the headline (keeps y 0.307–0.800, handle and
-    picture inside); with the test's side tweak the crop bakes 720×1280 → 690×616.
-  - A StyleOne: 1080×1920 H.264/AAC 27.20 s; canvas black outside the window at start/middle/end; media window
-    vs confirmed crop MAE 1.23–1.24 (0–255); serif hook ink; 15 generated captions; active-word highlight 1,945
-    lime pixels at 3.72 s; original/export audio r=0.994 at −5 ms; History + re-edit.
-  - Re-crop after styling: same SOURCE id and element ids, previous export marked stale; a crop that cut the
-    creator handle was refused.
-  - B/C Manual: OpenAI hooks (all six categories, one Recommended) applied with a fitted size, captions
-    generated, Warm filter + saturation measured in the 720p export (806×720, the crop's shape; picture strip
-    rgb 172,137,63 → 178,142,34), refresh keeps everything.
-  - E Switching: StyleOne over manual edits is one revision; editor Undo restored the manual hook and colour;
-    the confirmed crop key was unchanged.
-  - D Existing captions: detected as readable, kept inside the crop, zero generated captions; StyleOne wrote its
-    own local hook although no suggestions had been requested.
-  - Identity crop: SOURCE points back to the original, no extra encode.
-- `verify-quick-reframe-persistence.cjs` after a backend restart (crop, path, exports, History, hidden from
-  the editor list, ranged playback; then deletion → 404 for export, cropped source and original) and
-  `verify-quick-reframe-word-highlight.cjs`.
-- Browser: `e2e/quick-reframe.spec.ts` (mocked; crop-first at 320–1440 px, OCR toggle, sliders, choose +
-  switch confirmation, ownership gate, export resolutions) and `e2e/quick-reframe-flow.spec.ts` (live, real
-  clicks: both full journeys including handle drag, refresh, download and History re-edit, and phone widths
-  320–768 for crop handles, the editor's Hooks drawer with the keyboard, and export) — 9/9 passed.
-- Regression: canonical editor scripts unchanged versus the pre-change baseline (the same two, phase7 and
-  ai-objects, already failed on HEAD); generated-clip edit-project scripts pass; Create Clips journeys
-  (`e2e/workflows.spec.ts`: XeeFree/StyleZero, XeePro/StyleOne, History → Edit → Ask AI → Undo → Export,
-  delete, offline recovery) 5 passed, YouTube skipped (no authorized URL); editor/mobile/crop E2E 16 passed.
-  `product-simplification` still expects an "Edit" desktop-nav link that the V1 commit replaced with Quick
-  Reframe.
-
-## Deployment
-
-Commit `7a39bc2` on `main`. Backend: the existing laptop Docker stack (`https://api.xeeclip.me`); the additive
-migration applied on restart and existing sessions/volumes were kept. Frontend: static build deployed to
-Cloudflare (Worker version `ed1a1bb0-5aa3-4327-8f19-b15158d2a3cb`). `https://xeeclip.me/quick-reframe` returned
-200, and `e2e/quick-reframe-flow.spec.ts` passed 3/3 against production (both full journeys with real
-downloads, plus phone widths); its disposable sessions were deleted.
+- Typechecks: shared, backend, frontend. Unit: `test-quick-reframe.cjs` (V3 contract: whole-frame draft,
+  crops that cut faces/captions/attribution stored exactly, only technical limits incl. the 16 px minimum,
+  every preset + custom ratio, display-only grid, crop-aware caption state, legacy cleanup rights, exact
+  export canvases incl. the 3840 px cap, bake graph; real FFmpeg 16×16 crop) and `test-quick-reframe-styleone.cjs`.
+  The frontend geometry (`quick-reframe-crop.ts`) was checked standalone: every ratio switch, locked/free drags
+  on all handles, zoom/pan, edge/size fields, parsing.
+- Live, `scripts/verify-quick-reframe-v3.cjs --openai --restart` (HTTP like the browser, files inspected with
+  ffprobe and extracted frames, self-cleaning) on owned synthetic 27.2 s 720×1280 "repost" fixtures (SAPI
+  speech, black bars, headline, creator handle; one with burned-in subtitles):
+  - Before Done Cropping: no analysis, no transcript; `/analyze`, `/styleone`, `/hooks` refused; `/suggest` gone.
+  - Every crop baked to exactly the chosen rectangle (frames at start/middle/end vs the same crop of the
+    original, MAE 0–255; a 24 px shifted crop for comparison): Free 438×496 (0.14 vs 13.05), 9:16 360×640
+    (0.06), 16:9 720×404 (0.17), 1:1 432×432 (0.04), 4:5 360×450 (0.05), custom 7:5 502×358 (0.07), from
+    top/bottom/left/right (≤0.04), 16×16 minimum. A 10 px crop was refused; a grid change kept the confirmed crop.
+  - StyleOne on the Free crop that cuts the headline, handle and captions: analysis started only on choosing;
+    crop kept exactly; 1080×1920 H.264/AAC 27.20 s; black canvas; whole crop FIT in the window (MAE 1.86, no
+    second crop, black pillarbox); preview/export parity MAE 2.69; audio r=0.994 at −5 ms; 15 captions; History.
+  - Manual on a 4:5 crop: analysis started only on choosing; no automatic elements; OpenAI hooks (consent) +
+    15 captions + Warm; export 1080×1350 H.264/AAC 27.20 s, audio r=0.994. Re-crop to 16:9 kept the SOURCE id
+    and all 17 elements, marked the export stale and re-exported 1284×720 (the 405 px crop height floors to 404).
+  - After `docker restart ai-content-backend`: crops, ratios, paths and exports intact.
+  - Captions follow the crop: crop keeping the subtitles → EXISTING_READABLE, none added; crop removing them →
+    MISSING, StyleOne generated 15.
+- Browser (local stack): `e2e/quick-reframe.spec.ts` (mocked, 9/9: no AI tools/requests while cropping at
+  320–1440 px, every ratio chip, corner/edge/move drags, ratio locks, custom ratio, grid never changes the crop,
+  numeric sync, exact saved crop, zoom/pan/reset, CDP touch drag + two-finger pinch/pan without page scroll,
+  full screen, exact restore, low-resolution warning, choose/export) and `e2e/quick-reframe-flow.spec.ts` (live,
+  3/3: Free crop by sliders and handle drags, refresh, confirmed crop equals the drawn one, no analysis before
+  the choice, StyleOne and Manual journeys to downloaded exports, History re-edit, phones 320–768).
+- Regression: canonical editor scripts as before (only the pre-existing phase7 and ai-objects failures);
+  generated-clip edit-project, unified generation, Quick Reframe StyleOne scripts pass.
 
 ## Limits
 
-- Smart crop and caption detection sample one frame per second and are confidence-based; moving or
-  low-contrast text may need manual review. The crop preview shows tracking at its starting position.
+- Caption detection (after the mode choice) samples one frame per second and is confidence-based; moving or
+  low-contrast text may need manual review.
+- No rotation in the crop step. Even-pixel encoding can floor a crop by 1 px, so a preset ratio may export a
+  few pixels off the textbook size (e.g. 1284×720 for a 405 px-tall 16:9 crop).
+- Very narrow Free crops are exported with the long side capped at 3840 px; the browser editor's preview canvas
+  keeps its 128 px minimum side and may letterbox such extremes.
 - The editor has no text animation, so hook animation is not offered. Zoom is the Inspector's scale and
   AI zoom events, not a separate manual tool. Effects/transitions remain unimplemented in the editor.
-- Browser previews of blur masks are approximations; the rendered preview is exact.
 - Hook ranking is a quality judgement. Local suggestions can cover fewer than six categories; OpenAI needs
   per-request consent. Silent videos get no hook or caption suggestions.
 - Estimated export size is a bitrate estimate (CRF encoding is content-dependent).

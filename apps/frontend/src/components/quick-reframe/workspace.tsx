@@ -3,9 +3,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { applyStyleOne, chooseManual, confirmCrop, defaultStep, editorUrl, isProcessing, mediaUrl, quickReframeUrl, reframeRequest, revertCrop, savePlan,
+import { applyStyleOne, chooseManual, confirmCrop, defaultStep, editorUrl, isProcessing, mediaUrl, preparePlayback, quickReframeUrl, reframeRequest, revertCrop, savePlan,
   uploadReframe, type ReframePlan, type ReframeSession, type ReframeStep } from '@/lib/quick-reframe-api';
-import { cropProblems } from '@/lib/quick-reframe-crop';
+import { cropIssue } from '@/lib/quick-reframe-crop';
 import { StepIndicator } from './step-indicator';
 import { CropStep } from './crop-step';
 import { ChooseStep, type ChooseAction } from './choose-step';
@@ -18,8 +18,8 @@ const readStorage = () => { try { return window.localStorage.getItem(STORAGE_KEY
 const writeStorage = (value: string | null) => { try { if (value) window.localStorage.setItem(STORAGE_KEY, value); else window.localStorage.removeItem(STORAGE_KEY); } catch { /* storage unavailable */ } };
 
 /**
- * Quick Reframe AI V2: Import → 1. Crop → 2. Choose Style → 3. Edit → 4. Export.
- * The crop is confirmed before any editing path exists; Manual editing opens the real XeeClip editor.
+ * Quick Reframe V3: Import → 1. Crop (fully manual) → 2. Choose Style → 3. Edit → 4. Export.
+ * No AI runs before Done Cropping and a chosen editing mode; Manual editing opens the real XeeClip editor.
  */
 export function QuickReframeWorkspace() {
   const router = useRouter();
@@ -39,6 +39,8 @@ export function QuickReframeWorkspace() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const afterJob = useRef<ReframeStep | null>(null);
   const loaded = useRef(false);
+  /** The crop as it was when the crop step opened: Cancel returns to it when nothing was confirmed yet. */
+  const cropBaseline = useRef<ReframePlan | null>(null);
 
   const setStep = useCallback((next: ReframeStep, id?: string) => {
     setStepState(next);
@@ -92,21 +94,22 @@ export function QuickReframeWorkspace() {
     finally { setBusy(false); }
   };
   const ensure = async () => session ?? await reframeRequest<ReframeSession>('', 'POST');
-  const analyze = async (s: ReframeSession) => accept(await reframeRequest(`/${s.id}/analyze`, 'POST', { externalAiAuthorized: false }));
+  const playback = async (s: ReframeSession) => accept(await preparePlayback(s.id));
   const upload = () => action(async () => {
     if (!file) return;
     const s = await ensure(); accept(s); setUploading(true); setUploadPercent(0); abort.current = new AbortController();
-    try { const uploaded = await uploadReframe(s.id, file, setUploadPercent, abort.current.signal); accept(uploaded); setStep('crop', uploaded.id); await analyze(uploaded); }
+    try { const uploaded = await uploadReframe(s.id, file, setUploadPercent, abort.current.signal); accept(uploaded); setStep('crop', uploaded.id); await playback(uploaded); }
     finally { setUploading(false); }
   });
   const importLink = () => action(async () => {
     const s = await ensure(); accept(s); afterJob.current = 'crop';
     accept(await reframeRequest(`/${s.id}/import`, 'POST', { url, authorized }));
   });
-  // A finished import still needs its local analysis before the crop step can suggest anything.
+  // A finished import still needs browser playback and its whole-frame draft before cropping.
   useEffect(() => {
-    if (session && session.sourceUrl && !session.analysis && session.status === 'INPUT' && !busy && !uploading) void action(() => analyze(session));
+    if (session && session.sourceUrl && !session.plan && session.status === 'INPUT' && !busy && !uploading) void action(() => playback(session));
   }, [session?.status, session?.sourceUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (step === 'crop' && plan && !cropBaseline.current) cropBaseline.current = plan; if (step !== 'crop') cropBaseline.current = null; }, [step, plan]);
 
   // --- Crop draft: saved quietly (debounced) so a refresh keeps it; Done bakes it into the source. ---
   const flush = useCallback(async () => {
@@ -117,7 +120,7 @@ export function QuickReframeWorkspace() {
   const changePlan = (next: ReframePlan) => {
     setPlan(next); dirty.current = true;
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    if (!session || cropProblems(next, session.analysis).length) return;
+    if (!session || cropIssue(next.crop, session.width || 16, session.height || 9)) return;
     saveTimer.current = setTimeout(() => { void savePlan(session, next).then((saved) => { dirty.current = false; setSession(saved); })
       .catch((caught) => setError(caught instanceof Error ? caught.message : 'The crop could not be saved.')); }, 700);
   };
@@ -131,12 +134,13 @@ export function QuickReframeWorkspace() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     dirty.current = false;
     if (session.confirmed) { const reverted = await revertCrop(session); accept(reverted); setPlan(reverted.plan); setStep(reverted.editPath ? 'edit' : 'choose', reverted.id); }
-    else { const fresh = await reframeRequest(`/${session.id}/suggest`, 'POST', { aspect: 'SOURCE' }) as unknown as Pick<ReframePlan, 'crop' | 'framing'>;
-      if (plan) changePlan({ ...plan, aspect: 'SOURCE', crop: fresh.crop, framing: fresh.framing, tracking: undefined, cleanup: [] }); }
+    else if (cropBaseline.current) changePlan(cropBaseline.current);
   });
   const choose = (choice: ChooseAction) => action(async () => {
     if (!session) return;
-    if (choice.kind === 'STYLEONE') { const next = await applyStyleOne(session); accept(next); setStep('edit', next.id); return; }
+    if (choice.kind === 'STYLEONE') { const next = await applyStyleOne(session); accept(next);
+      // The first StyleOne checks speech and captions first; the step opens when that job hands over.
+      if (next.status === 'ANALYZE') afterJob.current = 'edit'; else setStep('edit', next.id); return; }
     const next = await chooseManual(session, choice.removeStyleOne); accept(next); router.push(editorUrl(next, 'hooks'));
   });
   const goTo = (next: ReframeStep) => {
@@ -145,7 +149,7 @@ export function QuickReframeWorkspace() {
     void reframeRequest(`/${session.id}`).then(accept).catch(() => undefined);
     setStep(next, session.id);
   };
-  const reachable = (target: ReframeStep) => !!session?.analysis && !processing && (target === 'crop' || (target === 'choose' && session.cropConfirmed) ||
+  const reachable = (target: ReframeStep) => !!session?.plan && !processing && (target === 'crop' || (target === 'choose' && session.cropConfirmed) ||
     ((target === 'edit' || target === 'export') && session.cropConfirmed && !!session.editPath));
   const reset = () => { abort.current?.abort(); setSession(null); setPlan(null); setFile(null); setError(''); dirty.current = false; writeStorage(null); window.history.replaceState(null, '', '/quick-reframe'); setStep('crop'); };
 
@@ -182,12 +186,12 @@ export function QuickReframeWorkspace() {
         <progress className='w-full accent-primary' value={session.progress || 0} max={100} />
         <Button type='button' variant='secondary' className='justify-self-start' onClick={() => void action(async () => accept(await reframeRequest(`/${session.id}/cancel`, 'POST')))}>Cancel</Button></div>}
 
-    {session && hasSource && step === 'crop' && (plan && session.analysis
+    {session && hasSource && step === 'crop' && (plan
       ? <CropStep session={session} plan={plan} busy={busy || processing} confirmed={!!session.confirmed} onChange={changePlan} onDone={() => void done()} onCancel={() => void cancelCrop()} />
       : processing ? session.originalUrl && <div className='mx-auto w-full max-w-3xl overflow-hidden rounded-2xl bg-black'>
           <video src={mediaUrl(session.originalUrl)} controls playsInline preload='metadata' aria-label='Your video' className='max-h-[56vh] w-full object-contain' /></div>
-      : <div className='grid gap-3 rounded-xl border border-border bg-surface p-4'><p className='text-sm text-muted-foreground'>Analysis is needed before cropping.</p>
-        <Button type='button' className='justify-self-start' disabled={busy} onClick={() => void action(() => analyze(session))}>Analyze video</Button></div>)}
+      : <div className='grid gap-3 rounded-xl border border-border bg-surface p-4'><p className='text-sm text-muted-foreground'>Your video needs to be prepared for cropping.</p>
+        <Button type='button' className='justify-self-start' disabled={busy} onClick={() => void action(() => playback(session))}>Prepare video</Button></div>)}
     {session && step === 'choose' && session.cropConfirmed && !processing && <ChooseStep session={session} busy={busy} onChoose={(c) => void choose(c)} onBack={() => goTo('crop')} />}
     {session && step === 'edit' && session.editPath === 'STYLEONE' && <StyleOneStep session={session} onSession={accept} onError={setError} onStep={(s) => goTo(s)} />}
     {session && step === 'export' && session.editPath && <ExportStep session={session} onSession={accept} onError={setError}
