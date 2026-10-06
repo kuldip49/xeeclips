@@ -1,60 +1,188 @@
-# Quick Reframe AI
+# Quick Reframe AI (V2: crop first)
 
 Implementation and acceptance report, 2026-10-07.
 
-## Processing order
+## The guided sequence
 
-**Input → Analyze → Clean → StyleOne → Preview → Edit → Export → History.**
+**Import → Analyze → 1. Crop → 2. Choose Style → 3. Edit (StyleOne or Manual) → 4. Export → History.**
 
-Quick Reframe remains a separate top-navigation button and /quick-reframe page. It owns a concurrency-one BullMQ queue and canonical EditProject/asset/element/history records. It never invokes candidate discovery, clip ranking, highlight selection, or multi-clip generation, and never creates Video, ProcessingJob, ClipCandidate or GeneratedClip records.
+`/quick-reframe` is a separate top-navigation page with its own concurrency-one BullMQ queue. It owns
+a canonical `EditProject` but never creates Video, ProcessingJob, ClipCandidate or GeneratedClip rows,
+never selects highlights, never shortens or splits the video, and keeps the original audio and timeline.
+Quick Reframe projects are hidden from the editor's project list and appear only in Quick Reframe History.
 
-Stage 1 analyzes the entire source (maximum 180 seconds) locally with the existing face/person, scene-boundary, OCR and Whisper services. Safe edge/black-bar crops protect detected faces, important visuals, captions and attribution throughout tracked movement. Authorized timed blur or dark covers address localized overlays; masks overlapping detected faces or information are rejected. Third-party attribution stays protected; selected own branding needs the existing explicit ownership declaration. No content-aware reconstruction is implemented.
+A step indicator (`components/quick-reframe/step-indicator.tsx`) shows the active step. Earlier and
+already-reachable steps are links back; nothing is lost by going back.
 
-The clean renderer consumes only the original VIDEO segment at 1×, with source audio at its original level. It strips all generated TEXT/SUBTITLE elements, style layout, zoom and grading. Cleanup, safe source crop and optional denoise produce a separate owned CLEAN reference asset. FFprobe verifies duration, dimensions, H.264/AAC and audio presence, followed by a complete decode. **A failure here prevents StyleOne compilation and composition.**
+### 1. Crop (`crop-step.tsx`)
 
-Stage 2 consumes those validated clean pixels. It calls the actual resolveCreativeStyle(AUTOMATIC_2), compileCreativeStyle, canonical editor command bundle, buildRenderPlan, buildEditModeAss and buildFfmpegArgs. AUTOMATIC_2_STREET3_LAYOUT remains the single geometry source: black 1080×1920 canvas; media window x=0, y=610, width=1080, height=700; existing EB Garamond serif hook with white/red semantic emphasis; existing white/lime active-word subtitle style and safe area. StyleOne’s existing full-frame fit branch keeps the entire cleaned source inside that fixed media window. A second face crop or semantic zoom does not alter the clean result.
+After upload the video is analyzed locally (faces/persons, scene boundaries, OCR at 1 fps, Whisper),
+and a smart crop suggestion is saved as the first draft. The Crop step shows only crop and source-inspection
+tools: a large playable preview, drag handles (corners and edges, mouse and touch), move, pinch zoom (Ctrl +
+wheel on desktop), edge sliders (from top/bottom/left/right), shapes (Original, Free, 9:16, 4:5, 1:1, 16:9,
+StyleOne window = 1080×700), Smart crop suggestion, Reset, Adjust/Preview-result toggle, and Cancel/Done.
+OCR boxes are hidden unless **Show detected text** is turned on.
 
-Exports are one full-sequence 1080×1920 H.264 MP4 with AAC when applicable. Rendered previews are 540×960 with the exact same normalized layout, text rules and fixed card. A larger canvas does not create new source detail. User color and gain/mute edits apply once during composition; the intermediate retains original audio.
+The crop is normalized (independent of screen size) and applies to the whole duration. The same
+protections the server enforces are shown live and block Done: detected faces/persons, important
+on-screen information, creator attribution and the video's own captions must stay inside the crop
+(captions may be cropped only after explicitly choosing to replace them). Smart suggestions remove black
+bars and decorative text, including headlines stacked in the top 40% above the picture, only where those
+checks pass; removing empty bars may leave as little as 30% of the frame, otherwise at least 60% is kept.
 
-## Editing, captions and persistence
+**Clean overlays** lives inside the Crop step: localized blur or mask (cover) regions, timed, for videos
+the user owns or may edit (rights checkbox). Detected attribution cannot be cleaned unless the user
+explicitly selects it and declares it is their own branding. Regions overlapping faces or information
+are refused. The crop preview approximates blur with CSS; the rendered result uses FFmpeg.
 
-Original, Clean original and StyleOne are separate review modes. The editor retains source-crop/pinch controls, localized cleanup, optional hook wording, caption text, restrained color and original-audio controls. StyleOne’s canvas, media window, serif hook placement and caption style remain fixed. Hooks use the existing template’s whole-video timing. Small sources shorter than one second retain their actual duration.
+The draft autosaves (debounced) so a refresh keeps it. **Done** bakes the crop and cleanup into the
+source (below) and opens step 2. **Cancel** restores the last confirmed crop.
 
-Readable embedded subtitles stay in the cleaned source and suppress new subtitles. Missing subtitles can use local transcription. Partial/unreadable layers require explicit replacement; each detected old caption must be fully cropped out or covered before a new layer can be added. Blur alone does not qualify as removal. When recognition cannot locate uncertain subtitles, automatic replacement is blocked for review. The canonical generateCaptions grouper produces short original-word phrases. Real word timings are stored relative to each caption and drive the existing active-word highlights. No timings are invented; edited captions exceeding StyleOne’s two-line area are rejected for correction.
+### How the crop is stored (why it is never applied twice)
 
-Clean assets are cached by source ID, crop/tracking, masks and denoise. The hash sorts object keys because PostgreSQL JSONB changes their order. Hook, caption, color and audio changes can reuse the clean pixels. A changed cleanup invalidates the clean review URL and renders Stage 1 again. Current previews/exports carry pipeline version, clean asset identity and project revision; exports from the previous processing version remain downloadable in History but are stale for the new workflow.
+The canonical editor's own VIDEO crop pads the kept region back to the full source frame (a
+letterbox), which would shrink the picture inside StyleOne's window and never produce a real cropped
+canvas. So **Done** renders the confirmed crop/tracking/cleanup/denoise once (`quickCleanRender`,
+validated by ffprobe and a full decode) and updates the project's `SOURCE` EditAsset **in place**: the
+same row id now points at the cropped file, with the original duration and transcript. The uploaded file
+becomes a REFERENCE asset `quickReframeKind: ORIGINAL` (distinct identity key, `storageObjectKey` = the real
+object), so the crop can be re-edited any time. Element asset ids never change, so every edit, history
+snapshot and undo step survives a re-crop. The swap is logged as `QUICK_REFRAME_SOURCE_PREPARED`, which
+canonical undo does not replay. A full-frame crop with no cleanup and a browser-compatible codec bakes
+nothing: SOURCE points back at the original. The baked file is identified by a key-order-independent
+fingerprint of the preparation; previous baked files are deleted, the ORIGINAL never is.
 
-Owned previews and intermediates are bounded; final exports persist until deletion. History supports re-edit, download and canonical owned-media deletion. Operation tokens and cancellation guard worker writes. Serialization conflicts have bounded retries without bypassing revision checks. Existing PostgreSQL, Redis and MinIO volumes are preserved.
+Both editing paths and every preview/export compose from that SOURCE. In the editor the Crop tool leads
+back to this step instead of stacking a second crop.
 
-## Inputs and local AI
+### 2. Choose Style (`choose-step.tsx`)
 
-Uploads accept MP4, MOV, M4V and WebM up to 1 GiB, with existing disk-backed chunks, progress, retries and cancellation. Actual FFprobe duration rejects sources over 180 seconds without trimming. Incompatible codecs receive derived H.264 browser playback; the original remains immutable.
+"How would you like to edit your video?" offers **Apply StyleOne** and **Open Manual Editor**, plus the
+caption situation (detected / missing / uncertain). Neither runs before the crop is confirmed (the API
+refuses StyleOne, preview and export until then). Switching from Manual to StyleOne asks first; switching
+from StyleOne to Manual offers "Keep StyleOne and edit" or "Start from the cropped video". Each switch is
+one canonical revision, so editor Undo restores the previous composition.
 
-Public Instagram Reel/video and X/Twitter adapters retain strict URL validation, rights confirmation, the deployment approval flag, no cookies/login, platform CDN allowlists, HTTPS redirect validation, public DNS pinning and bounded downloads. Private, restricted, unavailable or unsupported links receive an upload alternative. X importing has security/parser checks; a real authorized X acceptance video remains unavailable.
+### 3a. StyleOne (`styleone-step.tsx`)
 
-Local analysis and transcription do not send video or transcripts to an external AI provider. Optional three hook suggestions use the configured OpenAI router only after separate explicit consent to send up to 8,000 transcript characters. **All acceptance tests use externalAiAuthorized=false**, following the user’s local-only preference. Manual hooks remain available.
+Uses the actual StyleOne engine: `resolveCreativeStyle(AUTOMATIC_2)` → `compileCreativeStyle` →
+`applyAssistantBundle` (one undoable `APPLY_ASSISTANT_EDIT` revision). `AUTOMATIC_2_STREET3_LAYOUT` stays
+the only geometry source: black 1080×1920 canvas, fixed media window x=0 y=610 1080×700, EB Garamond hook
+with semantic emphasis above it, white/lime active-word captions in its safe box. The bundle adds the
+canonical `SET_VIDEO_FRAMING FIT`, so the whole confirmed crop is fitted inside the window (the editor
+preview and the canonical camera both honour it); choosing the "StyleOne window" crop shape fills it
+exactly. The hook is the Recommended suggestion (local unless OpenAI was authorized). Captions are
+generated (`GENERATE_CAPTIONS`, real word timings) only when the video has none; readable existing
+captions are kept with no duplicate layer. StyleOne is rendered only after it is chosen.
 
-## Verification of the two-stage update
+The result screen shows the rendered 540×960 preview and **Re-edit Crop**, **Change Hook** (suggestions or
+own text, one canonical text command), **Adjust Captions** (show/hide, or generate when missing),
+**Edit More** (the canonical editor with the StyleOne composition intact), **Export Video** and **Undo
+StyleOne**.
 
-- Shared/backend/frontend typechecks; backend and Cloudflare static builds.
-- test-quick-reframe.cjs: conservative crops, moving-subject protection, charts, captions, attribution, URL validation and source-local render filters.
-- test-quick-reframe-styleone.cjs: no generated clean overlays, actual StyleOne compiler/editor, canonical geometry/serif emphasis/caption styles, preview/export parity, source-only timeline, cache key order independence, short-source hook timing, and no Stage 2 after a clean read failure.
-- Existing canonical render/text/Automatic 2 camera suites and unified-generation regressions (86 checks) passed.
-- Chrome: all tools at 320, 360, 375, 390, 412, 430, 768, 1024 and 1440 px; no horizontal overflow or page errors; original four mobile bottom tabs preserved. Separate clean/StyleOne review and fixed portrait preview passed (4 tests).
-- Live 8-second fixtures with readable embedded captions and missing captions passed both stages, preview, 1080×1920 export, ranged playback, History and undo/redo. Embedded captions were retained.
-- A 180-second fixture passed full local analysis, clean, StyleOne preview/export, History and revision edits. Existing long-video pipeline row counts stayed unchanged. The initial implementation also tested rejection at 181 seconds.
-- Final synthetic speech: 15.35 seconds, eight bounded caption cues, original/export audio correlation **0.999506**. A rendered late word at 2.72 seconds produced 5,400 lime pixels, verifying active-word timing beyond the first caption.
-- Silent VP9 WebM: derived browser playback, tracked source crop and timed blur/cover passed Clean → StyleOne, with one 1080×1920 output and no fabricated audio.
-- User-authorized Instagram Reel Dddut7lMvl7: **139.109342 seconds**, 135 face samples, readable embedded captions retained, exactly one full-sequence output. Original/clean audio correlation **0.999935**; original/export **0.999868**. The fixed media window matched the clean source at beginning/middle/end (RGB mean absolute error 0.146, 0.170 and 0.008 on a 0–255 scale); canvas corners remained black. All analysis/transcription stayed local.
-- Public Chrome: both clean and StyleOne video playback, fixed portrait preview, comparison, History/re-edit, browser reload and mobile caption controls passed. Initial transient session-load failure passed on repeat after confirming the public API response.
-- Controlled backend restart: persisted clean asset, current preview/export revisions, plan, History and ranged playback passed; owned deletion returned 404 for session, source, clean and export URLs.
+### 3b. Manual editing (the canonical editor)
 
-Reproducible runners live in apps/backend/scripts: verify-quick-reframe.cjs, verify-quick-reframe-speech.cjs, verify-quick-reframe-styleone.cjs, verify-quick-reframe-word-highlight.cjs and verify-quick-reframe-persistence.cjs. Run real-media runners inside the backend container with the live stack. Disposable test records/media are deleted; the speech session can be temporarily retained for browser/restart checks. The StyleOne runner takes an explicitly authorized social URL and compares original/clean/export audio, fixed black canvas and source content at beginning/middle/end.
+**Open Manual Editor** opens `/edit-mode/<editProjectId>` — the same complete editor as everywhere else —
+with a Quick Reframe step bar, back link and a Quick Reframe-only **Hooks** tool (desktop rail and phone
+tool bar). StyleOne is not applied. The preview starts as the cropped video with its original timeline and
+audio. Every other tool is the existing one: Text, Captions, Filters (10 presets), Adjust (exposure,
+brightness, contrast, highlights, shadows, saturation, temperature, tint, sharpness, fade, vignette, each
+with reset), Audio (volume, mute, fades, music, ducking), Overlay (images/logos), Templates, Media, timeline
+editing, Inspector (scale/position, rotation, speed), Undo/Redo and Ask AI. Export in the editor header
+goes to the shared Quick Reframe export step.
 
-The initial version’s eight procedural cases (30-second top hook, 60-second side text, central overlay, moving graphics, embedded captions, missing captions, chart/grid and 180-second source), 181-second rejection, authorized 139.109-second Instagram import and History/restart/deletion passed before the processing-order update. Moving graphics are not proof of moving-face detector accuracy. The updated checks above specifically verify Clean → actual StyleOne.
+The Hooks tool contains:
 
-## Deployment and limits
+- **Suggested Hooks** (`quick-reframe-hooks.ts`): six categories — Bold, Curiosity, Question, Contrarian,
+  Emotional, Professional. With the per-request consent box ticked, OpenAI (backend key, `OPENAI_MODEL`,
+  router role `hookGeneration`) writes two per category from up to 8,000 transcript characters; the
+  existing grounded local generator always contributes and is the fallback. All candidates go through
+  `scoreHook` (rejects ungrounded lines, fabricated quotes, clickbait, false urgency; scores grounding,
+  brevity/readability, mechanism and specificity) plus a phone-readability term; at most two per category,
+  duplicates removed, the top line marked **Recommended** ("a quality judgement, not a promise of views").
+  Cards offer Apply and Edit; Regenerate and "Write your own hook" are always available. A hook is a
+  canonical TEXT element (`textStyleId: HOOK`, `presetRole: HOOK`).
+- **Position**: Above video (when the canvas has room; "Make room above the video" switches to a 9:16 FIT
+  frame), Top inside video, Center, Custom (drag in the preview). A warning appears when the hook covers a
+  detected face (mapped through the crop) or the captions. **Show hook for**: first 3 s / 5 s / whole video.
+  Font, color and background open the existing Text tools.
+- **Captions decision**: "Captions detected." (kept; generating anyway is behind an explicit warning) or
+  "No captions detected. Add captions?" → **Generate Captions** (local Whisper transcript, canonical
+  grouping and word timings). Customization uses the existing Captions tools.
 
-Frontend: https://xeeclip.me/quick-reframe, static Cloudflare Worker assets. Backend: the existing Docker stack on this Windows laptop via https://api.xeeclip.me. Follow production-deployment.md; never remove volumes. Cloudflare Worker version: 2458ef87-5071-48d1-8583-af04957bd646. This update needs no schema migration: CLEAN is an owned canonical REFERENCE asset.
+### 4. Export (`export-step.tsx`)
 
-Recognition samples at one frame per second and remains confidence-based. Tiny, fast-moving, low-contrast or unfamiliar text may need manual review. Conservative cleanup may preserve an overlay when removal would risk a face, attribution or important visual. Full-frame fit can make portrait content smaller within StyleOne’s wide media window. Silent sources stay silent. External AI hook generation remains untested per the user’s preference. The laptop must remain online, and CPU analysis can take several minutes.
+One export process for both paths (`QuickReframeService.compose`): the canonical render plan, ASS text and
+FFmpeg graph over the confirmed SOURCE, including the project's images and music. The screen shows the
+final rendered preview (or a Render preview button), duration, the exact resolution for the chosen quality
+(720p or 1080p short side; StyleOne is 720×1280 or 1080×1920), aspect ratio, format (H.264/AAC) and an
+estimated size. Output is validated by ffprobe (codec, exact canvas, duration ±0.25 s, audio present
+when audible) and a full decode before it is saved; only then does **Download Video** appear. Previews
+are 540 short side with the same layout and are replaced; exports persist and become "edited since export"
+when the project changes.
+
+### History
+
+Quick Reframe History cards show the **Quick Reframe** label, the editing path (StyleOne/Manual),
+preview, **Re-edit** (StyleOne result screen, or the editor for Manual), **Export**, **Download** and
+**Delete** (removes exports, previews, the cropped source and the original). Reopening restores the crop,
+hook, captions and adjustments because they are all canonical state.
+
+## Data
+
+`QuickReframe` gained `editPath` (STYLEONE | MANUAL) and `confirmed` (the baked preparation), migration
+`20261007010000_quick_reframe_v2` (additive). `plan` now holds only the crop-step draft (shape, crop,
+tracking, cleanup, denoise); it never rewrites the timeline. `hooks` stores ranked category objects (old
+string lists are still read). Sessions from V1 open on the Crop step with their previous crop as the draft.
+
+## Verification (2026-10-07)
+
+- Typechecks: shared, backend, frontend. Unit: `test-quick-reframe.cjs` (crop safety incl. repost
+  headline/bars case, attribution, captions, URL validation, mask graph with real FFmpeg) and
+  `test-quick-reframe-styleone.cjs` (baked-source identity, Manual canonical composition, actual StyleOne as
+  one undoable revision with FIT, fixed canvas/window, preview/export parity, caption styles, six-category
+  ranking, no composition after a failed crop).
+- Live, `scripts/verify-quick-reframe-v2.cjs` (HTTP like the browser, outputs inspected, self-cleaning),
+  on owned synthetic 27.2 s portrait "repost" fixtures (SAPI speech, black bars, headline, creator handle;
+  one with burned-in subtitles):
+  - Smart suggestion on the repost fixture trims bars and the headline (keeps y 0.307–0.800, handle and
+    picture inside); with the test's side tweak the crop bakes 720×1280 → 690×616.
+  - A StyleOne: 1080×1920 H.264/AAC 27.20 s; canvas black outside the window at start/middle/end; media window
+    vs confirmed crop MAE 1.23–1.24 (0–255); serif hook ink; 15 generated captions; active-word highlight 1,945
+    lime pixels at 3.72 s; original/export audio r=0.994 at −5 ms; History + re-edit.
+  - Re-crop after styling: same SOURCE id and element ids, previous export marked stale; a crop that cut the
+    creator handle was refused.
+  - B/C Manual: OpenAI hooks (all six categories, one Recommended) applied with a fitted size, captions
+    generated, Warm filter + saturation measured in the 720p export (806×720, the crop's shape; picture strip
+    rgb 172,137,63 → 178,142,34), refresh keeps everything.
+  - E Switching: StyleOne over manual edits is one revision; editor Undo restored the manual hook and colour;
+    the confirmed crop key was unchanged.
+  - D Existing captions: detected as readable, kept inside the crop, zero generated captions; StyleOne wrote its
+    own local hook although no suggestions had been requested.
+  - Identity crop: SOURCE points back to the original, no extra encode.
+- `verify-quick-reframe-persistence.cjs` after a backend restart (crop, path, exports, History, hidden from
+  the editor list, ranged playback; then deletion → 404 for export, cropped source and original) and
+  `verify-quick-reframe-word-highlight.cjs`.
+- Browser: `e2e/quick-reframe.spec.ts` (mocked; crop-first at 320–1440 px, OCR toggle, sliders, choose +
+  switch confirmation, ownership gate, export resolutions) and `e2e/quick-reframe-flow.spec.ts` (live, real
+  clicks: both full journeys including handle drag, refresh, download and History re-edit, and phone widths
+  320–768 for crop handles, the editor's Hooks drawer with the keyboard, and export) — 9/9 passed.
+- Regression: canonical editor scripts unchanged versus the pre-change baseline (the same two, phase7 and
+  ai-objects, already failed on HEAD); generated-clip edit-project scripts pass; Create Clips journeys
+  (`e2e/workflows.spec.ts`: XeeFree/StyleZero, XeePro/StyleOne, History → Edit → Ask AI → Undo → Export,
+  delete, offline recovery) 5 passed, YouTube skipped (no authorized URL); editor/mobile/crop E2E 16 passed.
+  `product-simplification` still expects an "Edit" desktop-nav link that the V1 commit replaced with Quick
+  Reframe.
+
+## Limits
+
+- Smart crop and caption detection sample one frame per second and are confidence-based; moving or
+  low-contrast text may need manual review. The crop preview shows tracking at its starting position.
+- The editor has no text animation, so hook animation is not offered. Zoom is the Inspector's scale and
+  AI zoom events, not a separate manual tool. Effects/transitions remain unimplemented in the editor.
+- Browser previews of blur masks are approximations; the rendered preview is exact.
+- Hook ranking is a quality judgement. Local suggestions can cover fewer than six categories; OpenAI needs
+  per-request consent. Silent videos get no hook or caption suggestions.
+- Estimated export size is a bitrate estimate (CRF encoding is content-dependent).
+- Social import (Instagram/X) is unchanged and still behind its deployment approval flag.
+- The laptop backend must stay online; CPU analysis and renders take minutes for long sources (≤180 s).

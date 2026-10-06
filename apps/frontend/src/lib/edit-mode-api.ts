@@ -188,7 +188,9 @@ type ManualEditCommandValue =
   // --- Workstream C: professional text ---------------------------------------
   // One typed command per property rather than a JSON patch, so every change is
   // independently validated, independently undoable and reusable by the AI editor.
-  | { action: 'add-text'; textStyleId?: TextStylePresetId; content?: string }
+  | { action: 'add-text'; textStyleId?: TextStylePresetId; content?: string;
+      /** A suggested hook is marked so later edits address the same hook element. */
+      origin?: 'USER' | 'ASSISTANT'; presetRole?: 'HOOK'; fontSize?: number; height?: number }
   | { action: 'set-text-content'; elementId: string; content: string }
   | { action: 'set-text-font'; elementId: string; fontFamily: string }
   | { action: 'set-text-size'; elementId: string; fontSize: number }

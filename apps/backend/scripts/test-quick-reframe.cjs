@@ -16,6 +16,9 @@ const graphics=structuredClone(a);graphics.frames[2].information=[full];const fi
 const captionRaw=structuredClone(raw);captionRaw.frames.forEach(f=>f.ocr_boxes=[{x:.1,y:.78,w:.8,h:.06,text:'Spoken words',confidence:.95}]);const readable=analyzeRegions(captionRaw,4);assert.equal(readable.subtitleState,'EXISTING_READABLE');assert.equal(proposePlan(readable,720,1280,{}).captions.enabled,false);
 const uncertain=analyzeRegions({...raw,runtime:{ocr:false}},4);assert.equal(uncertain.subtitleState,'PARTIAL_OR_UNREADABLE');
 const letterboxed={...a,regions:[],frames:a.frames.map(f=>({...f,faces:[],persons:[]})),bars:{top:.08,bottom:.08,left:0,right:0}};assert.equal(proposePlan(letterboxed,720,1280,{}).crop.y,.08);
+// Repost layout: picture between black bars with a headline in the top bar. The headline and bars go, the handle and picture stay.
+const repost=analyzeRegions({runtime:{ocr:true,faceDetector:true,yolo:true},frames:[0,1,2,3].map(t=>({t,faces:[],persons:[],text_boxes:[],ocr_boxes:[{x:.18,y:.26,w:.64,h:.035,text:'MONEY TIP OF THE DAY',confidence:.95},{x:.8,y:.63,w:.17,h:.02,text:'@creator',confidence:.9}],text_coverage:0,edge_density:.02,bars:{top:.2,bottom:.2,left:0,right:0}})),shot_boundaries:[]},4);
+const repostPlan=proposePlan(repost,720,1280,{});assert.ok(repostPlan.crop.y>.29,`headline trimmed (${repostPlan.crop.y})`);assert.ok(repostPlan.crop.y+repostPlan.crop.h>=.65,'attribution kept');validatePlan(repostPlan,4,repost);
 const bad=structuredClone(p);bad.crop.x=.99;assert.throws(()=>validatePlan(bad,4,a));
 const dup=proposePlan(readable,720,1280,{});dup.captions.enabled=true;assert.throws(()=>validatePlan(dup,4,readable),/replacement/);
 const hookOverOriginal=proposePlan(readable,720,1280,{});hookOverOriginal.hook={enabled:true,text:'A useful tip',y:.65};assert.equal(validatePlan(hookOverOriginal,4,readable).hook.y,470/1920);

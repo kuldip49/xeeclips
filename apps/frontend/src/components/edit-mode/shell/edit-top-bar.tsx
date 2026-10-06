@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import type { ReactNode } from 'react';
 import { ArrowLeft, Check, Download, LoaderCircle, Redo2, TriangleAlert, Undo2 } from 'lucide-react';
 import type { EditAspectRatio } from '@/lib/edit-mode-types';
 
@@ -52,7 +53,8 @@ const iconButton = 'grid h-8 w-8 place-items-center rounded-lg text-soft coarse:
   'disabled:hover:bg-transparent';
 
 export function EditTopBar({ projectName, revision, busy, exportPhase, canUndo, canRedo,
-  aspectRatio, onUndo, onRedo, onAspectRatio, onExport, exportDisabled }: {
+  aspectRatio, onUndo, onRedo, onAspectRatio, onExport, exportDisabled,
+  back = { href: '/history', label: 'History' }, title = 'Edit clip', below }: {
   projectName: string;
   revision: number;
   busy: EditBusyKind;
@@ -66,15 +68,20 @@ export function EditTopBar({ projectName, revision, busy, exportPhase, canUndo, 
   onAspectRatio?: (ratio: EditAspectRatio) => void;
   onExport: () => void;
   exportDisabled: boolean;
+  /** Where the back arrow leads; History unless a workflow (Quick Reframe) owns this project. */
+  back?: { href: string; label: string };
+  title?: string;
+  /** A workflow strip under the bar (Quick Reframe's step indicator). */
+  below?: ReactNode;
 }) {
   return <header className='pt-safe shrink-0 border-b border-border bg-surface'>
     <div className='flex h-12 items-center gap-2 px-1.5 sm:gap-3 sm:px-3'>
-    <Link href='/history' aria-label='Back to History'
+    <Link href={back.href} aria-label={`Back to ${back.label}`}
       className='flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-soft hover:bg-tint-strong max-md:h-11 max-md:w-11 max-md:justify-center max-md:rounded-full max-md:p-0'>
-      <ArrowLeft size={15} className='max-md:h-5 max-md:w-5' /><span className='hidden md:inline'>History</span>
+      <ArrowLeft size={15} className='max-md:h-5 max-md:w-5' /><span className='hidden md:inline'>{back.label}</span>
     </Link>
     <span className='hidden h-5 w-px shrink-0 bg-tint-strong sm:block' />
-    <h1 className='min-w-0 flex-1 truncate text-sm font-semibold tracking-tight'>Edit clip</h1>
+    <h1 className='min-w-0 flex-1 truncate text-sm font-semibold tracking-tight'>{title}</h1>
     <SaveStatus busy={busy} exportPhase={exportPhase} revision={revision} />
     <span className='hidden h-5 w-px shrink-0 bg-tint-strong sm:block' />
     <div className='flex shrink-0 items-center gap-0.5'>
@@ -101,5 +108,6 @@ export function EditTopBar({ projectName, revision, busy, exportPhase, canUndo, 
       <Download size={14} />Export
     </button>
     </div>
+    {below}
   </header>;
 }

@@ -7,17 +7,38 @@ export type ReframeAnalysis = { regions: ReframeRegion[];
   boundaries: number[]; subtitleState: 'EXISTING_READABLE' | 'MISSING' | 'PARTIAL_OR_UNREADABLE';
   warnings: string[]; appearance?: { brightness: number; contrast: number };
   bars: { top: number; bottom: number; left: number; right: number } };
-export type ReframePlan = { version: 1; aspect: 'SOURCE' | '9:16' | '1:1' | '16:9' | 'CUSTOM';
+export type ReframeAspect = 'SOURCE' | '9:16' | '1:1' | '16:9' | '4:5' | 'STYLEONE' | 'CUSTOM';
+export type ReframeCleanup = ReframeBox & { regionId: string; start: number; end: number; method: 'BLUR' | 'COVER';
+  intensity: number; authorized: boolean; ownedBranding?: boolean };
+export type ReframePlan = { version: 1; aspect: ReframeAspect;
   crop: ReframeBox; framing: 'CROP' | 'FIT';
   tracking?: { t: number; x: number; y: number }[];
-  cleanup: (ReframeBox & { regionId: string; start: number; end: number; method: 'BLUR' | 'COVER'; intensity: number; authorized: boolean; ownedBranding?: boolean })[];
+  cleanup: ReframeCleanup[];
   hook: { enabled: boolean; text: string; y: number };
   captions: { enabled: boolean; replaceExisting: boolean; font: string; size: number; y: number; color: string;
     cues: { start: number; end: number; text: string }[] };
   color: { exposure: number; contrast: number; saturation: number; temperature: number; sharpness: number; denoise: boolean };
   audio: { muted: boolean; volume: number }; resolution: 720 | 1080; reasons: string[] };
-export type ReframeSession = { id: string; revision: number; name: string; duration: number;
-  width: number; height: number; sourceUrl: string | null; cleanUrl: string | null; previewUrl: string | null; exportUrl: string | null;
-  previewRevision: number | null; exportRevision: number | null;
+/** The part of a plan that changes source pixels. Confirming the crop bakes exactly this into SOURCE. */
+export type ReframePreparation = Pick<ReframePlan, 'aspect' | 'crop' | 'framing' | 'tracking' | 'cleanup'> & { denoise: boolean };
+export type ReframeHookCategory = 'BOLD' | 'CURIOSITY' | 'QUESTION' | 'CONTRARIAN' | 'EMOTIONAL' | 'PROFESSIONAL';
+export type ReframeHook = { text: string; category: ReframeHookCategory; score: number; recommended: boolean;
+  source: 'OPENAI' | 'LOCAL' };
+export type ReframeEditPath = 'STYLEONE' | 'MANUAL';
+export type ReframeExport = { id: string; url: string; revision: number | null; width: number | null;
+  height: number | null; duration: number | null; sizeBytes: number | null; createdAt: string; current: boolean };
+export type ReframeSession = { id: string; editProjectId: string; revision: number; name: string; duration: number;
+  /** Uploaded file (browser-playable copy when the codec needed one). Crop coordinates refer to this. */
+  width: number; height: number; originalUrl: string | null;
+  /** The confirmed, cropped and cleaned SOURCE every editing path renders from. */
+  sourceUrl: string | null; sourceWidth: number; sourceHeight: number;
+  /** True when SOURCE matches the current plan's crop and cleanup. */
+  cropConfirmed: boolean; confirmed: ReframePreparation | null; editPath: ReframeEditPath | null;
+  styleOneApplied: boolean;
+  previewUrl: string | null; exportUrl: string | null; previewRevision: number | null; exportRevision: number | null;
+  exports: ReframeExport[];
   status: string; progress: number; message: string; error: string | null;
-  analysis: ReframeAnalysis | null; plan: ReframePlan | null; hooks: string[]; createdAt: string };
+  analysis: ReframeAnalysis | null; plan: ReframePlan | null; hooks: ReframeHook[];
+  /** Exact export canvases for each quality (null until the crop is confirmed). */
+  outputs: { 720: { width: number; height: number }; 1080: { width: number; height: number } } | null;
+  hasAudio: boolean; hasTranscript: boolean; captionCount: number; createdAt: string };

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useRouter } from 'next/navigation';
 import { ScanSearch, X } from 'lucide-react';
 import {
   analyzeEditSource, deleteEditAsset, editFailureMessage, EditModeApiError, getEditHistory, getEditProject,
@@ -30,6 +31,9 @@ import type { CropSession } from './shell/edit-crop-panel';
 import { EditToolRail } from './shell/edit-tool-rail';
 import { EditTopBar } from './shell/edit-top-bar';
 import type { EditToolId } from '@/lib/edit-mode-tools';
+import { quickReframeUrl, type ReframeSession } from '@/lib/quick-reframe-api';
+import { QuickReframeHooksTool } from '@/components/quick-reframe/hooks-panel';
+import { StepIndicator } from '@/components/quick-reframe/step-indicator';
 
 /** Where a dragged timeline height is remembered (per browser, view state only). */
 const TIMELINE_HEIGHT_KEY = 'edit-mode.timeline-height';
@@ -41,11 +45,17 @@ const fingerprint = (elements: EditElement[]) => JSON.stringify(elements.map((el
   trimStart: element.trimStart, trimEnd: element.trimEnd, properties: element.properties
 })).sort((a, b) => a.id.localeCompare(b.id)));
 
-export function EditModeWorkspace({ initialProject, initialHistory, initialRightTab = 'INSPECTOR' }: {
+export function EditModeWorkspace({ initialProject, initialHistory, initialRightTab = 'INSPECTOR', quickReframe,
+  initialTool }: {
   initialProject: EditProject;
   initialHistory: EditHistory[];
   initialRightTab?: RightTab;
+  /** Present when this project is a Quick Reframe video: Manual editing inside the same editor. */
+  quickReframe?: ReframeSession;
+  initialTool?: EditToolId | null;
 }) {
+  const router = useRouter();
+  const [reframe, setReframe] = useState(quickReframe);
   const [project, setProjectState] = useState(initialProject);
   const projectRef = useRef(initialProject);
   const savedElements = useRef(initialProject.elements ?? []);
@@ -71,7 +81,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
   const [exportPhase, setExportPhase] = useState<string | null>(null);
   // Which left category is open, and whether the export panel is showing. Both
   // are pure view state: neither touches the canonical project.
-  const [activeTool, setActiveTool] = useState<EditToolId | null>('MEDIA');
+  const [activeTool, setActiveTool] = useState<EditToolId | null>(initialTool ?? (quickReframe ? 'HOOKS' : 'MEDIA'));
   const [cropSession, setCropSession] = useState<CropSession | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   // Phones: one docked drawer at a time instead of the rail, side panels and inspector.
@@ -79,7 +89,8 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
   const isMobile = useIsMobile();
   const typing = useTypingFlag();
   const viewport = useVisualViewport(isMobile);
-  const [mobilePanel, setMobilePanel] = useState<MobilePanelId | null>(initialRightTab === 'AI' ? 'AI' : null);
+  const [mobilePanel, setMobilePanel] = useState<MobilePanelId | null>(initialRightTab === 'AI' ? 'AI'
+    : quickReframe && initialTool === 'HOOKS' ? 'HOOKS' : null);
   // The colour clipboard. Pure view state: pasting is a normal typed command
   // that reads the SOURCE segment on the server, so a clipboard pointing at an
   // element that has since been deleted is refused rather than acted on.
@@ -166,13 +177,15 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
   }, []);
 
   const selectTool = useCallback((tool: EditToolId | null) => {
+    // A Quick Reframe crop is the confirmed source crop; it is edited in its own step, never stacked.
+    if (tool === 'CROP' && reframe) { router.push(quickReframeUrl(reframe.id, 'crop')); return; }
     setActiveTool(tool);
     if (tool !== 'CROP') setCropSession(null);
     if (tool === 'CROP') {
       const current = projectRef.current.elements?.find((item) => item.id === selectedElementId);
       if (current?.type === 'VIDEO') beginCrop(current);
     }
-  }, [beginCrop, selectedElementId]);
+  }, [beginCrop, selectedElementId, reframe, router]);
 
   useEffect(() => {
     if (activeTool !== 'CROP') return;
@@ -547,7 +560,13 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
     onUploadSource: (file) => run('upload', () => uploadEditSource(project.id, project.revision, file)),
     onImportSource: (videoId) => run('import', () => importEditSource(project.id, project.revision, videoId)),
     onUploadAsset: (role, file) => void uploadLibraryAsset(role, file),
-    onAddAsset: addAsset, onDeleteAsset: (asset) => void deleteLibraryAsset(asset) };
+    onAddAsset: addAsset, onDeleteAsset: (asset) => void deleteLibraryAsset(asset),
+    hooksPanel: reframe ? <QuickReframeHooksTool session={reframe} project={project} busy={!!busy}
+      onSession={setReframe} onCommand={(command) => void applyCommand(command)}
+      onCommands={(commands) => void applySequence(commands)}
+      onSelectElement={setSelectedElementId}
+      onOpenTool={(tool) => isMobile ? openMobilePanel(tool) : selectTool(tool)} /> : undefined };
+  const exportReframe = () => { if (reframe) router.push(quickReframeUrl(reframe.id, 'export')); };
 
   const closeMobilePanel = () => {
     if (mobilePanel === 'CROP') cancelCrop();
@@ -555,7 +574,9 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
   };
   /** A phone tool tap. Crop needs a video segment, so it picks the one under the playhead
    *  instead of asking the user to select one on a 350px timeline first. */
-  const openMobilePanel = (id: MobilePanelId) => {
+  function openMobilePanel(id: MobilePanelId) {
+    if (reframe && id === 'CROP') { router.push(quickReframeUrl(reframe.id, 'crop')); return; }
+    if (reframe && id === 'EXPORT') { exportReframe(); return; }
     if (id === mobilePanel) { closeMobilePanel(); return; }
     if (mobilePanel === 'CROP') setCropSession(null);
     if (id === 'CROP') {
@@ -570,7 +591,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
       }
     } else setActiveTool(id === 'AI' || id === 'INSPECTOR' || id === 'EXPORT' ? null : id);
     setMobilePanel(id);
-  };
+  }
   const mobileDrawer = isMobile && mobilePanel ? (() => {
     const title = MOBILE_PANEL_TITLES[mobilePanel];
     if (mobilePanel === 'AI') return <EditMobileDrawer title={title} size='tall' expanded={typing}
@@ -603,7 +624,11 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
       exportPhase={exportPhase} canUndo={availability.canUndo} canRedo={availability.canRedo}
       aspectRatio={style?.aspectRatio ?? 'SOURCE'}
       onUndo={() => void travelHistory('undo')} onRedo={() => void travelHistory('redo')}
-      onExport={() => isMobile ? openMobilePanel('EXPORT') : setExportOpen(true)} exportDisabled={!source || !!busy} />
+      onExport={() => reframe ? exportReframe() : isMobile ? openMobilePanel('EXPORT') : setExportOpen(true)}
+      exportDisabled={!source || !!busy}
+      {...(reframe ? { back: { href: quickReframeUrl(reframe.id, 'choose'), label: 'Style' }, title: 'Quick Reframe · Manual editing',
+        below: <StepIndicator className='border-t border-border px-1.5 py-1 sm:px-3' active='edit'
+          reachable={(step) => step !== 'edit'} onSelect={(step) => router.push(quickReframeUrl(reframe.id, step))} /> } : {})} />
 
     {error && <div role='alert'
       className='flex shrink-0 items-start gap-2 border-b border-danger/20 bg-danger/10 py-1 pl-4 pr-1 text-xs text-danger-soft'>
@@ -615,8 +640,8 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
         timeline takes the bottom band. Only this row scrolls internally, so the
         editor itself never grows a page scrollbar. */}
     <div className='relative flex min-h-[96px] min-w-0 flex-1'>
-      <EditToolRail active={activeTool} cropDisabled={!!busy || selected?.type !== 'VIDEO'}
-        onSelect={selectTool} />
+      <EditToolRail active={activeTool} cropDisabled={!reframe && (!!busy || selected?.type !== 'VIDEO')}
+        quickReframe={!!reframe} onSelect={selectTool} />
       {!isMobile && activeTool && <EditToolPanel {...toolProps} tool={activeTool} />}
 
       <main className='flex min-w-0 flex-1 flex-col bg-stage'>
@@ -689,6 +714,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
         onUndo={() => void travelHistory('undo')} onRedo={() => void travelHistory('redo')} />
     </div>
     </>}
-    {!(isMobile && typing) && <EditMobileToolbar active={isMobile ? mobilePanel : null} onSelect={openMobilePanel} />}
+    {!(isMobile && typing) && <EditMobileToolbar active={isMobile ? mobilePanel : null} onSelect={openMobilePanel}
+      quickReframe={!!reframe} />}
   </div>;
 }

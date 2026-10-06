@@ -1,27 +1,29 @@
 'use client';
 
-import { Captions, Crop, Image as ImageIcon, LayoutTemplate, Music, Palette, SlidersHorizontal,
+import { Captions, Crop, Image as ImageIcon, LayoutTemplate, Lightbulb, Music, Palette, SlidersHorizontal,
   Sparkles, Type, Video } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { EDIT_TOOLS, type EditToolId } from '@/lib/edit-mode-tools';
+import { toolsFor, type EditToolId } from '@/lib/edit-mode-tools';
 
 const ICONS: Record<EditToolId, LucideIcon> = {
   MEDIA: Video, TEMPLATES: LayoutTemplate, AUDIO: Music, TEXT: Type, CAPTIONS: Captions,
-  CROP: Crop, OVERLAY: ImageIcon, EFFECTS: Sparkles, FILTERS: Palette, ADJUST: SlidersHorizontal
+  CROP: Crop, OVERLAY: ImageIcon, EFFECTS: Sparkles, FILTERS: Palette, ADJUST: SlidersHorizontal,
+  HOOKS: Lightbulb
 };
 
 /**
  * Compact icon + label navigation. Exactly one category is open at a time, and
  * clicking the open one closes it, giving the preview the full width back.
  */
-export function EditToolRail({ active, cropDisabled = false, onSelect }: {
+export function EditToolRail({ active, cropDisabled = false, quickReframe = false, onSelect }: {
   active: EditToolId | null;
   cropDisabled?: boolean;
+  quickReframe?: boolean;
   onSelect: (id: EditToolId | null) => void;
 }) {
   return <nav aria-label='Editing tools'
     className='hidden w-[72px] shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-border bg-surface py-2 md:flex'>
-    {EDIT_TOOLS.map((tool) => {
+    {toolsFor(quickReframe).map((tool) => {
       const Icon = ICONS[tool.id];
       const selected = active === tool.id;
       const disabled = !!tool.pending || (tool.id === 'CROP' && cropDisabled);

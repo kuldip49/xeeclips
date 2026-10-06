@@ -565,6 +565,10 @@ model QuickReframe {
   undo Json @default("[]")
   redo Json @default("[]")
   externalAiAuthorized Boolean @default(false)
+  /// STYLEONE | MANUAL, chosen only after the crop is confirmed.
+  editPath String?
+  /// The source preparation (crop, tracking, cleanup, denoise) baked into the SOURCE asset.
+  confirmed Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([createdAt])

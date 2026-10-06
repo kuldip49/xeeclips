@@ -1,12 +1,13 @@
 import { getPublicApiBaseUrl } from './api';
-export type { ReframeSession, ReframePlan, ReframeRegion, ReframeBox } from '@ai-content-platform/shared';
-import type { ReframeSession } from '@ai-content-platform/shared';
+export type { ReframeSession, ReframePlan, ReframeRegion, ReframeBox, ReframeHook, ReframeHookCategory, ReframeAspect,
+  ReframeCleanup, ReframeExport, ReframeEditPath, ReframePreparation, ReframeAnalysis } from '@ai-content-platform/shared';
+import type { ReframeAspect, ReframeBox, ReframeCleanup, ReframeHook, ReframeHookCategory, ReframePlan, ReframeSession } from '@ai-content-platform/shared';
 export async function reframeRequest<T=ReframeSession>(path='',method='GET',body?:unknown,signal?:AbortSignal):Promise<T>{
   const response=await fetch(`${getPublicApiBaseUrl()}/quick-reframe${path}`,{method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined,signal,cache:'no-store'});
   if(!response.ok){const error=await response.json().catch(()=>({}));throw new Error(typeof error.message==='string'?error.message:'The video could not be processed. Please retry.');}
   return response.json();
 }
-export const mediaUrl=(path:string|null)=>path?`${getPublicApiBaseUrl()}${path}`:undefined;
+export const mediaUrl=(path:string|null|undefined)=>path?`${getPublicApiBaseUrl()}${path}`:undefined;
 export async function uploadReframe(id:string,file:File,progress:(percent:number)=>void,signal:AbortSignal){
   const session=await reframeRequest<{id:string;chunkBytes:number;chunks:number}>(`/${id}/upload`,'POST',{name:file.name,size:file.size,mimeType:file.type||'video/mp4'},signal);
   try{
@@ -23,6 +24,30 @@ export async function uploadReframe(id:string,file:File,progress:(percent:number
         });break;}catch(error){if(signal.aborted||attempt===2)throw error;}
       }
     }
-    return await reframeRequest(`/${'uploads'}/${session.id}/complete`,'POST',undefined,signal);
+    return await reframeRequest(`/uploads/${session.id}/complete`,'POST',undefined,signal);
   }catch(error){await reframeRequest(`/uploads/${session.id}`,'DELETE').catch(()=>undefined);throw error;}
 }
+export const ACTIVE_STATUSES=['ANALYZE','PREPARE','PREVIEW','EXPORT','IMPORT'];
+export const isProcessing=(s:ReframeSession|null)=>!!s&&ACTIVE_STATUSES.includes(s.status);
+export type CropSuggestion={aspect:ReframeAspect;crop:ReframeBox;framing:ReframePlan['framing'];tracking:ReframePlan['tracking']|null;reasons:string[];cleanup:ReframeCleanup[]};
+export const suggestCrop=(id:string,aspect:ReframeAspect,cleanupAuthorized=false)=>reframeRequest<CropSuggestion>(`/${id}/suggest`,'POST',{aspect,cleanupAuthorized});
+export const savePlan=(s:ReframeSession,plan:ReframePlan)=>reframeRequest(`/${s.id}/plan`,'PUT',{revision:s.revision,plan});
+export const confirmCrop=(s:ReframeSession)=>reframeRequest(`/${s.id}/confirm-crop`,'POST',{revision:s.revision});
+export const revertCrop=(s:ReframeSession)=>reframeRequest(`/${s.id}/revert-crop`,'POST');
+export const applyStyleOne=(s:ReframeSession,options:{hookText?:string;captions?:'GENERATE'|'KEEP'|'OFF'}={})=>reframeRequest(`/${s.id}/styleone`,'POST',{revision:s.revision,...options});
+export const chooseManual=(s:ReframeSession,removeStyleOne=false)=>reframeRequest(`/${s.id}/path`,'POST',{revision:s.revision,path:'MANUAL',removeStyleOne});
+export const requestHooks=(id:string,externalAiAuthorized:boolean)=>reframeRequest<{session:ReframeSession;warnings:string[]}>(`/${id}/hooks`,'POST',{externalAiAuthorized});
+export const renderReframe=(s:ReframeSession,kind:'preview'|'export',resolution:720|1080=1080)=>reframeRequest(`/${s.id}/${kind}`,'POST',{revision:s.revision,resolution});
+export const reframeForProject=(editProjectId:string)=>reframeRequest(`/project/${encodeURIComponent(editProjectId)}`);
+export const HOOK_CATEGORY_LABEL:Record<ReframeHookCategory,string>={BOLD:'Bold',CURIOSITY:'Curiosity',QUESTION:'Question',CONTRARIAN:'Contrarian',EMOTIONAL:'Emotional',PROFESSIONAL:'Professional'};
+export const recommendedHook=(hooks:ReframeHook[])=>hooks.find(h=>h.recommended)??hooks[0];
+/** Where the wizard should open for a session that already exists. */
+export type ReframeStep='crop'|'choose'|'edit'|'export';
+export function defaultStep(s:ReframeSession):ReframeStep{
+  if(!s.cropConfirmed)return 'crop';
+  if(!s.editPath)return 'choose';
+  if(s.exports.length&&s.exports[0].current)return 'export';
+  return 'edit';
+}
+export const quickReframeUrl=(id:string,step?:ReframeStep)=>`/quick-reframe?video=${encodeURIComponent(id)}${step?`&step=${step}`:''}`;
+export const editorUrl=(s:Pick<ReframeSession,'editProjectId'>,panel?:'hooks')=>`/edit-mode/${encodeURIComponent(s.editProjectId)}${panel?`?tool=${panel}`:''}`;

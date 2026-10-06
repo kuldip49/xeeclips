@@ -6,6 +6,7 @@ export class QuickReframeController {
   constructor(private readonly service:QuickReframeService){}
   @Post() create(){return this.service.create();}
   @Get('history') history(){return this.service.history();}
+  @Get('project/:editProjectId') forProject(@Param('editProjectId') id:string){return this.service.forProject(id);}
   @Get(':id') get(@Param('id') id:string){return this.service.get(id);}
   @Delete(':id') remove(@Param('id') id:string){return this.service.remove(id);}
   @Post(':id/upload') upload(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.startUpload(id,body);}
@@ -14,7 +15,12 @@ export class QuickReframeController {
   @Delete('uploads/:uploadId') cancelUpload(@Param('uploadId') id:string){return this.service.uploads.cancel(id).then(()=>({canceled:true}));}
   @Post(':id/import') import(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.start(id,'IMPORT',body);}
   @Post(':id/analyze') analyze(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.start(id,'ANALYZE',body);}
-  @Post(':id/auto-clean') clean(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.autoClean(id,body);}
+  @Post(':id/suggest') suggest(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.suggest(id,body);}
+  @Post(':id/confirm-crop') confirm(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.start(id,'PREPARE',body);}
+  @Post(':id/revert-crop') revert(@Param('id') id:string){return this.service.revert(id);}
+  @Post(':id/hooks') hooks(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.hooks(id,body);}
+  @Post(':id/styleone') styleOne(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.applyStyleOne(id,body);}
+  @Post(':id/path') path(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.choosePath(id,body);}
   @Put(':id/plan') save(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.save(id,body);}
   @Post(':id/preview') preview(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.start(id,'PREVIEW',body);}
   @Post(':id/export') export(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.start(id,'EXPORT',body);}

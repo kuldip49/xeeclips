@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, type ReactNode } from 'react';
-import { Captions, Crop, Image as ImageIcon, LayoutTemplate, Music, MousePointerClick, Palette,
+import { Captions, Crop, Image as ImageIcon, LayoutTemplate, Lightbulb, Music, MousePointerClick, Palette,
   SlidersHorizontal, Sparkles, Type, Video, X, type LucideIcon } from 'lucide-react';
 import type { EditToolId } from '@/lib/edit-mode-tools';
 import { cn } from '@/lib/utils';
@@ -9,7 +9,8 @@ import { cn } from '@/lib/utils';
 /** What a phone drawer can show: the AI editor, the inspector, export, or one tool. */
 export type MobilePanelId = 'AI' | 'INSPECTOR' | 'EXPORT' | Exclude<EditToolId, 'EFFECTS'>;
 
-const ITEMS: Array<{ id: MobilePanelId; label: string; icon: LucideIcon }> = [
+const ITEMS: Array<{ id: MobilePanelId; label: string; icon: LucideIcon; quickReframeOnly?: boolean }> = [
+  { id: 'HOOKS', label: 'Hooks', icon: Lightbulb, quickReframeOnly: true },
   { id: 'AI', label: 'Ask AI', icon: Sparkles },
   { id: 'INSPECTOR', label: 'Inspect', icon: MousePointerClick },
   { id: 'CAPTIONS', label: 'Captions', icon: Captions },
@@ -26,21 +27,22 @@ const ITEMS: Array<{ id: MobilePanelId; label: string; icon: LucideIcon }> = [
 export const MOBILE_PANEL_TITLES: Record<MobilePanelId, string> = {
   AI: 'AI editor', INSPECTOR: 'Inspector', EXPORT: 'Export', CAPTIONS: 'Captions', TEXT: 'Text',
   CROP: 'Crop', AUDIO: 'Audio', TEMPLATES: 'Style', ADJUST: 'Adjust', FILTERS: 'Filters',
-  OVERLAY: 'Overlay', MEDIA: 'Media'
+  OVERLAY: 'Overlay', MEDIA: 'Media', HOOKS: 'Hooks & captions'
 };
 
 /**
  * The phone editor's tool bar: one horizontally scrolling row of large icon+label targets,
  * pinned above the home indicator. Tapping a tool opens its drawer; tapping it again closes it.
  */
-export function EditMobileToolbar({ active, onSelect }: {
+export function EditMobileToolbar({ active, onSelect, quickReframe = false }: {
   active: MobilePanelId | null;
   onSelect: (id: MobilePanelId) => void;
+  quickReframe?: boolean;
 }) {
   return <nav aria-label='Editing tools' data-testid='mobile-editor-toolbar'
     className='shrink-0 border-t border-border bg-surface pb-safe md:hidden'>
     <div className='scrollbar-none flex h-16 items-stretch gap-0.5 overflow-x-auto px-1.5'>
-      {ITEMS.map(({ id, label, icon: Icon }) => {
+      {ITEMS.filter((item) => quickReframe || !item.quickReframeOnly).map(({ id, label, icon: Icon }) => {
         const selected = active === id;
         return <button key={id} type='button' aria-pressed={selected} onClick={() => onSelect(id)}
           className={cn('pressable flex min-w-[64px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-1.5 text-[11px] font-medium',

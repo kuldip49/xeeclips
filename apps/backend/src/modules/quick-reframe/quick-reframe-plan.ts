@@ -1,11 +1,26 @@
 import { BadRequestException } from '@nestjs/common';
-import type { ReframeAnalysis, ReframeBox, ReframePlan, ReframeRegion } from '@ai-content-platform/shared';
+import type { ReframeAnalysis, ReframeBox, ReframePlan, ReframePreparation, ReframeRegion } from '@ai-content-platform/shared';
 import { EDIT_MODE_FONT_FAMILIES } from '../edit-mode/edit-mode-text';
 import { AUTOMATIC_2_STREET3_LAYOUT as STYLEONE } from '../edit-mode/styles/automatic-2-street3-layout';
 import { generateCaptions } from '../edit-mode/edit-mode-captions';
 import { wordsFromCache } from '../edit-mode/presets/edit-preset-evidence';
 import { buildTimelineMap } from '../edit-mode/render/edit-mode-timeline-map';
-export type { ReframeAnalysis, ReframeBox, ReframePlan, ReframeRegion } from '@ai-content-platform/shared';
+export type { ReframeAnalysis, ReframeBox, ReframePlan, ReframePreparation, ReframeRegion } from '@ai-content-platform/shared';
+export const REFRAME_ASPECTS = ['SOURCE','9:16','1:1','16:9','4:5','STYLEONE','CUSTOM'] as const;
+/** Width/height of a named crop shape. STYLEONE is the fixed StyleOne media window (1080x700). */
+export function aspectValue(aspect: ReframePlan['aspect']): number | null {
+  if (aspect==='SOURCE'||aspect==='CUSTOM') return null;
+  if (aspect==='STYLEONE') return STYLEONE.mediaBox.width*1080/(STYLEONE.mediaBox.height*1920);
+  const [a,b]=aspect.split(':').map(Number); return a/b;
+}
+/** The pixel-changing part of a plan. Confirming the crop bakes exactly this into SOURCE. */
+export function preparationOf(p: ReframePlan): ReframePreparation {
+  return {aspect:p.aspect,crop:p.crop,framing:p.framing,tracking:p.tracking,cleanup:p.cleanup,denoise:p.color.denoise};
+}
+/** Nothing to bake: the uploaded pixels already are the confirmed source. */
+export function isIdentityPreparation(p: ReframePreparation) {
+  return p.crop.x<=1e-4 && p.crop.y<=1e-4 && p.crop.w>=.9999 && p.crop.h>=.9999 && !p.tracking?.length && !p.cleanup.length && !p.denoise;
+}
 export const record = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : {};
 const clamp = (v: number, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
 export const overlap = (a: ReframeBox, b: ReframeBox) => Math.max(0, Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,b.x)) * Math.max(0,Math.min(a.y+a.h,b.y+b.h)-Math.max(a.y,b.y));
@@ -28,7 +43,8 @@ export function analyzeRegions(raw: unknown, duration: number): ReframeAnalysis 
       const confidence = clamp(Number(r.confidence) || .35);
       const attribution = /(?:@|©|copyright|instagram|twitter|tiktok|watermark|\bcredit\b)/iu.test(text) || ((b.x < .12 || b.x+b.w > .88) && b.w < .25 && b.h < .12);
       const caption = !attribution && b.y >= .62 && b.w >= .22;
-      const decorative = !attribution && !caption && b.y < .2 && confidence >= .65;
+      // Headlines stacked above the picture (common on reposts) are decorative too, up to the top 40%.
+      const decorative = !attribution && !caption && confidence >= .65 && (b.y < .2 || b.y + b.h < .4);
       const kind = attribution ? 'ATTRIBUTION' : caption ? 'CAPTION' : decorative ? 'DECORATIVE' : 'UNKNOWN';
       // Merge only adjacent, similar positions AND wording. Moving/changing text gets a new timed region.
       const prior = [...regions].reverse().find(r => r.kind===kind && r.text===text && Math.abs(r.end-start)<.15 && overlap(r,b) / Math.max(.001, b.w*b.h+r.w*r.h-overlap(r,b)) > .8);
@@ -55,26 +71,33 @@ export function proposePlan(analysis: ReframeAnalysis, width: number, height: nu
   const full = { x:0,y:0,w:1,h:1 }; const candidates: ReframeBox[] = [full];
   const bars = analysis.bars;
   if (bars.top+bars.bottom+bars.left+bars.right > .01) candidates.push({x:bars.left,y:bars.top,w:1-bars.left-bars.right,h:1-bars.top-bars.bottom});
+  const barBox={x:bars.left,y:bars.top,w:1-bars.left-bars.right,h:1-bars.top-bars.bottom};
   for (const r of analysis.regions.filter(r=>r.kind==='DECORATIVE' && r.confidence>=.75)) {
-    if (r.y+r.h<.25) candidates.push({x:0,y:r.y+r.h+.015,w:1,h:1-r.y-r.h-.015});
+    if (r.y+r.h<.4) {
+      candidates.push({x:0,y:r.y+r.h+.015,w:1,h:1-r.y-r.h-.015});
+      // Bars and a headline together: trim both, keeping the picture between them.
+      const top=Math.max(barBox.y,r.y+r.h+.015);if(barBox.y+barBox.h-top>.2)candidates.push({...barBox,y:top,h:barBox.y+barBox.h-top});
+    }
     if (r.x+r.w<.22) candidates.push({x:r.x+r.w+.015,y:0,w:1-r.x-r.w-.015,h:1});
     if (r.x>.78) candidates.push({x:0,y:0,w:r.x-.015,h:1});
   }
   const safeFrame = (c:ReframeBox,f:ReframeAnalysis['frames'][number]) => f.faces.every(b=>contains(c,b,.012)) && f.persons.every(b=>overlap(c,b)/Math.max(.001,b.w*b.h)>=.92) && f.information.every(b=>contains(c,b)) && analysis.regions.filter(r=>['CAPTION','ATTRIBUTION','INFORMATION'].includes(r.kind)&&r.start<=f.t&&r.end>f.t).every(r=>contains(c,r));
-  const safe = (c: ReframeBox, target=false) => c.w*c.h>=(target?.28:.6) && analysis.frames.every(f=>safeFrame(c,f));
+  const content=barBox;
+  // A tight crop is acceptable when what it removes is mostly empty bars and decorative text, not picture.
+  const keepsPicture = (c: ReframeBox) => overlap(c,content)/Math.max(.001,content.w*content.h)>=.75;
+  const safe = (c: ReframeBox, target=false) => c.w*c.h>=(target?.28:keepsPicture(c)?.3:.6) && analysis.frames.every(f=>safeFrame(c,f));
   const hasSubjects = analysis.frames.some(f=>f.faces.length || f.persons.length);
-  const content={x:bars.left,y:bars.top,w:1-bars.left-bars.right,h:1-bars.top-bars.bottom};
   const score = (c: ReframeBox) => {
     const lostContent=Math.max(0,content.w*content.h-overlap(c,content));
     const removedBars=Math.max(0,1-c.w*c.h-lostContent);
     return analysis.regions.filter(r=>r.kind==='DECORATIVE').reduce((sum,r)=>sum+(1-overlap(c,r)/(r.w*r.h))*(r.end-r.start)*r.confidence,0)/Math.max(1,...analysis.regions.map(r=>r.end)) - lostContent*.35 + removedBars*.5;
   };
-  const eligible=hasSubjects ? candidates : [full,...(safe(content)&&content.w*content.h<.99 ? [content] : [])];
+  const eligible=hasSubjects ? candidates : [full,...candidates.filter(c=>c!==full&&keepsPicture(c)&&c.w*c.h<.99)];
   let chosen = eligible.filter(c=>safe(c)).sort((a,b)=>score(b)-score(a))[0] || full;
   let framing: ReframePlan['framing']='CROP'; const reasons = ['Preserves the complete sequence and original audio.'];
   let tracking: ReframePlan['tracking'];
-  if (aspect!=='SOURCE' && aspect!=='CUSTOM') {
-    const [a,b] = aspect.split(':').map(Number); const ratio = a/b;
+  if (aspectValue(aspect)) {
+    const ratio = aspectValue(aspect)!;
     const retainedRatio=chosen.w*width/(chosen.h*height);
     const target = retainedRatio>ratio ? {...chosen,w:chosen.h*height*ratio/width} : {...chosen,h:chosen.w*width/ratio/height};
     target.x=chosen.x+(chosen.w-target.w)/2;target.y=chosen.y+(chosen.h-target.h)/2;
@@ -95,7 +118,7 @@ export function proposePlan(analysis: ReframeAnalysis, width: number, height: nu
   const sourceDuration=duration??Math.max(0,...speech.words.map(w=>w.end));
   const map=buildTimelineMap([{id:'source',type:'VIDEO',track:0,position:0,startTime:0,duration:sourceDuration,trimStart:0,trimEnd:sourceDuration,properties:{}}]);
   const cues=speech.words.length?generateCaptions({words:speech.words,wordTimings:speech.wordTimings,map,limit:400}).captions.map(c=>({start:c.startTime,end:Number((c.startTime+c.duration).toFixed(6)),text:c.content})):[];
-  reasons.push('Clean the original first, then apply the fixed StyleOne layout.');
+  reasons.push('Confirm the crop first, then choose StyleOne or Manual editing.');
   return {version:1,aspect,crop:chosen,framing,tracking,cleanup:[],hook:{enabled:false,text:'',y:STYLEONE.hookBox.y},
     captions:{enabled:analysis.subtitleState==='MISSING' && cues.length>0,replaceExisting:false,font:'Inter, sans-serif',size:STYLEONE.typography.captions.fontSize,y:STYLEONE.captionSafeBox.y,color:STYLEONE.colors.captionBase,cues},
     color:{exposure:analysis.appearance && analysis.appearance.brightness<.22 ? .1 : analysis.appearance && analysis.appearance.brightness>.8 ? -.08 : 0,
@@ -104,7 +127,7 @@ export function proposePlan(analysis: ReframeAnalysis, width: number, height: nu
 export function validatePlan(input: unknown, duration: number, analysis: ReframeAnalysis): ReframePlan {
   const p=record(input); const num=(v:unknown,lo:number,hi:number)=>{if(typeof v!=='number'||!Number.isFinite(v)||v<lo||v>hi)throw new BadRequestException('An edit is outside its supported range.');return v;};
   const bool=(v:unknown)=>{if(typeof v!=='boolean')throw new BadRequestException('Invalid edit option.');return v;};
-  if(p.version!==1 || !['SOURCE','9:16','1:1','16:9','CUSTOM'].includes(p.aspect) || !['CROP','FIT'].includes(p.framing) || ![720,1080].includes(p.resolution)) throw new BadRequestException('Unsupported editing plan.');
+  if(p.version!==1 || !(REFRAME_ASPECTS as readonly string[]).includes(p.aspect) || !['CROP','FIT'].includes(p.framing) || ![720,1080].includes(p.resolution)) throw new BadRequestException('Unsupported editing plan.');
   const crop=validBox(p.crop); if(crop.w*crop.h<.2)throw new BadRequestException('Keep at least 20% of the original frame.');
   const tracking=Array.isArray(p.tracking)&&p.tracking.length<=240 ? p.tracking.map((v:unknown)=>{const k=record(v);return {t:num(k.t,0,duration),x:num(k.x,0,1-crop.w),y:num(k.y,0,1-crop.h)};}) : undefined;
   if(tracking?.some((k,i)=>i>0 && (k.t<=tracking[i-1].t || Math.hypot(k.x-tracking[i-1].x,k.y-tracking[i-1].y)/(k.t-tracking[i-1].t)>.15)))throw new BadRequestException('Tracked framing must move smoothly.');
@@ -134,11 +157,11 @@ export function validatePlan(input: unknown, duration: number, analysis: Reframe
   return {version:1,aspect:p.aspect,crop,framing:p.framing,tracking,cleanup,hook:{enabled:bool(hook.enabled),text:hook.text.trim(),y:STYLEONE.hookBox.y},
     captions:{enabled:bool(cap.enabled),replaceExisting:bool(cap.replaceExisting),font:'Inter, sans-serif',size:STYLEONE.typography.captions.fontSize,y:STYLEONE.captionSafeBox.y,color:STYLEONE.colors.captionBase,cues},
     color:{exposure:num(color.exposure,-.3,.3),contrast:num(color.contrast,.8,1.2),saturation:num(color.saturation,.8,1.2),temperature:num(color.temperature,-.15,.15),sharpness:num(color.sharpness,0,.5),denoise:bool(color.denoise)},
-    audio:{muted:bool(audio.muted),volume:num(audio.volume,0,2)},resolution:1080,reasons:Array.isArray(p.reasons)?p.reasons.filter((s:unknown)=>typeof s==='string').slice(0,10):[]};
+    audio:{muted:bool(audio.muted),volume:num(audio.volume,0,2)},resolution:p.resolution,reasons:Array.isArray(p.reasons)?p.reasons.filter((s:unknown)=>typeof s==='string').slice(0,10):[]};
 }
 export function outputGeometry(p: ReframePlan, w: number, h: number, preview=false) {
   const sw=w*p.crop.w,sh=h*p.crop.h;
-  const ratio=p.aspect==='SOURCE'||p.aspect==='CUSTOM' ? sw/sh : Number(p.aspect.split(':')[0])/Number(p.aspect.split(':')[1]);
+  const ratio=aspectValue(p.aspect) ?? sw/sh;
   const target=preview?480:p.resolution; const scale=Math.min(1,target/Math.min(sw,sh));
   let width:number,height:number;
   if(p.framing==='FIT') { const maxW=sw*scale,maxH=sh*scale; width=Math.min(maxW,maxH*ratio);height=width/ratio; }

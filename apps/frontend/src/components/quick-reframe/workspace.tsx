@@ -1,103 +1,196 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
-import { ArrowLeftRight, Check, Download, Loader2, Maximize, RotateCcw, Scissors, Sparkles, Upload, X } from 'lucide-react';
-import { BottomSheet } from '@/components/ui/bottom-sheet';
-import { useMediaQuery } from '@/lib/use-media-query';
-import { mediaUrl, reframeRequest, uploadReframe, type ReframeSession, type ReframePlan, type ReframeBox } from '@/lib/quick-reframe-api';
-const button='inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-border bg-surface px-4 text-sm font-semibold disabled:opacity-40';
-const field='min-h-11 w-full min-w-0 rounded-xl border border-border bg-background px-3 text-sm';
-type Tool='Crop'|'Cleanup'|'Hook'|'Captions'|'Color'|'Audio';
-const tools:Tool[]=['Crop','Cleanup','Hook','Captions','Color','Audio'];
-function Range({label,value,min,max,step=.01,onChange}:{label:string;value:number;min:number;max:number;step?:number;onChange:(v:number)=>void}){return <label className='grid gap-2 text-sm'><span className='flex justify-between gap-3'>{label}<span className='text-muted-foreground'>{Number(value.toFixed(2))}</span></span><input aria-label={label} type='range' className='min-h-8 w-full accent-primary' min={min} max={max} step={step} value={value} onChange={e=>onChange(Number(e.target.value))}/></label>;}
-export function QuickReframeWorkspace(){
-  const [session,setSession]=useState<ReframeSession|null>(null),[plan,setPlan]=useState<ReframePlan|null>(null);
-  const [error,setError]=useState(''),[busy,setBusy]=useState(false),[uploading,setUploading]=useState(false),[uploadPercent,setUploadPercent]=useState(0);
-  const [url,setUrl]=useState(''),[authorized,setAuthorized]=useState(false),[external,setExternal]=useState(false),[file,setFile]=useState<File|null>(null),[localUrl,setLocalUrl]=useState<string>();
-  const [tool,setTool]=useState<Tool|null>(null),[edited,setEdited]=useState(false),[cleanView,setCleanView]=useState(false),[compare,setCompare]=useState(false),[split,setSplit]=useState(50),[showRegions,setShowRegions]=useState(true),[time,setTime]=useState(0),[dirty,setDirty]=useState(false),[selectedRegion,setSelectedRegion]=useState(''),[cropGesture,setCropGesture]=useState(false),[cleanAuthorized,setCleanAuthorized]=useState(false),[ownedBranding,setOwnedBranding]=useState(false);
-  const [manual,setManual]=useState<ReframeBox>({x:.2,y:.2,w:.3,h:.12});
-  const abort=useRef<AbortController|null>(null),original=useRef<HTMLVideoElement>(null),after=useRef<HTMLVideoElement>(null),stage=useRef<HTMLDivElement>(null),loaded=useRef(false);
-  const mobile=useMediaQuery('(max-width: 767px)');
-  const accept=useCallback((s:ReframeSession)=>{setSession(s);setPlan(s.plan);setDirty(false);},[]);
-  useEffect(()=>{if(loaded.current)return;loaded.current=true;const id=new URLSearchParams(window.location.search).get('video')||localStorage.getItem('quick-reframe-session');if(id){setBusy(true);reframeRequest(`/${encodeURIComponent(id)}`).then(accept).catch(()=>localStorage.removeItem('quick-reframe-session')).finally(()=>setBusy(false));}},[accept]);
-  useEffect(()=>{if(!session)return;localStorage.setItem('quick-reframe-session',session.id);const u=new URL(window.location.href);u.searchParams.set('video',session.id);window.history.replaceState(null,'',u);},[session?.id]);
-  const processing=!!session&&['ANALYZE','PREVIEW','EXPORT','IMPORT'].includes(session.status);
-  useEffect(()=>{if(!processing||!session)return;let stopped=false;const interval=window.setInterval(()=>{reframeRequest(`/${session.id}`).then(s=>{if(stopped)return;setSession(s);if(!['ANALYZE','PREVIEW','EXPORT','IMPORT'].includes(s.status)){accept(s);if(s.status==='READY'||s.status==='COMPLETE')setEdited(true);}}).catch(()=>{if(!stopped)setError('Connection interrupted. Your progress is saved.');});},1800);return()=>{stopped=true;clearInterval(interval);};},[processing,session?.id,accept]);
-  useEffect(()=>{if(!file)return;const u=URL.createObjectURL(file);setLocalUrl(u);return()=>URL.revokeObjectURL(u);},[file]);
-  const action=async(fn:()=>Promise<void>)=>{setBusy(true);setError('');try{await fn();}catch(e){setError(e instanceof Error?e.message:'Please retry.');}finally{setBusy(false);}};
-  const ensure=async():Promise<ReframeSession>=>session||await reframeRequest<ReframeSession>('','POST');
-  const upload=()=>action(async()=>{if(!file)return;const s=await ensure();accept(s);setUploading(true);setUploadPercent(0);abort.current=new AbortController();try{accept(await uploadReframe(s.id,file,setUploadPercent,abort.current.signal));setEdited(false);}finally{setUploading(false);}});
-  const command=(name:string,body?:unknown)=>action(async()=>{if(!session)return;accept(await reframeRequest(`/${session.id}/${name}`,'POST',body));});
-  const change=(next:ReframePlan)=>{setPlan(next);setDirty(true);setEdited(false);setCleanView(false);};
-  const save=async()=>{if(!session||!plan)return session;if(!dirty)return session;const s=await reframeRequest(`/${session.id}/plan`,'PUT',{revision:session.revision,plan});accept(s);return s;};
-  const render=(kind:'preview'|'export')=>action(async()=>{const s=await save();if(!s)return;accept(await reframeRequest(`/${s.id}/${kind}`,'POST',{revision:s.revision}));setTool(null);});
-  const reset=()=>{abort.current?.abort();setSession(null);setPlan(null);setFile(null);setLocalUrl(undefined);setError('');setEdited(false);setCleanView(false);setCompare(false);setDirty(false);setUrl('');localStorage.removeItem('quick-reframe-session');window.history.replaceState(null,'','/quick-reframe');};
-  const readyPreview=!!session?.previewUrl&&session.previewRevision===session.revision&&!dirty;
-  const source=mediaUrl(cleanView?session?.cleanUrl||null:session?.sourceUrl||null)||localUrl;
-  const styledFrame=edited||compare;
-  const sourceAspect=session?.width&&session.height?(session.width/session.height)*(cleanView&&plan?plan.crop.w/plan.crop.h:1):9/16;
-  const onSync=()=>{if(original.current&&after.current){const t=original.current.currentTime;if(Math.abs(after.current.currentTime-t)>.15)after.current.currentTime=t;}setTime(original.current?.currentTime||0);};
-  const cropInsets=plan?{left:plan.crop.x,right:1-plan.crop.x-plan.crop.w,top:plan.crop.y,bottom:1-plan.crop.y-plan.crop.h}:null;
-  const setEdge=(edge:keyof NonNullable<typeof cropInsets>,v:number)=>{if(!plan||!cropInsets)return;const next={...cropInsets,[edge]:v};if(next.left+next.right>.75||next.top+next.bottom>.75)return;change({...plan,aspect:'CUSTOM',framing:'CROP',tracking:undefined,crop:{x:next.left,y:next.top,w:1-next.left-next.right,h:1-next.top-next.bottom}});};
-  const pointers=useRef(new Map<number,{x:number;y:number}>());const drag=useRef<{box:ReframeBox;x:number;y:number;handle:string;distance?:number}|null>(null);
-  const touchStart=(e:React.PointerEvent<HTMLDivElement>)=>{if(!plan||!cropGesture)return;e.preventDefault();e.currentTarget.setPointerCapture(e.pointerId);pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});const points=[...pointers.current.values()];drag.current={box:{...plan.crop},x:e.clientX,y:e.clientY,handle:(e.target as HTMLElement).dataset.handle||'move',distance:points.length===2?Math.hypot(points[0].x-points[1].x,points[0].y-points[1].y):undefined};};
-  const touchMove=(e:React.PointerEvent<HTMLDivElement>)=>{if(!plan||!drag.current||!pointers.current.has(e.pointerId))return;pointers.current.set(e.pointerId,{x:e.clientX,y:e.clientY});const b=drag.current.box,rect=e.currentTarget.getBoundingClientRect();let crop={...b};const points=[...pointers.current.values()];
-    if(points.length===2&&drag.current.distance){const factor=drag.current.distance/Math.max(1,Math.hypot(points[0].x-points[1].x,points[0].y-points[1].y));crop.w=Math.min(1,Math.max(.5,b.w*factor));crop.h=Math.min(1,Math.max(.5,b.h*factor));crop.x=Math.max(0,Math.min(1-crop.w,b.x+(b.w-crop.w)/2));crop.y=Math.max(0,Math.min(1-crop.h,b.y+(b.h-crop.h)/2));}
-    else {const dx=(e.clientX-drag.current.x)/rect.width,dy=(e.clientY-drag.current.y)/rect.height;const h=drag.current.handle;
-      if(h==='move'){crop.x=Math.max(0,Math.min(1-b.w,b.x+dx));crop.y=Math.max(0,Math.min(1-b.h,b.y+dy));}
-      if(h.includes('l')){crop.x=Math.max(0,Math.min(b.x+b.w-.3,b.x+dx));crop.w=b.x+b.w-crop.x;}
-      if(h.includes('r'))crop.w=Math.max(.3,Math.min(1-b.x,b.w+dx));
-      if(h.includes('t')){crop.y=Math.max(0,Math.min(b.y+b.h-.3,b.y+dy));crop.h=b.y+b.h-crop.y;}
-      if(h.includes('b'))crop.h=Math.max(.3,Math.min(1-b.y,b.h+dy));
-    }change({...plan,crop,aspect:'CUSTOM',framing:'CROP',tracking:undefined});
+import { useRouter } from 'next/navigation';
+import { Loader2, Upload } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { applyStyleOne, chooseManual, confirmCrop, defaultStep, editorUrl, isProcessing, mediaUrl, quickReframeUrl, reframeRequest, revertCrop, savePlan,
+  uploadReframe, type ReframePlan, type ReframeSession, type ReframeStep } from '@/lib/quick-reframe-api';
+import { cropProblems } from '@/lib/quick-reframe-crop';
+import { StepIndicator } from './step-indicator';
+import { CropStep } from './crop-step';
+import { ChooseStep, type ChooseAction } from './choose-step';
+import { StyleOneStep } from './styleone-step';
+import { ExportStep } from './export-step';
+
+const field = 'min-h-11 w-full min-w-0 rounded-xl border border-border bg-background px-3 text-sm';
+const STORAGE_KEY = 'quick-reframe-session';
+const readStorage = () => { try { return window.localStorage.getItem(STORAGE_KEY); } catch { return null; } };
+const writeStorage = (value: string | null) => { try { if (value) window.localStorage.setItem(STORAGE_KEY, value); else window.localStorage.removeItem(STORAGE_KEY); } catch { /* storage unavailable */ } };
+
+/**
+ * Quick Reframe AI V2: Import → 1. Crop → 2. Choose Style → 3. Edit → 4. Export.
+ * The crop is confirmed before any editing path exists; Manual editing opens the real XeeClip editor.
+ */
+export function QuickReframeWorkspace() {
+  const router = useRouter();
+  const [session, setSession] = useState<ReframeSession | null>(null);
+  const [plan, setPlan] = useState<ReframePlan | null>(null);
+  const [step, setStepState] = useState<ReframeStep>('crop');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState(0);
+  const [file, setFile] = useState<File | null>(null);
+  const [url, setUrl] = useState('');
+  const [authorized, setAuthorized] = useState(false);
+  const abort = useRef<AbortController | null>(null);
+  const dirty = useRef(false);
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const afterJob = useRef<ReframeStep | null>(null);
+  const loaded = useRef(false);
+
+  const setStep = useCallback((next: ReframeStep, id?: string) => {
+    setStepState(next);
+    if (id) window.history.replaceState(null, '', quickReframeUrl(id, next));
+  }, []);
+  /** Server state wins, except a crop draft the user is still changing. */
+  const accept = useCallback((next: ReframeSession) => {
+    setSession(next);
+    if (!dirty.current) setPlan(next.plan);
+  }, []);
+
+  useEffect(() => {
+    if (loaded.current) return; loaded.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('video') || readStorage();
+    if (!id) { setLoading(false); return; }
+    reframeRequest(`/${encodeURIComponent(id)}`).then((s) => {
+      accept(s);
+      const requested = params.get('step') as ReframeStep | null;
+      const fallback = defaultStep(s);
+      const allowed = requested && (requested === 'crop' || (requested === 'choose' && s.cropConfirmed) || ((requested === 'edit' || requested === 'export') && s.cropConfirmed && !!s.editPath));
+      const target = allowed ? requested! : fallback;
+      if (target === 'edit' && s.editPath === 'MANUAL' && !requested) { setStep('choose', s.id); return; }
+      setStep(target, s.id);
+    }).catch(() => writeStorage(null)).finally(() => setLoading(false));
+  }, [accept, setStep]);
+  useEffect(() => { if (session?.id) writeStorage(session.id); }, [session?.id]);
+
+  // Poll while the server works; then move on to the step the finished job unlocks.
+  const processing = isProcessing(session);
+  useEffect(() => {
+    if (!processing || !session) return;
+    let stopped = false;
+    const timer = window.setInterval(() => {
+      reframeRequest(`/${session.id}`).then((s) => {
+        if (stopped) return;
+        accept(s);
+        if (!isProcessing(s)) {
+          if (s.status === 'FAILED') { setError(s.error || 'Processing failed. Please retry.'); afterJob.current = null; return; }
+          if (afterJob.current === 'edit' && s.editPath === 'MANUAL') { afterJob.current = null; router.push(editorUrl(s)); return; }
+          if (afterJob.current) { setStep(afterJob.current, s.id); afterJob.current = null; }
+        }
+      }).catch(() => { if (!stopped) setError('Connection interrupted. Your progress is saved.'); });
+    }, 1500);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [processing, session?.id, accept, setStep, router]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const action = async (task: () => Promise<void>) => {
+    setBusy(true); setError('');
+    try { await task(); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Please retry.'); }
+    finally { setBusy(false); }
   };
-  const endTouch=(e:React.PointerEvent<HTMLDivElement>)=>{pointers.current.delete(e.pointerId);drag.current=null;};
-  const region=session?.analysis?.regions.find(r=>r.id===selectedRegion);
-  const addCleanup=()=>{if(!plan)return;const b=region||manual;change({...plan,cleanup:[...plan.cleanup,{x:b.x,y:b.y,w:b.w,h:b.h,regionId:region?.id||'manual',start:region?.start||0,end:region?.end||session!.duration,method:'BLUR',intensity:8,authorized:true,ownedBranding:region?.kind==='ATTRIBUTION'&&ownedBranding}]});};
-  const controls=plan&&tool?<div className='grid min-w-0 gap-5'>
-    {tool==='Crop'&&<><label className='grid gap-2 text-sm'>Clean source crop<select className={field} value={plan.aspect} onChange={e=>{const aspect=e.target.value as ReframePlan['aspect'];void action(async()=>{if(!session)return;accept(await reframeRequest(`/${session.id}/auto-clean`,'POST',{revision:session.revision,aspect}));});}}>{['SOURCE','9:16','1:1','16:9','CUSTOM'].map(a=><option key={a} value={a}>{a==='SOURCE'?'Original':a==='CUSTOM'?'Custom crop':a}</option>)}</select></label><p className='text-xs text-muted-foreground'>StyleOne keeps its fixed 9:16 canvas and media window. Adjust only the source crop. Drag the crop boundary or pinch to zoom. Use the four sliders for precise control.</p>{cropInsets&&Object.entries(cropInsets).map(([edge,value])=><Range key={edge} label={`Crop ${edge}`} value={value} min={0} max={.5} onChange={v=>setEdge(edge as keyof typeof cropInsets,v)}/>)}<button className={button} onClick={()=>change({...plan,crop:{x:0,y:0,w:1,h:1},aspect:'SOURCE',framing:'CROP',tracking:undefined})}>Reset crop</button></>}
-    {tool==='Cleanup'&&<><p className='text-sm text-muted-foreground'>Select an overlay you own or are authorized to remove. Detected creator attribution is protected.</p><select aria-label='Cleanup region' className={field} value={selectedRegion} onChange={e=>{setSelectedRegion(e.target.value);setOwnedBranding(false);}}><option value=''>Custom region</option>{session?.analysis?.regions.map(r=><option key={r.id} value={r.id}>{r.text||r.kind} · {r.start.toFixed(1)}–{r.end.toFixed(1)}s</option>)}</select>{!region&&(['x','y','w','h'] as const).map(k=><Range key={k} label={`Region ${k}`} min={k==='w'||k==='h' ? .02 : 0} max={k==='w'?1-manual.x:k==='h'?1-manual.y:k==='x'?1-manual.w:1-manual.h} value={manual[k]} onChange={v=>setManual({...manual,[k]:v})}/>)}{region?.kind==='ATTRIBUTION'&&<label className='flex items-start gap-3 text-sm'><input type='checkbox' className='mt-1' checked={ownedBranding} onChange={e=>setOwnedBranding(e.target.checked)}/>This selected branding is my own, and removing it will preserve required attribution.</label>}<button className={button} disabled={plan.cleanup.length>=24||(region?.kind==='ATTRIBUTION'&&!ownedBranding)} onClick={addCleanup}>I have rights to remove this region · Add</button>{plan.cleanup.map((r,i)=><div key={i} className='grid gap-3 rounded-xl border border-border p-3'><div className='flex items-center gap-2'><select aria-label={`Cleanup ${i+1} method`} className={field} value={r.method} onChange={e=>change({...plan,cleanup:plan.cleanup.map((c,j)=>j===i?{...c,method:e.target.value as 'BLUR'|'COVER'}:c)})}><option value='BLUR'>Localized blur</option><option value='COVER'>Dark cover</option></select><button aria-label='Remove cleanup region' className={button} onClick={()=>change({...plan,cleanup:plan.cleanup.filter((_,j)=>j!==i)})}><X size={16}/></button></div><Range label='Blur intensity' value={r.intensity} min={1} max={30} step={1} onChange={v=>change({...plan,cleanup:plan.cleanup.map((c,j)=>j===i?{...c,intensity:v}:c)})}/><Range label='Starts at (seconds)' value={r.start} min={0} max={r.end-.1} step={.1} onChange={v=>change({...plan,cleanup:plan.cleanup.map((c,j)=>j===i?{...c,start:v}:c)})}/><Range label='Ends at (seconds)' value={r.end} min={r.start+.1} max={session!.duration} step={.1} onChange={v=>change({...plan,cleanup:plan.cleanup.map((c,j)=>j===i?{...c,end:v}:c)})}/></div>)}<button className={button} onClick={()=>change({...plan,cleanup:[]})}>Reset cleanup</button></>}
-    {tool==='Hook'&&<><label className='flex items-center gap-3 text-sm'><input type='checkbox' checked={plan.hook.enabled} onChange={e=>change({...plan,hook:{...plan.hook,enabled:e.target.checked}})}/>Show the StyleOne serif hook throughout the video</label>{session?.hooks.map(h=><button key={h} className={`${button} text-left`} onClick={()=>change({...plan,hook:{...plan.hook,text:h,enabled:true}})}>{h}</button>)}{!session?.hooks.length&&<p className='text-xs text-muted-foreground'>Write a hook based on what your video says or shows.</p>}<textarea aria-label='Hook text' maxLength={160} className={`${field} py-3`} value={plan.hook.text} onChange={e=>change({...plan,hook:{...plan.hook,text:e.target.value}})}/><p className='text-xs text-muted-foreground'>StyleOne places the serif hook above the fixed media window, with its existing color emphasis.</p><button className={button} onClick={()=>change({...plan,hook:{...plan.hook,enabled:false,text:''}})}>Reset hook</button></>}
-    {tool==='Captions'&&<><p className='text-sm text-muted-foreground'>{session?.analysis?.subtitleState==='EXISTING_READABLE'?'Readable captions detected. The original caption layer is kept.':session?.analysis?.subtitleState==='MISSING'?'No readable caption layer detected. Captions use the original spoken language.':'Existing captions need review. Adding a layer requires explicit replacement.'}</p>{session?.analysis?.subtitleState!=='MISSING'&&<label className='flex items-start gap-3 text-sm'><input className='mt-1' type='checkbox' checked={plan.captions.replaceExisting} onChange={e=>change({...plan,captions:{...plan.captions,replaceExisting:e.target.checked}})}/>Replace original captions after covering or cropping them out</label>}<label className='flex items-center gap-3 text-sm'><input type='checkbox' checked={plan.captions.enabled} onChange={e=>change({...plan,captions:{...plan.captions,enabled:e.target.checked}})}/>Show generated captions</label><p className='text-xs text-muted-foreground'>Uses StyleOne’s existing white captions with lime active-word emphasis and its fixed safe area.</p><div className='grid max-h-60 gap-2 overflow-y-auto'>{plan.captions.cues.map((c,i)=><label key={i} className='grid gap-1 text-xs text-muted-foreground'>{c.start.toFixed(1)}–{c.end.toFixed(1)}s<textarea aria-label={`Caption ${i+1}`} className={`${field} py-2 text-foreground`} value={c.text} onChange={e=>change({...plan,captions:{...plan.captions,cues:plan.captions.cues.map((cue,j)=>i===j?{...cue,text:e.target.value}:cue)}})}/></label>)}</div></>}
-    {tool==='Color'&&<>{([{key:'exposure',label:'Exposure',min:-.3,max:.3},{key:'contrast',label:'Contrast',min:.8,max:1.2},{key:'saturation',label:'Saturation',min:.8,max:1.2},{key:'temperature',label:'White balance',min:-.15,max:.15},{key:'sharpness',label:'Sharpening',min:0,max:.5}] as const).map(r=><Range key={r.key} label={r.label} value={plan.color[r.key]} min={r.min} max={r.max} onChange={v=>change({...plan,color:{...plan.color,[r.key]:v}})}/>)}<label className='flex items-center gap-3 text-sm'><input type='checkbox' checked={plan.color.denoise} onChange={e=>change({...plan,color:{...plan.color,denoise:e.target.checked}})}/>Subtle noise reduction</label><p className='text-xs text-muted-foreground'>Clean Look preserves source colors by default. Adjust gently when needed.</p><button className={button} onClick={()=>change({...plan,color:{exposure:0,contrast:1,saturation:1,temperature:0,sharpness:0,denoise:false}})}>Reset color</button></>}
-    {tool==='Audio'&&<><p className='text-sm text-muted-foreground'>Original audio and timing are preserved.</p><Range label='Original volume' value={plan.audio.volume} min={0} max={2} onChange={v=>change({...plan,audio:{...plan.audio,volume:v}})}/><label className='flex items-center gap-3 text-sm'><input type='checkbox' checked={plan.audio.muted} onChange={e=>change({...plan,audio:{...plan.audio,muted:e.target.checked}})}/>Mute original audio</label><button className={button} onClick={()=>change({...plan,audio:{volume:1,muted:false}})}>Reset audio</button></>}
-  </div>:null;
+  const ensure = async () => session ?? await reframeRequest<ReframeSession>('', 'POST');
+  const analyze = async (s: ReframeSession) => accept(await reframeRequest(`/${s.id}/analyze`, 'POST', { externalAiAuthorized: false }));
+  const upload = () => action(async () => {
+    if (!file) return;
+    const s = await ensure(); accept(s); setUploading(true); setUploadPercent(0); abort.current = new AbortController();
+    try { const uploaded = await uploadReframe(s.id, file, setUploadPercent, abort.current.signal); accept(uploaded); setStep('crop', uploaded.id); await analyze(uploaded); }
+    finally { setUploading(false); }
+  });
+  const importLink = () => action(async () => {
+    const s = await ensure(); accept(s); afterJob.current = 'crop';
+    accept(await reframeRequest(`/${s.id}/import`, 'POST', { url, authorized }));
+  });
+  // A finished import still needs its local analysis before the crop step can suggest anything.
+  useEffect(() => {
+    if (session && session.sourceUrl && !session.analysis && session.status === 'INPUT' && !busy && !uploading) void action(() => analyze(session));
+  }, [session?.status, session?.sourceUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- Crop draft: saved quietly (debounced) so a refresh keeps it; Done bakes it into the source. ---
+  const flush = useCallback(async () => {
+    if (saveTimer.current) { clearTimeout(saveTimer.current); saveTimer.current = null; }
+    if (!session || !plan || !dirty.current) return session;
+    const saved = await savePlan(session, plan); dirty.current = false; setSession(saved); return saved;
+  }, [session, plan]);
+  const changePlan = (next: ReframePlan) => {
+    setPlan(next); dirty.current = true;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (!session || cropProblems(next, session.analysis).length) return;
+    saveTimer.current = setTimeout(() => { void savePlan(session, next).then((saved) => { dirty.current = false; setSession(saved); })
+      .catch((caught) => setError(caught instanceof Error ? caught.message : 'The crop could not be saved.')); }, 700);
+  };
+  const done = () => action(async () => {
+    const saved = await flush(); if (!saved) return;
+    afterJob.current = saved.editPath ? 'edit' : 'choose';
+    accept(await confirmCrop(saved));
+  });
+  const cancelCrop = () => action(async () => {
+    if (!session) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    dirty.current = false;
+    if (session.confirmed) { const reverted = await revertCrop(session); accept(reverted); setPlan(reverted.plan); setStep(reverted.editPath ? 'edit' : 'choose', reverted.id); }
+    else { const fresh = await reframeRequest(`/${session.id}/suggest`, 'POST', { aspect: 'SOURCE' }) as unknown as Pick<ReframePlan, 'crop' | 'framing'>;
+      if (plan) changePlan({ ...plan, aspect: 'SOURCE', crop: fresh.crop, framing: fresh.framing, tracking: undefined, cleanup: [] }); }
+  });
+  const choose = (choice: ChooseAction) => action(async () => {
+    if (!session) return;
+    if (choice.kind === 'STYLEONE') { const next = await applyStyleOne(session); accept(next); setStep('edit', next.id); return; }
+    const next = await chooseManual(session, choice.removeStyleOne); accept(next); router.push(editorUrl(next, 'hooks'));
+  });
+  const goTo = (next: ReframeStep) => {
+    if (!session) return;
+    if (next === 'edit' && session.editPath === 'MANUAL') { router.push(editorUrl(session)); return; }
+    void reframeRequest(`/${session.id}`).then(accept).catch(() => undefined);
+    setStep(next, session.id);
+  };
+  const reachable = (target: ReframeStep) => !!session?.analysis && !processing && (target === 'crop' || (target === 'choose' && session.cropConfirmed) ||
+    ((target === 'edit' || target === 'export') && session.cropConfirmed && !!session.editPath));
+  const reset = () => { abort.current?.abort(); setSession(null); setPlan(null); setFile(null); setError(''); dirty.current = false; writeStorage(null); window.history.replaceState(null, '', '/quick-reframe'); setStep('crop'); };
+
+  const hasSource = !!session?.sourceUrl;
   return <div className='grid min-w-0 gap-6 pb-8'>
-    <header className='flex flex-wrap items-start justify-between gap-4'><div><p className='eyebrow'>Clean first. Then StyleOne.</p><h1 className='mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl'>Quick Reframe AI</h1><p className='mt-3 max-w-xl text-sm text-muted-foreground'>Analyze and clean the original, then apply StyleOne. Keep the full video sequence and original sound. Up to 3 minutes.</p></div>{session&&<button className={button} disabled={busy||processing} onClick={reset}>New video</button>}</header>
-    {error||session?.error?<p role='alert' className='rounded-xl border border-warning/30 bg-warning/10 p-3 text-sm text-warning-soft'>{error||session?.error}</p>:null}
-    {!session?.sourceUrl&&!processing&&<section className='grid min-w-0 gap-5 rounded-2xl border border-border bg-surface p-4 sm:p-6 md:grid-cols-2'>
-      <div className='grid gap-3'><h2 className='font-semibold'>Upload your video</h2><label className='flex min-h-32 cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border-strong p-4 text-center'><Upload className='text-primary-soft' size={24}/><span className='break-all text-sm'>{file?.name||'Choose MP4, MOV, M4V, or WebM'}</span><span className='text-xs text-muted-foreground'>Up to 180 seconds · 1 GiB</span><input aria-label='Upload video' className='sr-only' type='file' accept='video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.m4v,.webm' onChange={e=>{setFile(e.target.files?.[0]||null);setError('');}}/></label><button className={`btn-primary ${button}`} disabled={!file||busy} onClick={()=>void upload()}>{uploading?<Loader2 className='animate-spin' size={16}/>:<Upload size={16}/>}Upload video</button></div>
-      <div className='grid content-start gap-3'><h2 className='font-semibold'>Paste a video link</h2><input aria-label='Instagram or X video link' className={field} placeholder='Instagram Reel or X video link' type='url' value={url} onChange={e=>setUrl(e.target.value)}/><label className='flex items-start gap-3 text-xs text-muted-foreground'><input type='checkbox' className='mt-1' checked={authorized} onChange={e=>setAuthorized(e.target.checked)}/>I own this video or have permission to process it.</label><button className={button} disabled={!url||!authorized||busy} onClick={()=>void action(async()=>{const s=await ensure();accept(s);accept(await reframeRequest(`/${s.id}/import`,'POST',{url,authorized}));})}>Import video</button><p className='text-xs text-muted-foreground'>Public eligible videos only. If import is unavailable, upload your authorized source file.</p></div>
+    <header className='flex flex-wrap items-start justify-between gap-4'>
+      <div><p className='eyebrow'>Crop first. Then style.</p>
+        <h1 className='mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl'>Quick Reframe AI</h1>
+        {!hasSource && <p className='mt-3 max-w-xl text-sm text-muted-foreground'>Crop your video, then let StyleOne finish it or edit it yourself. One video, full length, original sound. Up to 3 minutes.</p>}</div>
+      {session && <Button type='button' variant='secondary' disabled={busy || processing} onClick={reset}>New video</Button>}
+    </header>
+    {hasSource && <StepIndicator active={step} reachable={reachable} onSelect={goTo} />}
+    {(error || (session?.status === 'FAILED' && session.error)) && <p role='alert' className='rounded-xl border border-warning/30 bg-warning/10 p-3 text-sm text-warning-soft'>{error || session?.error}</p>}
+    {loading && <p role='status' className='flex items-center gap-2 text-sm text-muted-foreground'><Loader2 size={16} className='animate-spin' />Loading your video…</p>}
+
+    {!loading && !hasSource && !processing && !uploading && <section className='grid min-w-0 gap-5 rounded-2xl border border-border bg-surface p-4 sm:p-6 md:grid-cols-2'>
+      <div className='grid gap-3'><h2 className='font-display font-semibold'>Upload your video</h2>
+        <label className='flex min-h-32 cursor-pointer flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border-strong p-4 text-center'>
+          <Upload className='text-primary-soft' size={24} /><span className='break-all text-sm'>{file?.name || 'Choose MP4, MOV, M4V, or WebM'}</span>
+          <span className='text-xs text-muted-foreground'>Up to 180 seconds · 1 GiB</span>
+          <input aria-label='Upload video' className='sr-only' type='file' accept='video/mp4,video/quicktime,video/webm,video/x-m4v,.mp4,.mov,.m4v,.webm' onChange={(e) => { setFile(e.target.files?.[0] || null); setError(''); }} /></label>
+        <Button type='button' disabled={!file || busy} onClick={() => void upload()}><Upload size={16} />Upload video</Button></div>
+      <div className='grid content-start gap-3'><h2 className='font-display font-semibold'>Paste a video link</h2>
+        <input aria-label='Instagram or X video link' className={field} placeholder='Instagram Reel or X video link' type='url' value={url} onChange={(e) => setUrl(e.target.value)} />
+        <label className='flex items-start gap-3 text-xs text-muted-foreground'><input type='checkbox' className='mt-1' checked={authorized} onChange={(e) => setAuthorized(e.target.checked)} />I own this video or have permission to process it.</label>
+        <Button type='button' variant='secondary' disabled={!url || !authorized || busy} onClick={() => void importLink()}>Import video</Button>
+        <p className='text-xs text-muted-foreground'>Public eligible videos only. If import is unavailable, upload your authorized source file.</p></div>
     </section>}
-    {uploading&&<div role='status' className='grid gap-3'><span className='text-sm'>Uploading video · {uploadPercent}%</span><progress className='w-full accent-primary' max={100} value={uploadPercent}/><button className={button} onClick={()=>abort.current?.abort()}>Cancel upload</button></div>}
-    {processing&&<div role='status' aria-live='polite' className='grid gap-3 rounded-xl border border-border p-4'><p className='flex items-center gap-2 text-sm'><Loader2 size={18} className='animate-spin text-primary-soft'/>{session?.message}</p><progress className='w-full accent-primary' value={session?.progress||0} max={100}/><button className={`${button} justify-self-start`} onClick={()=>void command('cancel')}>Cancel processing</button></div>}
-    {source&&<section className={`grid min-w-0 gap-5 ${tool&&!mobile?'md:grid-cols-[minmax(0,1fr)_300px]':''}`}>
-      <div className='grid min-w-0 content-start gap-4'>
-        <div className='flex flex-wrap gap-2'><button className={`${button} ${!edited&&!cleanView&&!compare?'border-primary text-primary-soft':''}`} onClick={()=>{setEdited(false);setCleanView(false);setCompare(false);}}>Original</button><button className={`${button} ${edited?'border-primary text-primary-soft':''}`} disabled={!readyPreview} onClick={()=>{setEdited(true);setCleanView(false);setCompare(false);}}>StyleOne</button><button className={button} disabled={!session?.cleanUrl||dirty} onClick={()=>{setCleanView(true);setEdited(false);setCompare(false);}}>Clean original</button><button className={button} disabled={!readyPreview} onClick={()=>{setCleanView(false);setCompare(!compare);setEdited(false);}}><ArrowLeftRight size={16}/>Compare</button><button className={`${button} ml-auto`} aria-label='Fullscreen preview' onClick={()=>void stage.current?.requestFullscreen()}><Maximize size={16}/></button></div>
-        <div ref={stage} className='relative mx-auto w-full max-w-[700px] overflow-hidden rounded-2xl bg-black'>
-          <div className='relative mx-auto max-h-[65vh]' style={{aspectRatio:styledFrame?'9/16':String(sourceAspect),maxWidth:`${65*(styledFrame?9/16:sourceAspect)}vh`}}>
-            <video ref={original} className='h-full w-full object-contain' src={source} controls playsInline preload='metadata' style={{visibility:edited?'hidden':'visible'}} onTimeUpdate={onSync} onPlay={()=>{if(compare)void after.current?.play().catch(()=>undefined);}} onPause={()=>{if(compare)after.current?.pause();}}/>
-            {readyPreview&&<video ref={after} className={`absolute inset-0 h-full w-full object-contain ${!edited&&!compare?'invisible':''}`} style={compare?{clipPath:`inset(0 ${100-split}% 0 0)`}:undefined} src={mediaUrl(session?.previewUrl||null)} controls={edited} muted={compare} playsInline preload='metadata'/>}
-            {!edited&&!compare&&!cleanView&&session?.analysis&&showRegions&&<div className='pointer-events-none absolute inset-0'>{session.analysis.regions.filter(r=>r.start<=time&&r.end>time).map(r=><div key={r.id} className={`absolute border ${r.kind==='ATTRIBUTION'?'border-warning':'border-secondary'}`} style={{left:`${r.x*100}%`,top:`${r.y*100}%`,width:`${r.w*100}%`,height:`${r.h*100}%`}}><span className='absolute left-0 top-0 max-w-full truncate bg-black/80 px-1 text-[10px] text-white'>{r.kind.toLowerCase()} {Math.round(r.confidence*100)}%</span></div>)}</div>}
-            {cropGesture&&plan&&!edited&&!cleanView&&<div className='absolute inset-0 touch-none' onPointerDown={touchStart} onPointerMove={touchMove} onPointerUp={endTouch} onPointerCancel={endTouch}><div className='absolute border-2 border-primary shadow-[0_0_0_999px_rgba(0,0,0,.35)]' style={{left:`${plan.crop.x*100}%`,top:`${plan.crop.y*100}%`,width:`${plan.crop.w*100}%`,height:`${plan.crop.h*100}%`}}>{[{h:'tl',x:0,y:0},{h:'tr',x:100,y:0},{h:'bl',x:0,y:100},{h:'br',x:100,y:100}].map(({h,x,y})=><span key={h} data-handle={h} className='absolute grid h-11 w-11 -translate-x-1/2 -translate-y-1/2 place-items-center' style={{left:`${x}%`,top:`${y}%`}}><span data-handle={h} className='h-4 w-4 rounded-full border-2 border-white bg-primary'/></span>)}</div></div>}
-            {tool==='Cleanup'&&!edited&&!cleanView&&!region&&<div className='pointer-events-none absolute border-2 border-primary' style={{left:`${manual.x*100}%`,top:`${manual.y*100}%`,width:`${manual.w*100}%`,height:`${manual.h*100}%`}}/>}
-          </div>
-        </div>
-        {compare&&<Range label='Before / After comparison' value={split} min={0} max={100} step={1} onChange={setSplit}/>}
-        <p className='break-all text-xs text-muted-foreground'>{session?.name||file?.name}{session?.duration?` · ${session.duration.toFixed(1)} seconds`:''}{plan?` · ${plan.framing==='FIT'?'Information-safe fit':'Stable crop'}`:''}</p>
-        {session?.analysis&&<label className='flex items-center gap-2 text-xs text-muted-foreground'><input type='checkbox' checked={showRegions} onChange={e=>setShowRegions(e.target.checked)}/>Show detected overlay boundaries</label>}
-        {dirty&&<p className='text-xs text-muted-foreground'>Your adjustments need a new rendered preview. Preview and export use the same geometry.</p>}
-      </div>
-      {tool&&!mobile&&<aside className='grid min-w-0 content-start gap-5 rounded-2xl border border-border bg-surface p-5'><div className='flex justify-between'><h2 className='font-semibold'>{tool}</h2><button aria-label='Close controls' onClick={()=>setTool(null)}><X size={18}/></button></div>{controls}<button className={`btn-primary ${button}`} disabled={busy||processing} onClick={()=>void render('preview')}>Apply & preview</button></aside>}
-    </section>}
-    {session?.sourceUrl&&!session.analysis&&!processing&&<div className='grid gap-3'><label className='flex items-start gap-3 text-sm text-muted-foreground'><input className='mt-1' type='checkbox' checked={external} onChange={e=>setExternal(e.target.checked)}/>Allow OpenAI to receive up to 8,000 characters of the transcript for three hook suggestions. Video analysis and transcription stay local.</label><button className={`btn-primary ${button} justify-self-start`} disabled={busy} onClick={()=>void command('analyze',{externalAiAuthorized:external})}><Sparkles size={16}/>Analyze Video</button></div>}
-    {session?.analysis&&<section className='grid gap-3 rounded-xl border border-border bg-surface p-4'><h2 className='font-semibold'>Analyze → Clean → StyleOne</h2><p className='text-sm text-muted-foreground'>{session.analysis.regions.length} timed text regions · {session.analysis.subtitleState==='EXISTING_READABLE'?'Keep original captions':session.analysis.subtitleState==='MISSING'?'Generate synchronized captions':'Review existing captions'}</p>{plan?.reasons.map(r=><p key={r} className='flex gap-2 text-xs text-muted-foreground'><Check size={14} className='shrink-0 text-primary-soft'/>{r}</p>)}{session.analysis.warnings.map(w=><p key={w} className='text-xs text-warning-soft'>{w}</p>)}{!plan&&<label className='flex items-start gap-3 text-xs text-muted-foreground'><input type='checkbox' className='mt-1' checked={cleanAuthorized} onChange={e=>setCleanAuthorized(e.target.checked)}/>I have rights to clean the detected decorative overlays. Allow localized blur where safe cropping is insufficient.</label>}{!plan&&<button className={`btn-primary ${button} justify-self-start`} disabled={busy||processing} onClick={()=>void action(async()=>{const s=await reframeRequest(`/${session.id}/auto-clean`,'POST',{revision:session.revision,cleanupAuthorized:cleanAuthorized});accept(s);accept(await reframeRequest(`/${s.id}/preview`,'POST',{revision:s.revision}));})}><Scissors size={16}/>Auto Clean & apply StyleOne</button>}</section>}
-    {plan&&<div className='sticky bottom-[calc(var(--bottom-nav-h)+env(safe-area-inset-bottom)+8px)] z-20 grid min-w-0 gap-3 rounded-2xl border border-border bg-background/95 p-3 backdrop-blur-xl md:bottom-4'>
-      <div aria-label='Editing toolbar' className='flex flex-wrap gap-2'>{tools.map(t=><button key={t} className={`${button} flex-1 px-3 ${tool===t?'border-primary text-primary-soft':''}`} disabled={processing||busy} onClick={()=>{setTool(t);setCropGesture(t==='Crop');setEdited(false);setCleanView(false);setCompare(false);}}>{t}</button>)}<button className={`${button} px-3`} disabled={processing||busy} onClick={()=>{if(dirty&&session?.plan){setPlan(session.plan);setDirty(false);}else void command('undo');}}><RotateCcw size={14}/>Undo</button><button className={`${button} px-3`} disabled={processing||busy||dirty} onClick={()=>void command('redo')}>Redo</button></div>
-      <div className='flex flex-wrap items-center gap-2'><button className={button} disabled={processing||busy} onClick={()=>void render('preview')}>Create preview</button><span className='flex-1 text-center text-xs text-muted-foreground'>StyleOne · 1080 × 1920</span><button className={`btn-primary ${button} flex-1`} disabled={busy||processing} onClick={()=>void render('export')}><Download size={16}/>Export Video</button></div>
-    </div>}
-    {session?.exportUrl&&<div className='flex flex-wrap items-center gap-3 rounded-xl border border-primary/30 bg-primary/10 p-4'><Check className='text-primary-soft' size={20}/><p className='text-sm'>{session.exportRevision===session.revision?'Your video is ready and saved in History.':'An earlier export is saved in History. Export again to include your latest edits.'}</p><a href={`${mediaUrl(session.exportUrl)}?download=1`} className={`btn-primary ${button}`}>Download MP4</a><Link href='/history' className={button}>Open History</Link></div>}
-    <BottomSheet open={!!tool&&mobile===true} onClose={()=>setTool(null)} title={tool||'Edit video'} footer={<button className={`btn-primary ${button} w-full`} disabled={busy||processing} onClick={()=>void render('preview')}>Apply & preview</button>}>{controls}</BottomSheet>
-    {busy&&!uploading&&!processing&&<p role='status' className='flex items-center gap-2 text-sm text-muted-foreground'><Loader2 size={16} className='animate-spin'/>Preparing video…</p>}
+    {uploading && <div role='status' className='grid gap-3 rounded-xl border border-border p-4'><span className='text-sm'>Uploading video · {uploadPercent}%</span>
+      <progress className='w-full accent-primary' max={100} value={uploadPercent} /><Button type='button' variant='secondary' className='justify-self-start' onClick={() => abort.current?.abort()}>Cancel upload</Button></div>}
+    {processing && session && !(step === 'edit' && session.editPath === 'STYLEONE') && !(step === 'export' && ['PREVIEW', 'EXPORT'].includes(session.status)) &&
+      <div role='status' aria-live='polite' className='grid gap-3 rounded-xl border border-border bg-surface p-4'>
+        <p className='flex items-center gap-2 text-sm'><Loader2 size={18} className='animate-spin text-primary-soft' />{session.message}</p>
+        <progress className='w-full accent-primary' value={session.progress || 0} max={100} />
+        <Button type='button' variant='secondary' className='justify-self-start' onClick={() => void action(async () => accept(await reframeRequest(`/${session.id}/cancel`, 'POST')))}>Cancel</Button></div>}
+
+    {session && hasSource && step === 'crop' && (plan && session.analysis
+      ? <CropStep session={session} plan={plan} busy={busy || processing} confirmed={!!session.confirmed} onChange={changePlan} onDone={() => void done()} onCancel={() => void cancelCrop()} />
+      : processing ? session.originalUrl && <div className='mx-auto w-full max-w-3xl overflow-hidden rounded-2xl bg-black'>
+          <video src={mediaUrl(session.originalUrl)} controls playsInline preload='metadata' aria-label='Your video' className='max-h-[56vh] w-full object-contain' /></div>
+      : <div className='grid gap-3 rounded-xl border border-border bg-surface p-4'><p className='text-sm text-muted-foreground'>Analysis is needed before cropping.</p>
+        <Button type='button' className='justify-self-start' disabled={busy} onClick={() => void action(() => analyze(session))}>Analyze video</Button></div>)}
+    {session && step === 'choose' && session.cropConfirmed && !processing && <ChooseStep session={session} busy={busy} onChoose={(c) => void choose(c)} onBack={() => goTo('crop')} />}
+    {session && step === 'edit' && session.editPath === 'STYLEONE' && <StyleOneStep session={session} onSession={accept} onError={setError} onStep={(s) => goTo(s)} />}
+    {session && step === 'export' && session.editPath && <ExportStep session={session} onSession={accept} onError={setError}
+      onBack={() => session.editPath === 'MANUAL' ? router.push(editorUrl(session)) : goTo('edit')} />}
   </div>;
 }

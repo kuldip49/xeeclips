@@ -4,12 +4,13 @@ Last updated: 2026-10-07
 
 ## Milestones
 
-- Quick Reframe AI: standalone `/quick-reframe`, independent queue, canonical assets/plans,
-  local OCR/Whisper, validated clean intermediate → actual StyleOne renderer, optional consented hooks,
-  fixed 1080×1920 canvas/media window, mobile tools, preview/export and History.
-  Cloudflare frontend and laptop backend deployed. Real authorized Instagram import/export, duration
-  limits, audio/captions, History restart/deletion and public Chrome playback passed.
-  Acceptance details and limits: `docs/quick-reframe.md`.
+- Quick Reframe AI V2 (2026-10-07): guided 1. Crop → 2. Choose Style → 3. Edit → 4. Export on `/quick-reframe`.
+  The confirmed crop/cleanup is baked once into the SOURCE asset in place (ORIGINAL kept as a reference), so it
+  is never applied twice and survives re-edits/undo. StyleOne = the actual AUTOMATIC_2 compiler as one undoable
+  revision with whole-frame FIT in the fixed window; Manual = the canonical editor with a Quick Reframe step bar
+  and Hooks tool (six ranked hook categories, OpenAI only with per-request consent, local fallback; caption
+  decision). One shared 720p/1080p export, History with path label. Acceptance details and limits:
+  `docs/quick-reframe.md`.
 
 - Milestone 1: complete
 - Milestone 2: complete

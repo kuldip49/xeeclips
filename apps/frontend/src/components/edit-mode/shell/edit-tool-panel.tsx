@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { FileAudio, FileImage, Plus, Trash2, X } from 'lucide-react';
 import { editTool, type EditToolId } from '@/lib/edit-mode-tools';
 import type { CropAspectPreset } from '@/lib/edit-mode-crop';
@@ -98,6 +98,8 @@ export type EditToolPanelProps = {
   onError: (message: string) => void;
   /** Phone drawer: the crop controls use their compact dock layout. */
   compact?: boolean;
+  /** Quick Reframe's Hooks tool content; absent for every other project. */
+  hooksPanel?: ReactNode;
 };
 
 /** The desktop left panel: a titled column beside the rail. */
@@ -123,10 +125,12 @@ export function EditToolPanelBody({ tool, assets, elements, busy, hasSource, sel
   onCropZoom, onCropReset, onCropApplyAll, onCropCancel, onCropDone,
   onCopyAdjustments, onUploadSource,
   onImportSource, onUploadAsset, onAddAsset, onDeleteAsset, onTemplateApplied, onError,
-  compact = false }: EditToolPanelProps) {
+  compact = false, hooksPanel }: EditToolPanelProps) {
   const source = assets.find((asset) => asset.role === 'SOURCE');
   const selected = elements.find((element) => element.id === selectedElementId);
   return <>
+      {tool === 'HOOKS' && hooksPanel}
+
       {tool === 'MEDIA' && <EditAssetPicker assets={assets} busy={busy} onUploadSource={onUploadSource}
         onImport={onImportSource} onUploadAsset={async (role, file) => onUploadAsset(role, file)}
         onAdd={onAddAsset} onDelete={onDeleteAsset} />}

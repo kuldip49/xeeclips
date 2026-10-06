@@ -339,6 +339,8 @@ export class EditModeService {
 
   async list() {
     const projects = await this.prisma.editProject.findMany({
+      // A Quick Reframe session owns its EditProject; it lives in Quick Reframe History only.
+      where: { quickReframe: { is: null } },
       orderBy: { updatedAt: 'desc' },
       include: {
         assets: { where: { role: 'SOURCE' }, orderBy: { createdAt: 'asc' }, take: 1 },
@@ -1137,13 +1139,23 @@ export class EditModeService {
         const content = typeof input.content === 'string' && input.content.trim()
           ? input.content.slice(0, MAX_TEXT_LENGTH) : 'Text';
         const textRuns = this.validTextRuns(input.textRuns, content);
+        // Optional fitted size and box height (a long suggested hook must not wrap past its box).
+        const fitted: Record<string, number> = {};
+        try {
+          if (input.fontSize !== undefined) fitted.fontSize = validateFontSize(input.fontSize);
+        } catch (caught) { throw this.textError(caught); }
+        if (input.height !== undefined) {
+          const height = this.finiteNumber(input.height, 'height');
+          if (height < 0.04 || height > 0.6) throw new BadRequestException('height must be between 0.04 and 0.6');
+          fitted.height = height;
+        }
         return add({ id: randomUUID(), assetId: null, type: 'TEXT', track: 1,
           position: nextPosition(1), startTime: 0, duration: normalizedDuration(projectDuration),
           trimStart: 0, trimEnd: null, properties: { content, ...(textRuns.length ? { textRuns } : {}),
             ...preset.box, scale: 1,
             rotation: 0, opacity: 1, zIndex: 30, anchor: 'top-left', locked: false,
             hidden: false, textStyleId: preset.id, ...styleProperties(preset.style),
-            ...this.originProperties(input) } });
+            ...this.originProperties(input), ...fitted } });
       }
       if (action === 'ADD_AUDIO') {
         if (!asset || asset.role !== 'AUDIO' || !asset.duration) throw new BadRequestException({
