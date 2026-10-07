@@ -38,7 +38,8 @@ export const confirmCrop=(s:ReframeSession)=>reframeRequest(`/${s.id}/confirm-cr
 export const revertCrop=(s:ReframeSession)=>reframeRequest(`/${s.id}/revert-crop`,'POST');
 export const applyStyleOne=(s:ReframeSession,options:{hookText?:string;captions?:'GENERATE'|'KEEP'|'OFF'}={})=>reframeRequest(`/${s.id}/styleone`,'POST',{revision:s.revision,...options});
 export const chooseManual=(s:ReframeSession,removeStyleOne=false)=>reframeRequest(`/${s.id}/path`,'POST',{revision:s.revision,path:'MANUAL',removeStyleOne});
-export const requestHooks=(id:string,externalAiAuthorized:boolean)=>reframeRequest<{session:ReframeSession;warnings:string[]}>(`/${id}/hooks`,'POST',{externalAiAuthorized});
+/** `exclude` (Regenerate): hooks already shown, which are never suggested again. */
+export const requestHooks=(id:string,externalAiAuthorized:boolean,exclude:string[]=[])=>reframeRequest<{session:ReframeSession;warnings:string[]}>(`/${id}/hooks`,'POST',{externalAiAuthorized,exclude});
 export const renderReframe=(s:ReframeSession,kind:'preview'|'export',resolution:720|1080=1080)=>reframeRequest(`/${s.id}/${kind}`,'POST',{revision:s.revision,resolution});
 export const reframeForProject=(editProjectId:string)=>reframeRequest(`/project/${encodeURIComponent(editProjectId)}`);
 export const HOOK_CATEGORY_LABEL:Record<ReframeHookCategory,string>={BOLD:'Bold',CURIOSITY:'Curiosity',QUESTION:'Question',CONTRARIAN:'Contrarian',EMOTIONAL:'Emotional',PROFESSIONAL:'Professional'};

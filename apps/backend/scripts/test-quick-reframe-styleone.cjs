@@ -69,6 +69,17 @@ async function main(){
   h.rows.editElements.set('caption',{...project.elements[0],id:'caption',assetId:null,type:'SUBTITLE',track:2,position:0,startTime:0,duration:2,trimStart:0,trimEnd:null,properties:{content:'Original words'}});project=await h.service.get(id);
   const captionBundle=quickStyleOneCommands({project,assets:project.assets,elements:project.elements},{hookText:'Keep the original speaker visible',captions:true});
   const captionResult=await h.service.applyAssistantBundle(id,project.revision,{proposalId:'quick-captions-test',summary:'StyleOne captions',userMessage:'captions',actor:'TEMPLATE_ACTION',commands:captionBundle.commands});
+  // The user's own hook replaces the existing StyleOne hook (StyleOne alone keeps existing wording).
+  const ownHook='My own words for this video';
+  const kept=quickStyleOneCommands({project:captionResult.project,assets:project.assets,elements:captionResult.project.elements},{hookText:ownHook,captions:true});
+  assert.ok(!kept.commands.some(c=>c.action==='SET_TEXT_CONTENT'),'without replaceHook StyleOne keeps the wording');
+  const own=quickStyleOneCommands({project:captionResult.project,assets:project.assets,elements:captionResult.project.elements},{hookText:ownHook,captions:true,replaceHook:true});
+  assert.equal(own.commands[0].action,'SET_TEXT_CONTENT');assert.equal(own.commands[0].payload.content,ownHook);
+  const ownResult=await h.service.applyAssistantBundle(id,captionResult.project.revision,{proposalId:'quick-own-hook',summary:'own hook',userMessage:'own hook',actor:'TEMPLATE_ACTION',commands:own.commands,onInvalid:'ABORT'});
+  const ownElement=ownResult.project.elements.find(e=>e.type==='TEXT'&&e.properties.presetRole==='HOOK');
+  assert.equal(ownElement.properties.content,ownHook);assert.equal(ownElement.properties.textRuns.map(r=>r.text).join(''),ownHook,'StyleOne colours the new words');
+  assert.equal(ownResult.project.elements.filter(e=>e.type==='TEXT'&&e.properties.presetRole==='HOOK').length,1,'one hook, replaced in place');
+  assert.equal(ownResult.project.elements.filter(e=>e.type==='TEXT').length,captionResult.project.elements.filter(e=>e.type==='TEXT').length,'no extra text');
   const caption=captionResult.project.elements.find(e=>e.type==='SUBTITLE');
   assert.equal(caption.properties.captionStyleId,'BOLD_HIGHLIGHT');assert.equal(caption.properties.y,S.captionSafeBox.y);
   assert.equal(caption.properties.activeWord.enabled,true);assert.equal(caption.properties.activeWord.color.toLowerCase(),S.colors.captionActive.toLowerCase());

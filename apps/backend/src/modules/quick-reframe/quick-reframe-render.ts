@@ -34,11 +34,17 @@ export function cleanFingerprint(p: ReframePlan) { return preparationFingerprint
  * The confirmed crop is already baked into SOURCE, so StyleOne shows that whole frame inside its
  * fixed media window (canonical FIT framing) instead of cropping a second time.
  */
-export function quickStyleOneCommands(input: PlanInput, options: { hookText: string; captions: boolean }) {
+export function quickStyleOneCommands(input: PlanInput, options: { hookText: string; captions: boolean; replaceHook?: boolean }) {
   const source=input.assets.find(a=>a.role==='SOURCE')!;
   const hook=options.hookText.trim();
+  // StyleOne keeps an existing hook's wording. A hook the user wrote or picked replaces it: the content is
+  // set first (one canonical command), and StyleOne styles that new text (its colour runs included).
+  const role=(e:PlanInput['elements'][number])=>{const p=(e.properties??{}) as Record<string,unknown>;return String(p.templateRole??p.presetRole??'');};
+  const existing=input.elements.find(e=>e.type==='TEXT'&&role(e)==='HOOK');
+  const replace=!!(options.replaceHook&&hook&&existing&&String(((existing.properties??{}) as Record<string,unknown>).content??'')!==hook);
+  const elements=input.elements.map(e=>replace&&e===existing?{...e,properties:{...(e.properties as Record<string,unknown>),content:hook,textRuns:[]}}:e);
   const context=buildChatContext({revision:input.project.revision,settings:input.project.settings,style:readEditProjectStyle(input.project.settings),
-    elements:input.elements.map(e=>({...e,type:e.type as EditElementType,properties:e.properties as Record<string,unknown>})),
+    elements:elements.map(e=>({...e,type:e.type as EditElementType,properties:e.properties as Record<string,unknown>})),
     assets:input.assets.map(a=>({...a,originalName:'Quick Reframe source'})),
     evidence:buildPresetEvidence({durationSec:source.duration!,width:source.width,height:source.height,metadata:source.metadata,transcript:source.transcript,analysis:source.analysis,aspectRatio:'SOURCE',preserveInformation:true}),
     thread:EMPTY_CHAT_THREAD,selection:{},message:'Apply StyleOne to the complete confirmed source'});
@@ -51,6 +57,7 @@ export function quickStyleOneCommands(input: PlanInput, options: { hookText: str
   }
   for(const command of compiled.commands) if(command.action==='SET_REFRAME_POLICY')command.payload.policy='SOURCE';
   for(const command of compiled.commands) if(command.action==='SET_ELEMENT_TIMING'&&Number(command.payload.duration)>source.duration!)command.payload.duration=source.duration!;
+  if(replace)compiled.commands.unshift({kind:'ELEMENT',action:'SET_TEXT_CONTENT',payload:{elementId:existing!.id,content:hook}});
   compiled.commands.push({kind:'ELEMENT',action:'SET_VIDEO_FRAMING',payload:{mode:'FIT',scope:'ALL_VIDEO_SEGMENTS'}});
   compiled.commands.push({kind:'SETTINGS',action:'QUICK_REFRAME_STYLEONE',payload:{aspectRatio:'9:16',reframePolicy:'SOURCE',zoomPolicy:'OFF',subtitlePolicy:'OFF',gradingPolicy:'NONE',quickReframeStyleOne:true}});
   return compiled;

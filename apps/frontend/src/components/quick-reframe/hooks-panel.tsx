@@ -23,9 +23,10 @@ export function SuggestedHooks({ session, onSession, onApply, current, busy, com
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [own, setOwn] = useState('');
-  const generate = async () => {
+  const generate = async (regenerate = false) => {
     setLoading(true); setWarnings([]);
-    try { const result = await requestHooks(session.id, consent); onSession(result.session); setWarnings(result.warnings); }
+    try { const result = await requestHooks(session.id, consent, regenerate ? session.hooks.map((hook) => hook.text) : []);
+      onSession(result.session); setWarnings(result.warnings); }
     catch (error) { setWarnings([error instanceof Error ? error.message : 'Hook suggestions are unavailable.']); }
     finally { setLoading(false); }
   };
@@ -47,7 +48,7 @@ export function SuggestedHooks({ session, onSession, onApply, current, busy, com
   return <section aria-label='Suggested Hooks' className='grid min-w-0 gap-3'>
     <div className='flex items-center justify-between gap-2'>
       <h3 className={cn('font-display font-semibold', compact ? 'text-xs uppercase tracking-wider text-soft' : 'text-sm')}>Suggested Hooks</h3>
-      {hooks.length > 0 && <button type='button' disabled={loading || busy} onClick={() => void generate()} className='inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs text-primary-soft hover:bg-tint disabled:opacity-40'>
+      {hooks.length > 0 && <button type='button' disabled={loading || busy} onClick={() => void generate(true)} data-testid='regenerate-hooks' className='inline-flex min-h-9 items-center gap-1 rounded-lg px-2 text-xs text-primary-soft hover:bg-tint disabled:opacity-40'>
         <RefreshCw size={13} className={loading ? 'animate-spin' : undefined} />Regenerate</button>}
     </div>
     {checking && (running

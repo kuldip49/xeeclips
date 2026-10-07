@@ -238,7 +238,25 @@ Measured (1080×1920, StyleOne, edited hook): plate x 174–904 vs 174–906, te
 192–890 vs 190–888. Manual 4:5: captions 184–896 vs 182–898; the hook plate exports ~18 px wider per side
 (libass box padding).
 
+## Own hook and Regenerate (2026-10-07, follow-up)
+
+Reported: "Write your own hook" did not replace the hook, and Regenerate did not give new suggestions.
+
+- **Own hook in StyleOne:** the StyleOne template keeps an existing hook's wording, so re-applying it with the
+  user's text silently kept the old hook. `quickStyleOneCommands(..., { replaceHook })` now sets the content first
+  (one canonical `SET_TEXT_CONTENT` in the same undoable revision) and StyleOne styles and colours the new text.
+  Suggestion cards ("Apply") and "Use my hook" both go through it.
+- **Regenerate:** local suggestions are deterministic, so the same list came back every time. Regenerate now
+  sends the lines already shown (`exclude`): they are never suggested again, OpenAI (with consent) is asked for
+  different wording and angles, and when the transcript has nothing new locally the current list is kept with a
+  clear message (tick "Use OpenAI", or write your own).
+- Verified live in the browser for StyleOne ("Change hook") and the Manual Hooks tool
+  (`e2e/quick-reframe-hooks.spec.ts`): own hook replaces the hook in place (editing it again updates the same
+  element), Regenerate shows no repeated line; API repro: local Regenerate surfaced 2 new lines, OpenAI 12 new ones.
+
 ## Deployment
+
+Own hook / Regenerate follow-up: backend hot-deployed; frontend Worker `ee62dd35-9b12-4906-af2e-ed0bf67ca269`. Against production: hooks, journeys, parity and crop suites 16/16.
 
 Parity follow-up: backend hot-deployed to the laptop stack; frontend Worker version `adb9be67-5516-4387-8dd0-12dde3d32988`. Against production: Quick Reframe journeys, both parity tests and the crop suite 14/14, Create Clips `e2e/workflows.spec.ts` 5 passed (YouTube skipped).
 

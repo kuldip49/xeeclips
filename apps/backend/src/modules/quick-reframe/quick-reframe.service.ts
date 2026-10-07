@@ -353,8 +353,10 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const q=await this.load(id);const original=this.originalOf(q);if(!original)throw new BadRequestException('Upload a video first.');
     const external=body.externalAiAuthorized===true;
     if(this.needsAnalysis(q)&&record(original.metadata).hasAudio===true)throw new BadRequestException(activeStatuses.includes(q.status)?'XeeClip is still checking the speech in your video. Try again in a moment.':'Check the video first, then ask for hook suggestions.');
-    const {hooks,warnings}=await suggestHooks(this.router,transcriptText(original.transcript??this.sourceOf(q)?.transcript),external);
-    await this.prisma.quickReframe.update({where:{id},data:{hooks:json(hooks),externalAiAuthorized:external}});
+    const exclude=Array.isArray(body.exclude)?body.exclude.filter((t):t is string=>typeof t==='string').map(t=>t.slice(0,200)).slice(0,30):[];
+    const {hooks,warnings}=await suggestHooks(this.router,transcriptText(original.transcript??this.sourceOf(q)?.transcript),external,exclude);
+    // Regenerate with nothing new keeps the current list rather than emptying it.
+    if(hooks.length||!exclude.length)await this.prisma.quickReframe.update({where:{id},data:{hooks:json(hooks),externalAiAuthorized:external}});
     return {session:await this.get(id),warnings};
   }
   private assertEditable(q:Loaded,revision:unknown,claimed=false){
@@ -387,7 +389,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       project=await this.editor.phase3Command(q.editProjectId,'GENERATE_CAPTIONS',{revision:project.revision}) as unknown as typeof project;
     }
     const captions=mode!=='OFF'&&project.elements.some(e=>e.type==='SUBTITLE');
-    const compiled=quickStyleOneCommands({project:{id:q.editProjectId,revision:project.revision,settings:project.settings},assets:project.assets as never,elements:project.elements as never},{hookText,captions});
+    const compiled=quickStyleOneCommands({project:{id:q.editProjectId,revision:project.revision,settings:project.settings},assets:project.assets as never,elements:project.elements as never},{hookText,captions,replaceHook:typeof body.hookText==='string'});
     const applied=await this.retryWriteConflict(()=>this.editor.applyAssistantBundle(q.editProjectId,project.revision,{proposalId:randomUUID(),summary:'Apply StyleOne to the confirmed crop',userMessage:'Quick Reframe: StyleOne',commands:compiled.commands,actor:'TEMPLATE_ACTION',onInvalid:'ABORT'}));
     await this.prisma.quickReframe.update({where:{id},data:{editPath:'STYLEONE',status:'STYLED',message:'StyleOne applied',error:null}});
     return this.start(id,'PREVIEW',{revision:(applied as {project:{revision:number}}).project.revision});
