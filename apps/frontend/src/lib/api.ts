@@ -27,6 +27,8 @@ export const AI_PROCESSING_MODE_LABELS: Record<AiProcessingMode, string> = {
 export type HistoryClip = {
   id: string;
   title: string;
+  hook?: string; synopsis?: string; caption?: string; hashtags?: string[];
+  contentUnderstandingVersion?: string | null;
   createdAt: string;
   duration: number;
   thumbnailUrl: string | null;

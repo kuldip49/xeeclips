@@ -20,7 +20,7 @@ export type EditToolDefinition = {
 };
 
 export const EDIT_TOOLS: EditToolDefinition[] = [
-  { id: 'HOOKS', label: 'Hooks', quickReframeOnly: true },
+  { id: 'HOOKS', label: 'Hooks' },
   { id: 'POST_COPY', label: 'Caption & Hashtags', quickReframeOnly: true },
   { id: 'MEDIA', label: 'Media' },
   { id: 'TEMPLATES', label: 'Templates' },

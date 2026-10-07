@@ -9,6 +9,7 @@
     "lint": "tsc --noEmit",
     "prisma:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
+    "test:content-intelligence": "npm run build && node scripts/test-content-intelligence.cjs",
     "test:resume": "npm run build && node scripts/test-processing-resume.cjs",
     "test:quick-reframe-post-copy": "npm run build && node scripts/test-quick-reframe-post-copy.cjs",
     "verify:quick-reframe-post-copy": "node scripts/verify-quick-reframe-post-copy.cjs",

@@ -9,7 +9,7 @@ import type { EditElement, EditProject } from '@/lib/edit-mode-types';
 import { cn } from '@/lib/utils';
 
 /**
- * "Suggested Hooks": six categories ranked by relevance, accuracy, clarity and engagement, with the
+ * "Suggested Hooks": shared categories ranked by relevance, accuracy, clarity and engagement, with the
  * strongest marked Recommended. Transcript text reaches OpenAI only when the user ticks the consent box
  * for that request; otherwise suggestions are written locally from the transcript.
  */
@@ -23,9 +23,11 @@ export function SuggestedHooks({ session, onSession, onApply, current, busy, com
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [own, setOwn] = useState('');
+  const [direction, setDirection] = useState('Rewrite');
+  const [category, setCategory] = useState('');
   const generate = async (regenerate = false) => {
     setLoading(true); setWarnings([]);
-    try { const result = await requestHooks(session.id, consent, regenerate ? session.hooks.map((hook) => hook.text) : []);
+    try { const result = await requestHooks(session.id, consent, regenerate ? session.hooks.map((hook) => hook.text) : [], {direction,category:category ? category as ReframeHook['category'] : undefined});
       onSession(result.session); setWarnings(result.warnings); }
     catch (error) { setWarnings([error instanceof Error ? error.message : 'Hook suggestions are unavailable.']); }
     finally { setLoading(false); }
@@ -58,9 +60,17 @@ export function SuggestedHooks({ session, onSession, onApply, current, busy, com
     {!checking && !session.hasTranscript && <p className='text-xs text-muted-foreground'>No speech was found in this video, so hooks cannot be suggested. Write your own below.</p>}
     {!checking && session.hasTranscript && <label className='flex items-start gap-2 text-[11px] leading-5 text-muted-foreground'>
       <input type='checkbox' className='mt-1' checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-      Use OpenAI for stronger suggestions (sends up to 8,000 characters of the transcript; video stays on XeeClip). Unticked, suggestions are written locally.</label>}
+      Use OpenAI for stronger suggestions (sends a compact package of retained speech, visible text and source context; video stays on XeeClip). Unticked, suggestions are written locally.</label>}
     {!checking && session.hasTranscript && !hooks.length && <Button type='button' disabled={loading || busy} onClick={() => void generate()} data-testid='generate-hooks'>
       {loading ? <Loader2 size={15} className='animate-spin' /> : <Sparkles size={15} />}{loading ? 'Analyzing your video…' : 'Suggest hooks'}</Button>}
+    {!checking && session.hasTranscript && <div className='grid grid-cols-2 gap-2'>
+      <label className='grid gap-1 text-xs'>Category<select aria-label='Hook category' value={category} onChange={e => setCategory(e.target.value)} className='min-h-10 rounded-lg border border-border bg-background px-2'>
+        <option value=''>All suitable tones</option>{Object.entries(HOOK_CATEGORY_LABEL).map(([value,label]) => <option key={value} value={value}>{label}</option>)}
+      </select></label>
+      <label className='grid gap-1 text-xs'>Rewrite<select aria-label='Hook rewrite direction' value={direction} onChange={e => setDirection(e.target.value)} className='min-h-10 rounded-lg border border-border bg-background px-2'>
+        {['Rewrite','Stronger / bolder','Funnier','More sarcastic','More professional','Shorter'].map(value => <option key={value}>{value}</option>)}
+      </select></label>
+    </div>}
     {warnings.map((w) => <p key={w} className='text-[11px] text-warning-soft'>{w}</p>)}
     <ul className='grid gap-2'>{hooks.map((hook: ReframeHook) => {
       const applied = current?.trim() === hook.text;

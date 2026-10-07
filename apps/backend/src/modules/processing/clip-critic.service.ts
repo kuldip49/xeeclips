@@ -181,8 +181,21 @@ export class ClipCriticService {
     return results;
   }
 
-  private async reviewPackage(candidates: ScoredClipCandidate[]) {
+  private async reviewPackage(candidates: ScoredClipCandidate[]): Promise<ScoredClipCandidate[]> {
     if (!candidates.length) return candidates;
+    // Shared packages already received the bounded quality gate; legacy repair must not replace creative reframings with transcript copies.
+    const shared = candidates.filter(c => c.creativeCandidates?.sharedPackage);
+    if (shared.length) {
+      const legacy = candidates.filter(c => !c.creativeCandidates?.sharedPackage);
+      const reviewed = legacy.length ? await this.reviewPackage(legacy) : [];
+      return candidates.map(c => {
+        if (!shared.includes(c)) return reviewed.find(r=>r.rangeKey===c.rangeKey) ?? c;
+        const p=c.creativeCandidates!.sharedPackage as unknown as {quality:{passed:boolean;score:number;failures:string[]};internal:{routes:Array<{role:string}>}};
+        return {...c,criticResult:{accepted:p.quality.passed,score:p.quality.score,failures:p.quality.failures,
+          validationMode:p.internal.routes.some(r=>r.role==='critic')?'MODEL_AND_DETERMINISTIC':'DETERMINISTIC',
+          sharedIntelligence:true}};
+      });
+    }
     const deterministic = candidates.map(deterministicReview);
     let reviews = deterministic;
     let route: LlmRouteMetadata | null = null;

@@ -1,3 +1,5 @@
+import { creativeService } from '../content-intelligence/creative-package.service';
+import { sharedQuality } from '../content-intelligence/creative-quality.service';
 import { Injectable } from '@nestjs/common';
 import { AiProcessingMode } from '../processing/ai-processing-mode';
 import { LlmRouterService } from '../processing/llm-router.service';
@@ -8,7 +10,7 @@ import { applyDeterministicEditorial } from './deterministic-editorial';
 import { chooseBestHook, deterministicHookCandidates, HookContext, HOOK_LENGTH, scoreHook,
   solemnSubject, titleCase, trimDanglingTail } from './hook-generator';
 import type { TargetPlatform } from '../processing/clip-selection-policy';
-import type { ContentPackaging } from './content-packaging.service';
+import { ContentPackagingService, type ContentPackaging } from './content-packaging.service';
 
 // Soft editorial preferences only; the clip's meaning and quality always take priority.
 export const PLATFORM_EDITORIAL_GUIDANCE: Record<TargetPlatform, string> = {
@@ -103,6 +105,21 @@ export class EditPlanService {
    */
   private applyHook(plan: EditPlan, context: EditContext,
     candidates: Array<{ text: string; source: HookSource }>) {
+    if (context.packaging?.sharedPackage) {
+      const p = context.packaging.sharedPackage;
+      const evidence = { transcript: context.transcript, sourceTitle: context.title, visibleText: context.packaging.sharedPackage.understanding.visibleText };
+      const ranked = sharedQuality.rank(p.hooks, evidence, p.understanding, p.hooks.some(h=>h.source==='OPENAI') ? 'OPENAI' : 'LOCAL', context.usedHookTexts);
+      const selected = ranked.find(h => h.text === p.selectedHook) ?? ranked[0];
+      const text = selected?.text ?? '';
+      return { plan: { ...plan, hookRequired: Boolean(text), onScreenHook: { ...plan.onScreenHook,
+        enabled: Boolean(text), text, startSec: context.start, endSec: context.end } },
+        hookSource: (selected?.source==='OPENAI' ? 'LUNA_CANDIDATE' : text ? 'DETERMINISTIC' : 'NONE') as HookSource,
+        hookScore: selected ? selected.score / 10 : null, hookMechanism: selected?.category ?? '', hookFinalText: text,
+        hookScoreComponents: selected?.components ?? {}, hookWordCount: text.split(/\s+/u).filter(Boolean).length,
+        hookCandidates: ranked.map(h => ({ text: h.text, score: h.score / 10, rejected: '', mechanism: h.category,
+          components: h.components ?? {}, wordCount: h.text.split(/\s+/u).length })),
+        hookCandidateCount: ranked.length, hookMechanismsOffered: ranked.map(h => h.category) };
+    }
     const hookContext: HookContext = { transcript: context.transcript,
       title: context.title, synopsis: context.synopsis,
       platform: context.targetPlatform ?? null,
@@ -181,67 +198,16 @@ export class EditPlanService {
    * becomes an insight or consequence angle instead.
    */
   private async hookCandidates(context: EditContext): Promise<string[]> {
-    const solemn = solemnSubject({ transcript: context.transcript, title: context.title,
-      synopsis: context.synopsis });
-    const fifth = solemn ? 'hookConsequence' : 'hookHumor';
-    const fields = ['hookCuriosity', 'hookTension', 'hookDirect', 'hookEmotion', fifth,
-      'hookInsight'];
-    const schema = { type: 'object' as const, additionalProperties: false,
-      properties: Object.fromEntries(fields.map((field) => [field, { type: 'string' }])),
-      required: fields };
-    const platform = context.targetPlatform ?
-      `Packaging surface: ${context.targetPlatform}. ${PLATFORM_HOOK_GUIDANCE[context.targetPlatform]} ` +
-      'This is a preference for phrasing only - never change what the clip actually says. ' : '';
-    const result = await this.router.generate<Record<string, string>>({
-      role: 'editingPlan', request: { schemaName: 'clip_hook_candidates_v2', schema,
-        systemPrompt: 'You write the on-screen headline for one short-form clip. Return one ' +
-          'headline per field, each using a genuinely different mechanism, each readable on its ' +
-          'own and each true to this clip. ' +
-          'hookCuriosity opens a curiosity gap or withholds the reveal. ' +
-          'hookTension names the stakes, conflict or hidden consequence. ' +
-          'hookDirect is a bold, specific, grounded claim. ' +
-          'hookEmotion carries the emotional turn, surprise or transformation. ' +
-          (solemn ?
-            'hookConsequence states what this actually led to or cost: the subject is serious, ' +
-            'so never attempt humour, irony or wordplay. ' :
-            'hookHumor is witty, ironic or deadpan if the clip genuinely supports it; if it does ' +
-            'not, make it a surprising or counterintuitive angle instead of forcing a joke. ') +
-          'hookInsight states the counterintuitive or non-obvious point a viewer would not expect. ' +
-          'Every headline must be a complete, grammatically whole thought of at least ' +
-          `${HOOK_LENGTH.min} words - never a fragment, a noun pile, a transcript scrap or a ` +
-          'tiny three-or-four-word line. ' +
-          `Prefer ${HOOK_LENGTH.preferredMin}-${HOOK_LENGTH.preferredMax} words, ` +
-          `and up to ${HOOK_LENGTH.max} words when the meaning, curiosity or specificity needs ` +
-          'them - never trade a strong headline for a shorter weak one, and ' +
-          `never exceed ${HOOK_LENGTH.maxChars} characters. ` +
-          platform +
-          'Every headline must be supported by what is actually said: never invent claims, numbers, ' +
-          'names, motives or consequences, never fabricate clickbait such as This Changes Everything, ' +
-          'never manufacture urgency, never quote words the clip does not contain, never ' +
-          'repeat the clip title verbatim, never quote a raw transcript fragment or an incomplete ' +
-          'sentence, and never give away the whole payoff. For political, news or sensitive ' +
-          'material stay strictly to what the speaker actually says: curiosity is allowed, ' +
-          'misrepresentation is not. Return only the headlines.',
-        userPrompt: JSON.stringify({ title: context.title, synopsis: context.synopsis,
-          transcript: context.transcript, clipUnderstanding: context.clipUnderstanding,
-          packaging: context.packaging ? {
-            category: context.packaging.primaryCategory,
-            archetype: context.packaging.archetype,
-            emotionalTone: context.packaging.emotionalTone,
-            humor: context.packaging.humor,
-            safeEntities: context.packaging.entities.filter((entity) => entity.safeToUse)
-              .map((entity) => ({ name: entity.name, role: entity.role })) } : undefined,
-          opening: context.words.slice(0, 25), payoff: context.words.slice(-25),
-          ...(context.usedHookTexts?.length ? {
-            alreadyUsedOnOtherClipsFromThisVideo: context.usedHookTexts.slice(-6),
-            avoidRepeatingTheseMechanisms: context.usedHookMechanisms?.slice(-6) ?? [] } : {}) }),
-        maxOutputTokens: 500, options: { temperature: .55 } } });
-    if (result.metadata.provider !== 'openai' || result.metadata.model !== 'gpt-5.6-luna') return [];
-    return fields.map((field) => result.data[field])
-      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+    const p = await creativeService(this.router).create({ external: context.aiMode === AiProcessingMode.ONLINE,
+      hooksOnly: true, exclude: context.usedHookTexts, evidence: { transcript: context.transcript,
+        sourceTitle: context.title, analysis: context.clipUnderstanding as Record<string, unknown> | undefined } });
+    return p.hooks.map(h => h.text);
   }
 
   async create(context: EditContext): Promise<EditPlanResult> {
+    if (!context.packaging?.sharedPackage) context = {...context,packaging:await new ContentPackagingService(this.router).create({
+      aiMode:context.aiMode,transcript:context.transcript,title:context.title,synopsis:context.synopsis,wholeVideoSummary:context.wholeVideoSummary,
+      startTime:context.start,endTime:context.end,analysis:context.clipUnderstanding as Record<string,unknown> | undefined})};
     const fallback = (reason: string, provider = '', model = ''): EditPlanResult => {
       const base = applyDeterministicEditorial(
         fallbackEditPlan(context.start, context.end, context.aspectRatio),

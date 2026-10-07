@@ -39,6 +39,15 @@ import { isRetryableErrorCode, MEDIA_ERROR_MESSAGES, MediaErrorCode } from '../p
 
 const execFileAsync = promisify(execFile);
 
+/** Persist routing diagnostics server-side while keeping product responses free of model names. */
+export function publicVideoMetadata<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(publicVideoMetadata) as T;
+  if (!value || typeof value !== 'object' || value instanceof Date) return value;
+  const hidden = new Set(['internal', '_intelligenceInternal', 'provider', 'model', 'providerMetadata', 'routes']);
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !hidden.has(key))
+    .map(([key, item]) => [key, publicVideoMetadata(item)])) as T;
+}
+
 /** Best-effort pre-storage duration read; the worker re-probes and remains authoritative. */
 async function probeUploadDuration(buffer: Buffer, originalName: string) {
   if (!buffer?.length) return null;
@@ -73,7 +82,7 @@ const serializeCandidate = <T extends {
   contentPotential: number;
   [key: string]: unknown;
 }>(candidate: T) => ({
-  ...candidate,
+  ...publicVideoMetadata(candidate),
   recommendationTier: recommendationTierForScore(candidate.contentPotential)
 });
 
@@ -86,7 +95,7 @@ const serializeGeneratedClip = (clip: {
 }) => {
   const { editProject, ...data } = clip;
   return ({
-  ...data,
+  ...publicVideoMetadata(data),
   ...generatedClipEditLink(editProject),
   candidate: clip.candidate ? serializeCandidate(clip.candidate) : clip.candidate,
   sizeBytes: Number(clip.sizeBytes),
@@ -104,7 +113,7 @@ const serializeVideo = (video: {
 }) => {
   const { transcript, _count, ...data } = video;
   return {
-    ...data,
+    ...publicVideoMetadata(data),
     hasTranscript: !!transcript,
     hasChunks: (_count?.chunks ?? 0) > 0,
     sizeBytes: Number(video.sizeBytes),
@@ -488,7 +497,7 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
       select: {
         id: true, createdAt: true, duration: true, processingType: true, thumbnailObjectKey: true,
         templateId: true, requestedTemplate: true,
-        candidate: { select: { bestHook: true, hookCandidate: true } },
+        candidate: { select: { bestHook: true, hookCandidate: true, synopsis:true, caption:true, hashtags:true } },
         editProject: { select: { id: true } },
         video: { select: { originalName: true,
           processingJobs: { orderBy: { createdAt: 'desc' }, take: 1, select: { aiMode: true } } } }
@@ -496,10 +505,16 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
     });
     if (!clips.length) return [];
     const extracted = await this.prisma.$queryRaw<Array<{ id: string; hookRendered: boolean | null;
-      hookFinalText: string | null; generationStyle: Prisma.JsonValue | null; effectiveAiMode: string | null }>>`
+      hookFinalText: string | null; selectedHook:string|null; synopsis:string|null; captions:Prisma.JsonValue|null;
+      hashtags:Prisma.JsonValue|null; understandingVersion:string|null; generationStyle: Prisma.JsonValue | null; effectiveAiMode: string | null }>>`
       SELECT g."id",
         (g."editTelemetry"->>'hookRendered') = 'true' AS "hookRendered",
         g."editTelemetry"->>'hookFinalText' AS "hookFinalText",
+        g."contentPackaging"->'sharedPackage'->>'selectedHook' AS "selectedHook",
+        g."contentPackaging"->>'synopsis' AS "synopsis",
+        g."contentPackaging"->'sharedPackage'->'captions' AS "captions",
+        g."contentPackaging"->'sharedPackage'->'hashtagSets' AS "hashtags",
+        g."contentPackaging"->'sharedPackage'->'understanding'->>'version' AS "understandingVersion",
         e."settings"->'generationStyle' AS "generationStyle",
         (SELECT j."telemetry"->>'effectiveAiMode' FROM "ProcessingJob" j WHERE j."videoId" = g."videoId"
           ORDER BY j."createdAt" DESC LIMIT 1) AS "effectiveAiMode"
@@ -513,7 +528,9 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
       // Same rules as toClipCard: the rendered headline, else the candidate's hook.
       const renderedHook = clip.processingType === 'EDITED_CLIPS' && json?.hookRendered === true &&
         typeof json.hookFinalText === 'string' ? json.hookFinalText.trim() : '';
-      const hook = renderedHook || clip.candidate?.bestHook || clip.candidate?.hookCandidate || '';
+      const hook = renderedHook || json?.selectedHook || clip.candidate?.bestHook || clip.candidate?.hookCandidate || '';
+      const firstCaption = Array.isArray(json?.captions) ? json.captions[0] as {text?:string}|undefined : undefined;
+      const focused = Array.isArray(json?.hashtags) ? json.hashtags.find(s=>s && typeof s==='object' && !Array.isArray(s) && s.label==='Focused') as {hashtags?:string[]}|undefined : undefined;
       const styleState = resolveGenerationStyleReadiness({ editProject, templateId: clip.templateId,
         requestedTemplate: clip.requestedTemplate });
       const link = generatedClipEditLink(editProject);
@@ -525,6 +542,9 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
       return {
         id: clip.id,
         title: hook || `Clip from ${clip.video.originalName}`,
+        hook, synopsis:json?.synopsis || clip.candidate?.synopsis || '',
+        caption:firstCaption?.text || clip.candidate?.caption || '',
+        hashtags:focused?.hashtags || clip.candidate?.hashtags || [], contentUnderstandingVersion:json?.understandingVersion || null,
         createdAt: clip.createdAt,
         duration: Math.round(clip.duration * 10) / 10,
         thumbnailUrl: clip.thumbnailObjectKey ? `/generated-clips/${clip.id}/poster` : null,

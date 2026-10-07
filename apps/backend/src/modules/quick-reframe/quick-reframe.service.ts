@@ -3,7 +3,7 @@ import { BadRequestException, ConflictException, Injectable, Logger, NotFoundExc
 import { Prisma } from '@prisma/client';
 import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { mkdtemp, rm, stat, writeFile } from 'fs/promises';
@@ -24,6 +24,8 @@ import { analyzeRegions, defaultPlan, isIdentityPreparation, preparationOf, reco
   type ReframeAnalysis, type ReframeBox, type ReframePlan } from './quick-reframe-plan';
 import { preparationFingerprint, quickCleanRender, quickComposeRender, quickOutputCanvas, quickStyleOneCommands,
   QUICK_REFRAME_PIPELINE } from './quick-reframe-render';
+import { publicCreativePackage } from '../content-intelligence/creative-package.service';
+import { INTELLIGENCE_VERSION } from '../content-intelligence/content-understanding.service';
 import { suggestHooks, HOOK_CATEGORIES } from './quick-reframe-hooks';
 import { downloadSocial, MAX_REFRAME_BYTES, socialSource } from './social-source';
 import { CAPTION_STYLES, emptyPostCopy, generatePostCopy, normalizeHashtags, REWRITE_DIRECTIONS, type PostCopyContext } from './quick-reframe-post-copy';
@@ -102,10 +104,14 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       styleOneApplied:record(settings.resolvedVisualLayout).editingProfile==='AUTOMATIC_2',
       previewUrl:url(preview),exportUrl:exports[0]?.url??null,previewRevision:current(preview),exportRevision:exports[0]?.revision??null,exports,
       status:q.status,progress:q.progress,message:q.message,error:q.error,analysis:this.analysisOf(q),plan:q.plan as ReframeSession['plan'],hooks,
-      sourceContext:q.sourceContext as ReframeSocialSource|null,postCopy:{...emptyPostCopy(),...record(q.postCopy)} as ReframePostCopy,
+      sourceContext:q.sourceContext as ReframeSocialSource|null,postCopy:this.publicPostCopy(q),
       outputs:source?.width&&source.height&&this.cropConfirmed(q)?{720:quickOutputCanvas(project.settings,source.width,source.height,720),1080:quickOutputCanvas(project.settings,source.width,source.height,1080)}:null,
       hasAudio:record(original?.metadata).hasAudio===true,hasTranscript:!!transcriptText(original?.transcript??source?.transcript),
       captionCount:project.elements.filter(e=>e.type==='SUBTITLE').length,createdAt:q.createdAt.toISOString()};
+  }
+  private publicPostCopy(q:Loaded):ReframePostCopy {
+    const { _intelligenceInternal: _internal, ...copy } = record(q.postCopy);
+    return { ...emptyPostCopy(), ...copy } as ReframePostCopy;
   }
   /** Analysis is measured on the uploaded frame; the caption situation is reported for the confirmed crop. */
   private analysisOf(q:Loaded):ReframeSession['analysis']{
@@ -370,7 +376,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
   /** Restores the last confirmed crop into the draft (crop step "Cancel"). */
   async revert(id:string){const q=await this.load(id);if(!q.confirmed||!q.plan)return this.get(id);const c=record(q.confirmed);const p=q.plan as unknown as ReframePlan;
     return this.save(id,{plan:{...p,aspect:c.aspect,crop:c.crop,framing:c.framing,cleanup:c.cleanup,color:{...p.color,denoise:c.denoise===true}}});}
-  /** Six-category hook suggestions. OpenAI only runs when this request explicitly authorizes it. */
+  /** Shared ranked hook suggestions; external generation requires explicit consent. */
   async hooks(id:string,body:Record<string,unknown>){
     const q=await this.load(id);const original=this.originalOf(q);if(!original)throw new BadRequestException('Upload a video first.');
     if(!this.cropConfirmed(q))throw new BadRequestException('Confirm the crop first.');
@@ -379,9 +385,18 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const external=body.externalAiAuthorized===true;
     if(this.needsAnalysis(q)&&record(original.metadata).hasAudio===true)throw new BadRequestException(activeStatuses.includes(q.status)?'XeeClip is still checking the speech in your video. Try again in a moment.':'Check the video first, then ask for hook suggestions.');
     const exclude=Array.isArray(body.exclude)?body.exclude.filter((t):t is string=>typeof t==='string').map(t=>t.slice(0,200)).slice(0,30):[];
-    const {hooks,warnings}=await suggestHooks(this.router,transcriptText(original.transcript??this.sourceOf(q)?.transcript),external,exclude);
+    const context=this.postCopyContext(q,body);
+    const category=typeof body.category==='string'&&HOOK_CATEGORIES.includes(body.category as never)?body.category as ReframeHook['category']:undefined;
+    const {hooks,warnings,package:p}=await suggestHooks(this.router,context.transcript,external,exclude,
+      {sourceId:context.sourceId,transcriptVersion:context.transcriptVersion,visualVersion:context.visualVersion,
+       visibleText:[context.visibleText,context.subtitleText].filter(Boolean).join('\n'),sceneType:context.sceneType,visualSummary:context.visualSummary,
+       speakerTurns:context.speakerTurns,template:context.template,
+       sourceTitle:context.sourceContext?.sourcePostTitle,sourceCaption:context.sourceContext?.sourcePostText,sourceHashtags:context.sourceContext?.sourceHashtags},
+      typeof body.direction==='string'?body.direction.slice(0,500):'',category);
     // Regenerate with nothing new keeps the current list rather than emptying it.
-    if(hooks.length||!exclude.length)await this.prisma.quickReframe.update({where:{id},data:{hooks:json(hooks),externalAiAuthorized:external}});
+    if(hooks.length||!exclude.length){const saved=await this.prisma.quickReframe.updateMany({where:{id,postCopy:{equals:q.postCopy as Prisma.InputJsonValue},editProject:{revision:q.editProject.revision},status:q.status,operationId:q.operationId},data:{hooks:json(hooks),externalAiAuthorized:external,
+      postCopy:json({...emptyPostCopy(),...record(q.postCopy),version:(Number(record(q.postCopy).version)||0)+1,
+        creativePackage:{...record(record(q.postCopy).creativePackage),version:1,understanding:p.understanding,hooks:p.hooks,selectedHook:p.selectedHook,status:p.status},contentUnderstandingVersion:INTELLIGENCE_VERSION,_intelligenceInternal:p.internal})}});if(!saved.count)throw new ConflictException('The video or post copy changed. Refresh and try again.');}
     return {session:await this.get(id),warnings};
   }
   /** Use only content retained by the confirmed crop and canonical timeline. Original post text is supporting context. */
@@ -392,7 +407,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const kept=(start:number,end:number)=>ranges.some(r=>start<r.end&&end>r.start);
     const transcript=record(source.transcript??original.transcript);
     const segments=Array.isArray(transcript.segments)?transcript.segments:[];
-    const speech=segments.length?segments.filter(s=>kept(Number(record(s).start)||0,Number(record(s).end)||0)).map(s=>String(record(s).text??'')).join(' ')
+    const speech=segments.length?segments.flatMap(s=>{const segment=record(s);const words=Array.isArray(segment.words)?segment.words:[];return words.length?words.filter(w=>ranges.some(r=>Number(record(w).start)>=r.start-.001&&Number(record(w).end)<=r.end+.001)).map(w=>String(record(w).text??'')):ranges.some(r=>Number(segment.start)>=r.start-.001&&Number(segment.end)<=r.end+.001)?[String(segment.text??'')]:[];}).join(' ')
       :ranges.some(r=>r.start<=.01&&r.end>=original.duration!-.01)?transcriptText(transcript):'';
     const preparation=record(q.confirmed) as ReframePlan;
     const regions=(q.analysis as unknown as ReframeAnalysis|null)?.regions??[];
@@ -402,7 +417,11 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const subtitles=q.editProject.elements.filter(e=>e.type==='SUBTITLE'&&record(e.properties).hidden!==true).map(e=>String(record(e.properties).content??record(e.properties).text??''));
     const hook=q.editProject.elements.find(e=>e.type==='TEXT'&&record(e.properties).presetRole==='HOOK'&&record(e.properties).hidden!==true);
     const copy={...emptyPostCopy(),...record(q.postCopy)};
-    return {transcript:speech,visibleText:unique(retained.filter(r=>r.kind!=='CAPTION').map(r=>r.text)),
+    return {sourceId:source.id,transcriptVersion:createHash('sha256').update(JSON.stringify({transcript:source.transcript??original.transcript,ranges})).digest('hex'),
+      speakerTurns:segments.map(record).filter(s=>typeof s.speaker==='string'&&ranges.some(r=>Number(s.start)>=r.start-.001&&Number(s.end)<=r.end+.001)).map(s=>({speaker:String(s.speaker),text:String(s.text??'')})),
+      template:q.editPath ?? 'MANUAL',
+      visualVersion:createHash('sha256').update(JSON.stringify({confirmed:q.confirmed,regions:retained})).digest('hex'),sceneType:regions.length?'video with on-screen text':'',
+      visualSummary:retained.map(r=>r.kind+': '+r.text).join('; ').slice(0,1200),transcript:speech,visibleText:unique(retained.filter(r=>r.kind!=='CAPTION').map(r=>r.text)),
       subtitleText:unique([...retained.filter(r=>r.kind==='CAPTION').map(r=>r.text),...subtitles]),sourceContext:q.sourceContext as ReframeSocialSource|null,
       selectedHook:hook?String(record(hook.properties).content??''):'',editingDirection:typeof body.editingDirection==='string'?body.editingDirection.slice(0,500):copy.editingDirection??'',
       purpose:typeof body.purpose==='string'?body.purpose.slice(0,500):copy.purpose??'',selectedCaption:copy.selectedCaption};
@@ -428,10 +447,10 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const prior={...emptyPostCopy(),...record(q.postCopy)} as ReframePostCopy;
     const hashtagOnly=body.hashtagsOnly===true;
     const copy:ReframePostCopy={...prior,version:prior.version+1,generatedCaptions:hashtagOnly?prior.generatedCaptions:result.generatedCaptions,generatedHashtagSets:result.generatedHashtagSets,
-      understanding:result.understanding,editingDirection:context.editingDirection,purpose:context.purpose,contextRevision:q.editProject.revision,
+      understanding:result.understanding,synopsis:result.synopsis,creativePackage:result.creativePackage,contentUnderstandingVersion:INTELLIGENCE_VERSION,editingDirection:context.editingDirection,purpose:context.purpose,contextRevision:q.editProject.revision,
       selectedCaption:prior.selectedCaption||(!hashtagOnly?result.generatedCaptions.find(c=>c.recommended)?.text:'')||'',
       selectedHashtags:prior.selectedHashtags.length?prior.selectedHashtags:result.generatedHashtagSets[0]?.hashtags??[]};
-    return {session:await this.writePostCopy(q,copy),warnings:result.warnings};
+    return {session:await this.writePostCopy(q,{...copy,_intelligenceInternal:result.internal} as ReframePostCopy),warnings:result.warnings};
   }
   async saveCopy(id:string,body:Record<string,unknown>){
     const q=await this.load(id);this.assertPostCopy(q,body);
@@ -462,8 +481,14 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     let hooks=view.hooks;
     // StyleOne always opens with a hook written from the video itself; without consent it is written locally.
     if(typeof body.hookText!=='string'&&!hooks.length&&view.hasTranscript){
-      const original=this.originalOf(q);hooks=(await suggestHooks(this.router,transcriptText(original?.transcript??this.sourceOf(q)?.transcript),false)).hooks;
-      await this.prisma.quickReframe.update({where:{id},data:{hooks:json(hooks)}});
+      const context=this.postCopyContext(q,{});const suggestions=await suggestHooks(this.router,context.transcript,false,[],
+        {sourceId:context.sourceId,transcriptVersion:context.transcriptVersion,visualVersion:context.visualVersion,
+         visibleText:context.visibleText,visualSummary:context.visualSummary,speakerTurns:context.speakerTurns,template:'STYLEONE',sourceTitle:context.sourceContext?.sourcePostTitle,sourceCaption:context.sourceContext?.sourcePostText});
+      hooks=suggestions.hooks;
+      await this.prisma.quickReframe.update({where:{id},data:{hooks:json(hooks),postCopy:json({...emptyPostCopy(),...record(q.postCopy),
+        version:(Number(record(q.postCopy).version)||0)+1,contentUnderstandingVersion:INTELLIGENCE_VERSION,
+        creativePackage:{...record(record(q.postCopy).creativePackage),understanding:suggestions.package.understanding,hooks},
+        _intelligenceInternal:suggestions.package.internal})}});
     }
     const hookText=typeof body.hookText==='string'?body.hookText.slice(0,160):hooks.find(h=>h.recommended)?.text??'';
     let project=await this.editor.get(q.editProjectId) as unknown as {revision:number;settings:unknown;assets:Asset[];elements:Loaded['editProject']['elements']};

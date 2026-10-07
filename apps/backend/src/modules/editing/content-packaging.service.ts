@@ -1,3 +1,4 @@
+import { creativeService, type CreativePackage } from '../content-intelligence/creative-package.service';
 import { Injectable } from '@nestjs/common';
 import { AiProcessingMode } from '../processing/ai-processing-mode';
 import { LlmRouterService } from '../processing/llm-router.service';
@@ -62,6 +63,7 @@ export type ContentPackaging = { version: 1; primaryCategory: ContentCategory;
   wholeVideoCategory: ContentCategory; archetype: ClipArchetype; emotionalTone: EmotionalTone;
   humor: { detected: boolean; type: HumorType | null; confidence: number };
   entities: ResolvedEntity[]; speakers: SpeakerIdentity[];
+  sharedPackage?: CreativePackage; synopsis?: string;
   hookCandidates: PackagingHookCandidate[]; selectedHook: PackagingHookCandidate;
   captions: PlatformCopy; hashtags: PlatformHashtags; subtitleTemplate: SubtitleTemplate;
   visualPackagingProfile: { hookRegion: 'EXISTING_EDITORIAL_HEADER';
@@ -69,7 +71,7 @@ export type ContentPackaging = { version: 1; primaryCategory: ContentCategory;
   qa: PackagingQa; packagingScore: { value: number; potential: 'HIGH' | 'MEDIUM' | 'LOW';
     components: Record<string, number> }; generationSource: 'LUNA' | 'OLLAMA' | 'DETERMINISTIC' };
 
-export type PackagingInput = { aiMode: AiProcessingMode; transcript: string; title: string;
+export type PackagingInput = { sharedPackage?: CreativePackage; sourceId?: string; startTime?: number; endTime?: number; analysis?: Record<string, unknown>; aiMode: AiProcessingMode; transcript: string; title: string;
   synopsis: string; wholeVideoSummary: string; originalName?: string; sourceDescription?: string;
   channelName?: string; ocrText?: string; speakerTrackIds?: string[];
   existingHooks?: string[]; existingCaption?: string; existingHashtags?: string[];
@@ -166,8 +168,7 @@ export class EntityResolutionService {
       const roleText = `${entity?.role ?? ''} ${input.title}`.toLowerCase();
       const probableRole: SpeakerIdentity['probableRole'] = /host|interviewer/u.test(roleText) ? 'HOST' :
         /guest|interviewee/u.test(roleText) ? 'GUEST' : /expert|doctor|professor|analyst/u.test(roleText) ?
-          'EXPERT' : /creator/u.test(roleText) ? 'CREATOR' : index === 0 && tracks.length > 1 ?
-            'HOST' : tracks.length > 1 ? 'GUEST' : 'UNKNOWN';
+          'EXPERT' : /creator/u.test(roleText) ? 'CREATOR' : 'UNKNOWN';
       return { speakerTrackId, ...(entity ? { resolvedEntityId: entity.id } : {}), probableRole,
         confidence: entity ? entity.confidence : probableRole === 'UNKNOWN' ? .2 : .45 };
     });
@@ -388,36 +389,6 @@ export class ContentPackagingService {
     private readonly categories: ContentCategoryService = new ContentCategoryService(),
     private readonly firstFrame: FirstFramePackagingValidator = new FirstFramePackagingValidator()) {}
 
-  private async modelHooks(input: PackagingInput, entities: ResolvedEntity[], category: ContentCategory,
-    archetype: ClipArchetype, tone: EmotionalTone, humor: ContentPackaging['humor']) {
-    if (input.aiMode === AiProcessingMode.FALLBACK_ONLY) return { hooks: [] as string[], source: 'DETERMINISTIC' as const };
-    const fields = ['bold', 'curiosity', 'humorous', 'contradiction', 'entityLed', 'consequence', 'question'];
-    const schema = { type: 'object' as const, additionalProperties: false,
-      properties: Object.fromEntries(fields.map((field) => [field, { type: 'string' }])), required: fields };
-    try {
-      const result = await this.router.generate<Record<string, string>>({ role: 'editingPlan', request: {
-        schemaName: 'content_packaging_hooks_v1', schema,
-        systemPrompt: 'Propose seven distinct social-native headline variants. Prefer 5-10 words ' +
-          '(up to 20 only when factual meaning requires it), grounded only in the supplied transcript/evidence, and must not ' +
-          'invent names, quotes, numbers, outcomes, accusations, controversy or emotion. Use a humorous ' +
-          'line only when humor.detected is true. Prefer specific stakes, consequence, tension and curiosity ' +
-          'over academic questions or policy-memo phrasing. Avoid weak modal language unless the source ' +
-          'requires uncertainty. When safeEntities are present, make entityLed genuinely name the most ' +
-          'relevant verified entity. Avoid the speaker, the host, this clip, this segment, this video and ' +
-          'unresolved pronouns. Return empty humorous/entityLed fields when unsupported.',
-        userPrompt: JSON.stringify({ transcript: input.transcript, title: input.title,
-          synopsis: input.synopsis, category, archetype, tone, humor,
-          safeEntities: entities.filter((entity) => entity.safeToUse).map((entity) =>
-            ({ name: entity.name, role: entity.role, evidence: entity.evidence })) }),
-        maxOutputTokens: 600, options: { temperature: .55 } } });
-      const onlineContract = input.aiMode !== AiProcessingMode.ONLINE ||
-        (result.metadata.provider === 'openai' && result.metadata.model === 'gpt-5.6-luna');
-      if (!onlineContract) return { hooks: [] as string[], source: 'DETERMINISTIC' as const };
-      return { hooks: fields.map((field) => result.data[field]).filter((item) => item?.trim()),
-        source: input.aiMode === AiProcessingMode.ONLINE ? 'LUNA' as const : 'OLLAMA' as const };
-    } catch { return { hooks: [] as string[], source: 'DETERMINISTIC' as const }; }
-  }
-
   async create(input: PackagingInput): Promise<ContentPackaging> {
     const identity = this.entities.resolve(input);
     const category = this.categories.classify(`${input.title} ${input.synopsis} ${input.transcript}`,
@@ -426,38 +397,25 @@ export class ContentPackagingService {
     const verifiedEntities = identity.entities.filter((entity) => entity.safeToUse).map((entity) => entity.name);
     const hookContext: HookContext = { transcript: input.transcript, title: input.title,
       synopsis: input.synopsis, platform: input.targetPlatform ?? null, verifiedEntities };
-    const model = await this.modelHooks(input, identity.entities, category.primaryCategory,
-      narrative.archetype, narrative.emotionalTone, narrative.humor);
-    const deterministic = deterministicHookCandidates(hookContext);
-    const entityLed = groundedEntityLedHooks(input, identity.entities,
-      [...model.hooks, ...deterministic]);
-    const pool = unique([...(input.existingHooks ?? []), ...model.hooks, ...entityLed,
-      ...deterministic, input.title].filter(Boolean), normal);
-    // A sparse source can legitimately produce fewer than five accepted rewrites. Preserve the
-    // rejected raw alternatives for diagnostics instead of inventing five unsupported claims.
-    const diagnostic = [...pool];
-    const transcriptSlices = input.transcript.split(/(?<=[.!?])\s+/u).map((item) => item.trim())
-      .filter(Boolean);
-    for (const item of [...transcriptSlices, input.synopsis]) {
-      if (diagnostic.length >= 7) break;
-      if (!diagnostic.some((existing) => normal(existing) === normal(item))) diagnostic.push(item);
-    }
-    while (diagnostic.length < 5) diagnostic.push(`${input.title} ${diagnostic.length + 1}`.trim());
-    const hookCandidates = unique(diagnostic.map((text) => packagingHook(text, hookContext,
-      category.primaryCategory, narrative.archetype, narrative.emotionalTone, narrative.humor,
-      identity.entities)), (item) => normal(item.text));
-    const selectedHook = hookCandidates.filter((item) => !item.rejected)
-      .sort((a, b) => b.score - a.score)[0] ?? hookCandidates[0];
-    const captions: PlatformCopy = {
-      youtubeShorts: captionFrom(input.transcript, selectedHook.text, 'YOUTUBE_SHORTS'),
-      instagramReels: captionFrom(input.transcript, selectedHook.text, 'INSTAGRAM_REELS'),
-      tiktok: captionFrom(input.transcript, selectedHook.text, 'TIKTOK') };
-    const poolTags = hashtagPool(input, identity.entities, category.primaryCategory);
-    const relevance = `${input.title} ${input.transcript} ${verifiedEntities.join(' ')}`;
+    const shared = input.sharedPackage ?? await creativeService(this.router).create({ external: input.aiMode === AiProcessingMode.ONLINE,
+      evidence: { sourceId: input.sourceId, startTime: input.startTime, endTime: input.endTime,
+        transcript: input.transcript, visibleText: input.ocrText, sourceTitle: input.originalName || input.title,
+        sourceCaption: input.sourceDescription, sourceHashtags: input.existingHashtags,
+        visualSummary: input.wholeVideoSummary, analysis: input.analysis,
+        speakerTurns: (input.speakerTrackIds ?? []).map(speaker => ({ speaker, text: '' })) } });
+    const hookCandidates = shared.hooks.map(h => ({ ...packagingHook(h.text, hookContext,
+      category.primaryCategory, narrative.archetype, narrative.emotionalTone, narrative.humor, identity.entities),
+      rejected: '', score: h.score / 100 }));
+    const selectedHook = hookCandidates.find(h => h.text === shared.selectedHook) ?? hookCandidates[0] ??
+      { ...packagingHook('', hookContext, category.primaryCategory, narrative.archetype, narrative.emotionalTone, narrative.humor, identity.entities), rejected: 'NO_ACCEPTED_HOOK' };
+    const byStyle = (style: string) => shared.captions.find(c => c.style === style)?.text ?? shared.captions[0]?.text ?? '';
+    const captions: PlatformCopy = { youtubeShorts: byStyle('Professional'), instagramReels: byStyle('Engaging'), tiktok: byStyle('Concise') };
+    const relevance = input.transcript + ' ' + (input.ocrText ?? '');
+    const tags = shared.hashtagSets.find(s => s.label === 'Focused')?.hashtags ?? [];
     const hashtags: PlatformHashtags = {
-      youtubeShorts: adaptHashtagsForPlatform('YOUTUBE_SHORTS', [], poolTags, relevance),
-      instagramReels: adaptHashtagsForPlatform('INSTAGRAM_REELS', [], poolTags, relevance),
-      tiktok: adaptHashtagsForPlatform('TIKTOK', [], poolTags, relevance) };
+      youtubeShorts: adaptHashtagsForPlatform('YOUTUBE_SHORTS', tags, [], relevance),
+      instagramReels: adaptHashtagsForPlatform('INSTAGRAM_REELS', tags, [], relevance),
+      tiktok: adaptHashtagsForPlatform('TIKTOK', tags, [], relevance) };
     const selectedCaption = input.targetPlatform === 'INSTAGRAM_REELS' ? captions.instagramReels :
       input.targetPlatform === 'TIKTOK' ? captions.tiktok : captions.youtubeShorts;
     const selectedTags = input.targetPlatform === 'INSTAGRAM_REELS' ? hashtags.instagramReels :
@@ -493,7 +451,7 @@ export class ContentPackagingService {
       subtitleVisualQuality: .5 };
     const value = round(Object.values(components).reduce((sum, item) => sum + item, 0) /
       Object.keys(components).length);
-    return { version: 1, primaryCategory: category.primaryCategory,
+    return { version: 1, sharedPackage: shared, synopsis: shared.synopsis, primaryCategory: category.primaryCategory,
       secondaryCategory: category.secondaryCategory, categoryConfidence: category.confidence,
       wholeVideoCategory: category.wholeVideoCategory, archetype: narrative.archetype,
       emotionalTone: narrative.emotionalTone, humor: narrative.humor,
@@ -503,7 +461,7 @@ export class ContentPackagingService {
         subtitleRegion: 'NORMAL_OR_SAFE_HIGH',
         firstFramePriority: ['HOOK_VISIBLE', 'SUBJECT_VISIBLE', 'NO_COLLISION', 'ADEQUATE_CONTRAST'] },
       qa, packagingScore: { value, potential: value >= .75 ? 'HIGH' : value >= .5 ? 'MEDIUM' : 'LOW',
-        components }, generationSource: model.source };
+        components }, generationSource: shared.internal.routes.length ? 'LUNA' : 'DETERMINISTIC' };
   }
 
   finalize(packaging: ContentPackaging, hookText: string, rendered: {

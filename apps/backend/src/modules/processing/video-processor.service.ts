@@ -1,3 +1,4 @@
+import { transcriptBoundaryWords } from '../content-intelligence/clip-boundary.service';
 import { isTransientAiServiceFailure, postAiServiceJson, waitForAiServiceHealthy, type AiServiceResponse } from './ai-service-http';
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Job, Worker } from 'bullmq';
@@ -851,13 +852,9 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       performance.shortlistCount = shortlistBeforeBoundaries.length;
 
       const rawTranscriptSegments = await this.prisma.transcriptSegment.findMany({
-        where: { transcript: { videoId } }, select: { start: true, end: true, words: true }
+        where: { transcript: { videoId } }, select: { start: true, end: true, text: true, words: true, speaker: true }
       });
-      const transcriptWords: TranscriptWord[] = rawTranscriptSegments.flatMap(segment =>
-        Array.isArray(segment.words) ? (segment.words as Array<{
-          start?: number; end?: number; text?: string }>).filter(word => word &&
-            Number.isFinite(word.start) && Number.isFinite(word.end) &&
-            typeof word.text === 'string') as TranscriptWord[] : []);
+      const transcriptWords = transcriptBoundaryWords(rawTranscriptSegments);
       const boundaryStartedAt = Date.now();
       const preliminaryShortlist = shortlistBeforeBoundaries.map((candidate) => {
         const optimized = optimizeClipBoundaries(candidate, transcriptWords);
@@ -867,7 +864,10 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
           transcriptText: optimized.transcriptText,
           rangeKey: `${startTime.toFixed(3)}:${endTime.toFixed(3)}`,
           openingStrength: optimized.openingStrength, endingStrength: optimized.endingStrength,
-          leadingTrimmedMs: optimized.leadingTrimmedMs, trailingWasteMs: optimized.trailingWasteMs };
+          leadingTrimmedMs: optimized.leadingTrimmedMs, trailingWasteMs: optimized.trailingWasteMs,
+          reject: candidate.reject || (optimized.evidenceAvailable && !optimized.valid),
+          rejectionReason: optimized.evidenceAvailable && !optimized.valid ? optimized.reasons.join(',') : candidate.rejectionReason,
+          evidence: { ...candidate.evidence, boundaryQa: optimized.qa } };
       });
       performance.boundaryOptimizationMs += Date.now() - boundaryStartedAt;
       const visualEnabled = this.visualAnalysisEnabled ||
@@ -1104,6 +1104,8 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
             this.logger.log(`Evaluating clip ${completed}/${total}`);
           });
         heuristicCandidates = heuristicCandidates.map((candidate, index) => ({ ...candidate,
+          evidence:{...candidate.evidence,speakerTurns:rawTranscriptSegments.filter(s=>s.speaker && s.start>=candidate.startTime-.001 && s.end<=candidate.endTime+.001)
+            .map(s=>({speaker:s.speaker!,text:s.text}))},
           clipUnderstanding: understood.understandings[index] as unknown as Record<string, unknown>,
           confidence: understood.understandings[index].confidence,
           decisionSource: understood.decisionSources[index],

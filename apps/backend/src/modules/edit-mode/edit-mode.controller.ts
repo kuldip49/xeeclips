@@ -1,3 +1,7 @@
+import { creativeService, publicCreativePackage } from '../content-intelligence/creative-package.service';
+import { editProjectEvidence } from '../content-intelligence/edit-project-evidence';
+import { HOOK_CATEGORIES, type HookCategory } from '../content-intelligence/creative-quality.service';
+import { createPerformanceTelemetry, performanceContext } from '../processing/performance-telemetry';
 import {
   BadRequestException,
   Body,
@@ -78,6 +82,20 @@ export class EditModeController {
     private readonly savedStyles: SavedStylesService,
     private readonly llm: LlmRouterService) {}
 
+  @Post('projects/:id/hooks')
+  async sharedHooks(@Param('id') id:string,@Body() body:Record<string,unknown>) {
+    const project=await this.editMode.get(id);
+    if (body.revision!==project.revision) throw new BadRequestException('Your edits changed. Refresh before generating suggestions.');
+    const external=body.externalAiAuthorized===true;
+    const p=await performanceContext.run(createPerformanceTelemetry(external?'ONLINE':'FALLBACK_ONLY'),()=>creativeService(this.llm).create({
+      evidence:editProjectEvidence(project),external,hooksOnly:body.hooksOnly!==false,
+      exclude:Array.isArray(body.exclude)?body.exclude.filter((v):v is string=>typeof v==='string').slice(0,30):[],
+      direction:typeof body.direction==='string'?body.direction.slice(0,500):'',
+      category:HOOK_CATEGORIES.includes(body.category as HookCategory)?body.category as HookCategory:undefined}));
+    const publicPackage=publicCreativePackage(p);
+    await this.editMode.saveCreativeSuggestions(id,project.revision,publicPackage,body.hooksOnly!==false);
+    return {package:publicPackage,warnings:p.warnings};
+  }
   // --- Step 9/10: unified generation styles ---------------------------------
 
   /** Full templates + every component style library (with honest support flags). */

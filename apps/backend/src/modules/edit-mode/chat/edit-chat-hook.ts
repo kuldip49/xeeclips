@@ -1,3 +1,6 @@
+import { creativeService, deterministicCreative } from '../../content-intelligence/creative-package.service';
+import { localUnderstanding } from '../../content-intelligence/content-understanding.service';
+import { sharedQuality } from '../../content-intelligence/creative-quality.service';
 // Workstream G: creative hook rewriting, grounded.
 //
 // "Change the hook", "make it shorter", "more curiosity based", "try another".
@@ -70,6 +73,8 @@ function shorterVersions(current: string): string[] {
   add(base.replace(TRAILING, ''));
   add(base.replace(DROPPABLE, ''));
   add(base.replace(TRAILING, '').replace(DROPPABLE, ''));
+  // A trailing coordinated item can go: "What's behind rates and bank" -> "What's behind rates".
+  add(base.replace(/\s+(?:and|or|&)\s+[\p{L}\p{N}'’-]+$/iu, ''));
   // Whisper commonly renders a decimal as two tokens ("3 .4") and speakers
   // often finish a statistic with "in August on an annualized basis".  The
   // literal prefix is too short to clear the headline floor, even though a
@@ -172,17 +177,20 @@ export function rankHookCandidates(input: { mode: HookMode; current: string | nu
 /** Deterministic, source-grounded candidates for one mode. */
 export function deterministicHookSuggestions(input: { mode: HookMode; current: string | null;
   tried: string[]; opening: string; transcript: string }): HookSuggestion[] {
-  const pool = [
-    ...(input.mode === 'SHORTER' && input.current ? shorterVersions(input.current) : []),
-    ...deterministicHookCandidates({ transcript: input.opening || input.transcript,
-      title: '', synopsis: '' }),
-    // Past the opening, the rest of the transcript is still the speaker's own
-    // words - a fallback pool when the opening is too thin to headline.
-    ...(input.opening && input.opening !== input.transcript
-      ? deterministicHookCandidates({ transcript: input.transcript, title: '', synopsis: '' }) : [])
-  ].map((text) => ({ text, source: 'DETERMINISTIC' as const }));
-  return rankHookCandidates({ mode: input.mode, current: input.current, tried: input.tried,
-    transcript: input.transcript, candidates: pool });
+  const evidence = { transcript: input.transcript };
+  const u = localUnderstanding(evidence), draft = deterministicCreative(evidence, u);
+  const ranked = sharedQuality.rank(draft.hooks, evidence, u, 'LOCAL', [...input.tried, input.current ?? ''])
+    .map(h => ({ text: h.text, source: 'DETERMINISTIC' as const, mechanism: h.category, score: h.score / 10 }));
+  if (input.mode !== 'SHORTER' || !input.current) return ranked;
+  // "Shorter" tightens the SAME line by removing words; a different, longer local reframing is not shorter.
+  const shorter = shorterVersions(input.current);
+  const compressed = rankHookCandidates({ mode: 'SHORTER', current: input.current, tried: input.tried,
+    transcript: input.transcript, candidates: shorter.map(text => ({ text, source: 'DETERMINISTIC' as const })) });
+  // Shared hooks may be shorter than the legacy five-word floor; judge their compressions by the shared gate (3–12 words).
+  const sharedCompressed = compressed.length ? [] : sharedQuality.rank(shorter.map(text => ({ text,
+    category: /\?$/u.test(text) ? 'QUESTION' as const : 'BOLD' as const })), evidence, u, 'LOCAL', [...input.tried, input.current])
+    .map(h => ({ text: h.text, source: 'DETERMINISTIC' as const, mechanism: h.category, score: h.score / 10 }));
+  return [...compressed, ...sharedCompressed, ...ranked.filter(h => wordCount(h.text) < wordCount(input.current!))];
 }
 
 /**
@@ -198,45 +206,16 @@ export async function modelHookSuggestions(input: { llm: LlmRouterService; logge
   transcript: string }): Promise<{ suggestions: HookSuggestion[]; attempted: boolean;
     latencyMs: number; error?: string }> {
   const started = Date.now();
-  if ((process.env.EDIT_MODE_CHAT_LLM_ENABLED ?? 'true').toLowerCase() === 'false') {
-    return { suggestions: [], attempted: false, latencyMs: 0 };
-  }
+  if ((process.env.EDIT_MODE_CHAT_LLM_ENABLED ?? 'true').toLowerCase() === 'false') return { suggestions: [], attempted: false, latencyMs: 0 };
   try {
-    const telemetry = createPerformanceTelemetry(chatPlannerAiMode());
-    const result = await performanceContext.run(telemetry, async () => {
-      if (!input.llm.isAnyConfigured(CHAT_PLANNER_ROLE)) return null;
-      return input.llm.generate<{ candidates?: Array<{ text?: unknown }> }>({
-        role: CHAT_PLANNER_ROLE,
-        request: {
-          schemaName: 'edit_mode_chat_hook', schema: CHAT_HOOK_SCHEMA, role: CHAT_PLANNER_ROLE,
-          systemPrompt: [
-            'You write one short on-screen opening headline for a vertical video.',
-            'Use only facts that are stated in the transcript excerpt. Never invent names,',
-            'numbers, quotes or claims. No clickbait, no false urgency, no meta phrasing',
-            'about "this video". 5 to 12 words. Return up to five different candidates.'
-          ].join('\n'),
-          userPrompt: [
-            `Task: ${MODE_BRIEF[input.mode]}`,
-            input.current ? `Current headline: "${input.current}"` : 'There is no headline yet.',
-            input.tried.length ? `Already shown (do not repeat): ${input.tried
-              .map((line) => `"${line}"`).join('; ')}` : '',
-            '', 'Transcript opening:', input.opening.slice(0, 1500)
-          ].filter(Boolean).join('\n'),
-          options: { temperature: input.mode === 'ANOTHER' ? 0.8 : 0.5, maxOutputTokens: 500 }
-        }
-      });
-    });
-    if (!result) return { suggestions: [], attempted: false, latencyMs: Date.now() - started };
-    const candidates = (result.data?.candidates ?? []).map((item) => String(item?.text ?? ''))
-      .filter(Boolean).map((text) => ({ text, source: 'LLM' as const }));
-    input.logger.log(JSON.stringify({ event: 'edit_mode_chat_hook_model',
-      provider: result.metadata.provider, model: result.metadata.model,
-      candidates: candidates.length, ms: Date.now() - started }));
-    return { suggestions: rankHookCandidates({ mode: input.mode, current: input.current,
-      tried: input.tried, transcript: input.transcript, candidates }), attempted: true,
-    latencyMs: Date.now() - started };
-  } catch (error) {
-    return { suggestions: [], attempted: true, latencyMs: Date.now() - started,
-      error: error instanceof Error ? error.message : String(error) };
-  }
+    const mode = chatPlannerAiMode();
+    const p = await performanceContext.run(createPerformanceTelemetry(mode), () => creativeService(input.llm).create({
+      external: mode === 'ONLINE', hooksOnly: true, evidence: { transcript: input.transcript },
+      exclude: [...input.tried, input.current ?? ''], direction: MODE_BRIEF[input.mode] + (input.current ? ' Current: ' + input.current : '') }));
+    // "Shorter" means fewer words, as in the deterministic path; fewer characters alone is not shorter.
+    const words = (text: string) => text.trim().split(/\s+/u).length;
+    const suggestions = p.hooks.filter(h => input.mode !== 'SHORTER' || !input.current || words(h.text) < words(input.current))
+      .map(h => ({ text: h.text, source: h.source === 'OPENAI' ? 'LLM' as const : 'DETERMINISTIC' as const, mechanism: h.category, score: h.score / 10 }));
+    return { suggestions, attempted: p.internal.routes.length > 0, latencyMs: Date.now() - started };
+  } catch { return { suggestions: [], attempted: true, latencyMs: Date.now() - started, error: 'Creative suggestions unavailable' }; }
 }

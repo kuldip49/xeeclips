@@ -25,6 +25,7 @@ async function testOutputVariants(source, directory) {
   const removed = [];
   let downloads = 0;
   const prisma = {
+    video: {findUniqueOrThrow:async()=>({transcript:null})},
     generatedClip: {
       findUnique: async ({ where }) => where.objectKey
         ? [...rows.values()].find(row => row.objectKey === where.objectKey) ?? null

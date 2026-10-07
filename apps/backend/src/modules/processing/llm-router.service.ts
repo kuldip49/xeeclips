@@ -130,7 +130,7 @@ export class LlmRouterService {
     return this.routesFor(role).find((route) => this.provider.isConfigured(route));
   }
 
-  async generate<T>(input: { role: LlmTaskRole; request: StructuredGenerationRequest }):
+  async generate<T>(input: { role: LlmTaskRole; request: StructuredGenerationRequest; creativeTier?: 'PRIMARY' | 'ESCALATION' }):
     Promise<LlmRouteResult<T>> {
     const aiMode = currentAiProcessingMode();
     if (aiMode !== AiProcessingMode.ONLINE) {
@@ -139,10 +139,15 @@ export class LlmRouterService {
       throw new LlmProviderError('AI_MODE_FALLBACK_ONLY',
         'Generative model routing is disabled for FALLBACK_ONLY');
     }
-    const cacheKey = this.cacheKey(input.role, input.request, aiMode);
+    const creativeModel = CREATIVE_ROLES.has(input.role) && input.creativeTier
+      ? process.env[input.creativeTier === 'ESCALATION' ? 'CREATIVE_ESCALATION_MODEL' : 'CREATIVE_PRIMARY_MODEL']?.trim() : undefined;
+    const cacheKey = this.cacheKey(input.role, { ...input.request,
+      cacheKey: (input.request.cacheKey ?? '') + ':' + (input.creativeTier ?? '') + ':' + (creativeModel ?? '') }, aiMode);
     const cachedRouteKey = this.successfulRouteKeys.get(cacheKey);
     const cached = cachedRouteKey ? this.successful.get(cachedRouteKey) : undefined;
-    const routes = this.routesFor(input.role);
+    // Creative model overrides name OpenAI models; never send them to another provider's route.
+    const routes = this.routesFor(input.role).map(route => creativeModel && route.provider === 'openai'
+      ? { ...route, model: creativeModel } : route);
     const cachedRoute = cached && routes.find(route => route.provider === cached.metadata.provider &&
       route.model === cached.metadata.model && this.provider.isConfigured(route) &&
       this.stateFor(route, input.role) === 'HEALTHY');

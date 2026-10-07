@@ -1,3 +1,5 @@
+import { creativeService, type CreativePackage } from '../content-intelligence/creative-package.service';
+import { candidateContent, candidateEvidence, fallbackCandidateContent } from '../content-intelligence/candidate-creative';
 import { createHash } from 'crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import {
@@ -12,7 +14,7 @@ import {
   LlmProviderError,
   LLM_DEFAULT_OPENAI_MODEL
 } from './llm-provider.service';
-import { LlmRouterService } from './llm-router.service';
+import { LlmRouterService, type LlmRouteMetadata } from './llm-router.service';
 import { semanticSimilarity } from './semantic-similarity.service';
 import { countPerformance, currentAiProcessingMode } from './performance-telemetry';
 import type { TargetPlatform } from './clip-selection-policy';
@@ -20,7 +22,7 @@ import { adaptHashtagsForPlatform, packageConsistency, packagingFor, packagingTe
   platformPackagingPrompt } from './platform-packaging';
 
 export const CLIP_JUDGE_MODEL = LLM_DEFAULT_OPENAI_MODEL;
-export const CLIP_CONTENT_PROMPT_VERSION = 'clip-content-v8-platform-aware-packaging';
+export const CLIP_CONTENT_PROMPT_VERSION = 'clip-content-v9-shared-intelligence';
 const SCORE_FIELDS = ['hookScore', 'standaloneScore', 'payoffScore', 'flowScore',
   'informationScore', 'retentionScore', 'shareabilityScore'] as const;
 const HOOK_SCORE_FIELDS = ['relevance', 'clarity', 'curiosity', 'payoffAlignment',
@@ -912,109 +914,7 @@ function fallbackHookOptions(candidate: ScoredClipCandidate, analysis: ClipAnaly
 
 export function fallbackContent(candidate: ScoredClipCandidate,
   platform: TargetPlatform | null = null): GeneratedContent {
-  const analysis = analyzeClip(candidate);
-  const title = fallbackTitle(candidate);
-  let hookOptions = fallbackHookOptions(candidate, analysis);
-  const selected: HookOption[] = [];
-  for (const option of hookOptions) {
-    if (selected.some((current) => current.strategy === option.strategy ||
-      normalizedHookSimilarity(current.hook, option.hook) >= 0.88)) continue;
-    selected.push(option);
-    if (selected.length === 3) break;
-  }
-  if (selected.length < 3) {
-    for (const option of hookOptions) {
-      if (!selected.includes(option)) selected.push(option);
-      if (selected.length === 3) break;
-    }
-  }
-  while (selected.length < 3) {
-    const index = selected.length;
-    const hook = compactSentence([
-      analysis.payoffOrConclusion,
-      analysis.strongestFact,
-      analysis.mainClaim,
-      analysis.questionOrProblem
-    ][index] + ' ' + title, 26);
-    const components: HookScoreComponents = {
-      relevance: candidate.informationScore,
-      clarity: candidate.flowScore,
-      curiosity: candidate.hookScore,
-      payoffAlignment: candidate.payoffScore,
-      specificity: candidate.informationScore
-    };
-    selected.push({ hook, strategy: HOOK_STRATEGIES[index], components,
-      score: calculateGeneratedHookScore(components) });
-  }
-  hookOptions = [...selected, ...hookOptions.filter((option) => !selected.includes(option))];
-  const sourceSentences = normalize(candidate.transcriptText)
-    .match(/[^.!?]+[.!?]+|[^.!?]+$/gu)?.map(completeSentence).filter(Boolean) ?? [];
-  const firstPoint = sourceSentences[0] ?? compactSentence(title);
-  const middlePoint = sourceSentences[Math.floor((sourceSentences.length - 1) / 2)] ?? firstPoint;
-  const lastPoint = sourceSentences[sourceSentences.length - 1] ?? firstPoint;
-  const context = withoutTerminal(candidate.overallVideoTopic || candidate.chapterSummary || title);
-  const synopsis = sourceSentences.length >= 3 ? [
-    compactSentence('The clip discusses ' + withoutTerminal(title) + ': ' + withoutTerminal(firstPoint), 35),
-    compactSentence(middlePoint, 35),
-    compactSentence(lastPoint, 35)
-  ].join('\n\n') : [
-    compactSentence('The clip covers ' + withoutTerminal(title) + ' in the context of ' + context, 35),
-    compactSentence(firstPoint, 35),
-    compactSentence(lastPoint, 35)
-  ].join('\n\n');
-  // A fallback caption is still specific to this clip: its subject, its own
-  // strongest point and its conclusion, phrased for the target surface. Never
-  // "watch what happens" filler.
-  const captionStyle = packagingFor(platform).captionStyle;
-  const caption = captionStyle === 'PUNCHY_CURIOSITY' ?
-    compactSentence(analysis.questionOrProblem, 18) + ' ' +
-      compactSentence(analysis.payoffOrConclusion, 20) :
-    captionStyle === 'CLEAR_SEARCHABLE' ?
-      compactSentence(withoutTerminal(title) + ': ' + withoutTerminal(analysis.mainClaim), 26) +
-        ' ' + compactSentence(analysis.payoffOrConclusion, 20) :
-      compactSentence('A closer look at ' + withoutTerminal(title) +
-        ', grounded in the clip\'s concrete point') + ' The conclusion: ' +
-        compactSentence(analysis.payoffOrConclusion);
-  const cta = analysis.contentType === 'Problem/solution'
-    ? 'Which part of this approach would you try first?'
-    : analysis.contentType === 'Q&A insight'
-      ? 'How would you answer the question before hearing the conclusion?'
-      : 'Which detail would be most useful in practice?';
-  return {
-    bestHook: selected[0].hook,
-    alternateHooks: selected.slice(1, 3).map(({ hook }) => hook),
-    generatedHookScore: selected[0].score,
-    selectedHookStrategy: selected[0].strategy,
-    title,
-    synopsis,
-    caption,
-    // The platform's hashtag count is applied once, after the critic has passed
-    // the package (see applyPlatformPackaging), so generation and validation keep
-    // one contract.
-    hashtags: fallbackHashtags(candidate, title),
-    cta,
-    topic: title,
-    contentType: analysis.contentType,
-    whySelected: (candidate.whySelected ? candidate.whySelected + '; ' : '') +
-      'Selected from the supplied transcript with standalone ' +
-      roundScore(candidate.standaloneScore) + ', information ' +
-      roundScore(candidate.informationScore) + ', and payoff ' +
-      roundScore(candidate.payoffScore) + '.',
-    hooks: selected.map(({ hook, strategy, score }) => ({
-      text: hook,
-      style: strategy,
-      score: roundScore(score)
-    })),
-    hookOptions,
-    creativeCandidates: {
-      hooks: hookOptions,
-      captions: [caption, compactSentence(analysis.viewerValue), compactSentence(analysis.mainClaim)],
-      titles: [title, withoutTerminal(analysis.mainClaim),
-        withoutTerminal(analysis.payoffOrConclusion)],
-      hashtags: fallbackHashtags(candidate, title),
-      synopses: [synopsis]
-    }
-  };
+  return fallbackCandidateContent(candidate, platform);
 }
 
 /**
@@ -1063,6 +963,17 @@ export function ensureSameVideoHookDiversity(candidates: ScoredClipCandidate[]) 
       if (!used.some((hook) => normalizedHookSimilarity(hook, candidate.bestHook!) >= 0.72)) {
         used.push(candidate.bestHook);
         return candidate;
+      }
+      const shared = candidate.creativeCandidates?.sharedPackage as CreativePackage | undefined;
+      if (shared) {
+        const replacement = shared.hooks.find(h=>!used.some(previous=>normalizedHookSimilarity(previous,h.text)>=.72));
+        if (!replacement) {used.push(candidate.bestHook);return candidate;}
+        const hooks=[replacement,...shared.hooks.filter(h=>h.text!==replacement.text)].map((h,i)=>({...h,recommended:i===0}));
+        const p={...shared,hooks,selectedHook:replacement.text}, content=candidateContent(p);
+        used.push(replacement.text);
+        return {...candidate,bestHook:content.bestHook,alternateHooks:content.alternateHooks,hooks:content.hooks,
+          generatedHookScore:content.generatedHookScore,selectedHookStrategy:content.selectedHookStrategy,hookOptions:content.hookOptions,
+          creativeCandidates:{...candidate.creativeCandidates,sharedPackage:p}};
       }
       const fallback = fallbackContent(candidate);
       const options = (candidate.hookOptions ?? [
@@ -1211,7 +1122,6 @@ function failureReason(error: unknown) {
 @Injectable()
 export class ClipJudgeService {
   private readonly logger = new Logger(ClipJudgeService.name);
-  private readonly successfulByFingerprint = new Map<string, ScoredClipCandidate>();
   private readonly llmRouter: LlmRouterService;
 
   constructor(@Inject(LlmRouterService) routerOrLegacyProvider: LlmRouterService | {
@@ -1228,9 +1138,9 @@ export class ClipJudgeService {
         isAnyConfigured: () => legacy.isConfigured(),
         routesFor: () => [{ provider: legacy.providerName, model: legacy.modelName }],
         configuredRouteFor: () => ({ provider: legacy.providerName, model: legacy.modelName }),
-        generate: async <T>(input: { request: unknown }) => ({
+        generate: async <T>(input: { request: unknown; role: LlmRouteMetadata['role'] }) => ({
           data: await legacy.generateStructured!<T>(input.request),
-          metadata: { role: 'creativeGeneration' as const, provider: legacy.providerName,
+          metadata: { role: input.role, provider: legacy.providerName,
             model: legacy.modelName, failover: false, cacheHit: false, attempts: [] }
         })
       } as unknown as LlmRouterService;
@@ -1240,183 +1150,30 @@ export class ClipJudgeService {
   async judgeCandidates(candidates: ScoredClipCandidate[],
     onProgress?: (completed: number, total: number) => Promise<void>,
     targetPlatform: TargetPlatform | null = null): Promise<ScoredClipCandidate[]> {
-    const prepared = candidates.map((candidate) => ({
-      ...candidate,
-      contentFingerprint: candidate.contentFingerprint ??
-        buildContentFingerprint(candidate, targetPlatform)
-    }));
-    const results = new Map<string, ScoredClipCandidate>();
-    const usable: ScoredClipCandidate[] = [];
-    const modeCachePrefix = currentAiProcessingMode() + ':' + (targetPlatform ?? 'ANY') + ':';
-    for (const candidate of prepared) {
-      const cached = this.successfulByFingerprint.get(
-        modeCachePrefix + candidate.contentFingerprint!);
-      if (cached) {
-        results.set(candidate.rangeKey, {
-          ...candidate,
-          ...cached,
-          rangeKey: candidate.rangeKey,
-          videoId: candidate.videoId,
-          startTime: candidate.startTime,
-          endTime: candidate.endTime,
-          duration: candidate.duration,
-          transcriptText: candidate.transcriptText,
-          heuristicScore: candidate.heuristicScore,
-          rank: candidate.rank,
-          chapterSummary: candidate.chapterSummary,
-          overallVideoTopic: candidate.overallVideoTopic,
-          wholeVideoContext: candidate.wholeVideoContext,
-          relevantTopics: candidate.relevantTopics,
-          previousTranscriptContext: candidate.previousTranscriptContext,
-          nextTranscriptContext: candidate.nextTranscriptContext,
-          contentFingerprint: candidate.contentFingerprint
-        });
-      } else if (normalize(candidate.transcriptText)) usable.push(candidate);
-      else {
-        const reason = 'EMPTY_INPUT: Candidate transcript is empty';
-        this.logFallback(reason);
-        results.set(candidate.rangeKey, this.withFallback(candidate, reason));
-      }
+    const results: ScoredClipCandidate[] = [];
+    for (const candidate of candidates) {
+      const packageResult = await creativeService(this.llmRouter).create({ evidence: candidateEvidence(candidate),
+        external: currentAiProcessingMode() === 'ONLINE' });
+      const content = candidateContent(packageResult);
+      const route = packageResult.internal.routes.filter(r => r.role === 'creativeGeneration').at(-1);
+      results.push({ ...candidate, ...content, sourceHookScore: candidate.hookScore,
+        promptVersion: CLIP_CONTENT_PROMPT_VERSION,
+        generationStatus: packageResult.status === 'ACCEPTED' && route ? 'GENERATED' : 'FALLBACK',
+        fallbackUsed: !route || packageResult.status !== 'ACCEPTED',
+        fallbackReason: packageResult.quality.failures.join(','),
+        provider: route?.provider ?? 'deterministic', model: route?.model ?? '',
+        judgeSource: route && packageResult.status === 'ACCEPTED' ? 'LLM' : 'HEURISTIC_FALLBACK',
+        generationMode: route && packageResult.status === 'ACCEPTED' ? 'CLOUD_AI' : 'DETERMINISTIC_FALLBACK',
+        contentFingerprint: buildContentFingerprint(candidate, targetPlatform),
+        evidence: { ...candidate.evidence, contentIntelligence: packageResult },
+        creativeCandidates: { sharedPackage: packageResult }, generationQuality: packageResult.quality.score,
+        providerMetadata: [...(candidate.providerMetadata ?? []), ...packageResult.internal.routes as unknown as Record<string, unknown>[]] });
+      if (onProgress) await onProgress(results.length, candidates.length);
     }
-    if (!this.llmRouter.isAnyConfigured('creativeGeneration')) {
-      const reason = currentAiProcessingMode() === 'FALLBACK_ONLY'
-        ? 'AI_MODE_FALLBACK_ONLY: Generative model routing is disabled'
-        : 'CONFIGURATION_FAILURE: No creative-generation model is configured';
-      this.logFallback(reason);
-      usable.forEach((candidate) => results.set(candidate.rangeKey,
-        this.withFallback(candidate, reason, targetPlatform)));
-      return ensureSameVideoHookDiversity(
-        prepared.map((candidate) => results.get(candidate.rangeKey)!));
-    }
-
-    // Batching several final packages per request cuts creativeGeneration call count roughly
-    // proportionally; OFFLINE/local generation keeps one package per request (matches its
-    // existing concurrency-1 default and avoids growing an already-slower local completion).
-    const configuredBatchSize = Number(process.env.CLIP_JUDGE_BATCH_SIZE ?? 2);
-    const batchSize = currentAiProcessingMode() === 'OFFLINE' ? 1 :
-      Number.isFinite(configuredBatchSize) ? Math.max(1, Math.min(3, Math.floor(configuredBatchSize))) : 2;
-    const batches = Array.from({ length: Math.ceil(usable.length / batchSize) }, (_, index) =>
-      usable.slice(index * batchSize, index * batchSize + batchSize));
-    const configuredConcurrency = Number(process.env.CLIP_JUDGE_CONCURRENCY ?? 1);
-    const concurrency = Number.isFinite(configuredConcurrency)
-      ? Math.max(1, Math.min(4, Math.floor(configuredConcurrency))) : 1;
-    let nextBatch = 0;
-    let completed = 0;
-    const worker = async () => {
-      while (nextBatch < batches.length) {
-        const batch = batches[nextBatch++];
-        try {
-          const { candidates: generated, metadata } = await this.scoreBatch(batch, targetPlatform);
-          const judgeSource = metadata.provider === 'openai' &&
-            metadata.model === CLIP_JUDGE_MODEL ? 'GPT_5_4_MINI' as const : 'LLM' as const;
-          generated.forEach((candidate) => {
-            if (candidate.generationStatus === 'FALLBACK') {
-              results.set(candidate.rangeKey, candidate); return;
-            }
-            const complete: ScoredClipCandidate = {
-              ...candidate,
-              judgeSource,
-              provider: metadata.provider,
-              model: metadata.model,
-              providerMetadata: [...(candidate.providerMetadata || []),
-                metadata as unknown as Record<string, unknown>],
-              generationMode: processingModeFor([...(candidate.providerMetadata || []),
-                metadata as unknown as Record<string, unknown>], true),
-              fallbackUsed: false,
-              promptVersion: CLIP_CONTENT_PROMPT_VERSION
-            };
-            results.set(candidate.rangeKey, complete);
-            if (!complete.localValidationIssues?.length)
-              this.successfulByFingerprint.set(
-                modeCachePrefix + candidate.contentFingerprint!, complete);
-          });
-        } catch (error) {
-          const reason = failureReason(error);
-          this.logFallback(reason);
-          batch.forEach((candidate) => results.set(candidate.rangeKey,
-            this.withFallback(candidate, reason, targetPlatform)));
-        }
-        completed += batch.length;
-        if (onProgress) await onProgress(completed, usable.length);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(concurrency, batches.length) }, worker));
-    if (this.successfulByFingerprint.size > 500) {
-      this.successfulByFingerprint.delete(
-        this.successfulByFingerprint.keys().next().value as string);
-    }
-    return ensureSameVideoHookDiversity(
-      prepared.map((candidate) => results.get(candidate.rangeKey)!));
+    return results;
   }
 
-  private withFallback(candidate: ScoredClipCandidate, reason: string,
-    targetPlatform: TargetPlatform | null = null): ScoredClipCandidate {
-    const route = this.llmRouter.configuredRouteFor('creativeGeneration') ??
-      this.llmRouter.routesFor('creativeGeneration')[0];
-    return {
-      ...candidate,
-      ...fallbackContent(candidate, targetPlatform),
-      sourceHookScore: candidate.hookScore,
-      provider: route?.provider || 'unconfigured',
-      model: route?.model || 'unconfigured',
-      promptVersion: CLIP_CONTENT_PROMPT_VERSION,
-      generationStatus: 'FALLBACK',
-      fallbackReason: reason,
-      generationMode: 'DETERMINISTIC_FALLBACK',
-      fallbackUsed: true,
-      failureCategory: reason.split(':')[0],
-      judgeSource: 'HEURISTIC_FALLBACK'
-    };
-  }
 
-  private logFallback(reason: string) {
-    const route = this.llmRouter.configuredRouteFor('creativeGeneration') ??
-      this.llmRouter.routesFor('creativeGeneration')[0];
-    this.logger.warn('Clip content fallback provider=' +
-      cleanForLog(route?.provider || 'unconfigured') + ' model=' +
-      cleanForLog(route?.model || 'unconfigured') + ' reason=' +
-      cleanForLog(reason));
-  }
-
-  private async scoreBatch(candidates: ScoredClipCandidate[],
-    targetPlatform: TargetPlatform | null = null) {
-    const batched = candidates.length > 1;
-    const schema = batched ? batchedClipContentPackageSchema(candidates.length)
-      : LOCAL_CLIP_CONTENT_PACKAGE_SCHEMA;
-    const systemPrompt = creativeSystemPrompt(batched, targetPlatform);
-    const userPrompt = JSON.stringify(candidates.map((candidate) =>
-      localCreativeInput(candidate, targetPlatform)));
-    const result = await this.llmRouter.generate<unknown>({
-      role: 'creativeGeneration',
-      request: {
-      schemaName: batched ? 'clip_candidate_content_package_batch' : 'clip_candidate_content_package',
-      schema, partialBatchField: 'candidates', systemPrompt, userPrompt,
-      maxOutputTokens: Math.min(7000, 2600 * candidates.length),
-      options: { temperature: 0.75 },
-      cacheKey: candidates.map((candidate) => candidate.contentFingerprint ??
-        buildContentFingerprint(candidate, targetPlatform)).join(':'),
-      local: {
-        schemaName: batched ? 'local_clip_content_package_batch' : 'local_clip_content_package',
-        schema, partialBatchField: 'candidates',
-        maxOutputTokens: Math.min(8000, 3000 * candidates.length),
-        systemPrompt, userPrompt
-      }
-      }
-    });
-    const rawItems = (result.data as { candidates?: unknown[] })?.candidates;
-    const items = alignBatchItemsById(rawItems, candidates);
-    return { candidates: candidates.map((candidate, index) => {
-      try {
-        if (!Array.isArray(items) || items.length !== candidates.length)
-          throw new Error('Expected ' + candidates.length + ' identified package(s); received ' + (items?.length ?? 0));
-        return parseLocalCreativeBatch({ candidates: [items[index]] }, [candidate])[0];
-      } catch (error) {
-        countPerformance('schemaRepairCount');
-        const reason = failureReason(error); this.logFallback(reason);
-        return this.withFallback(candidate, reason, targetPlatform);
-      }
-    }), metadata: result.metadata };
-  }
 }
 
 function localCreativeInput(candidate: ScoredClipCandidate,

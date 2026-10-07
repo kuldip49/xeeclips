@@ -32,20 +32,21 @@ export type ReframePlan = { version: 1; aspect: ReframeAspect;
   audio: { muted: boolean; volume: number }; resolution: 720 | 1080; reasons: string[] };
 /** The part of a plan that changes source pixels. Confirming the crop bakes exactly this into SOURCE. */
 export type ReframePreparation = Pick<ReframePlan, 'aspect' | 'crop' | 'framing' | 'tracking' | 'cleanup'> & { denoise: boolean };
-export type ReframeHookCategory = 'BOLD' | 'CURIOSITY' | 'QUESTION' | 'CONTRARIAN' | 'EMOTIONAL' | 'PROFESSIONAL';
+export type ReframeHookCategory = 'BOLD' | 'CURIOSITY' | 'QUESTION' | 'CONTRARIAN' | 'EMOTIONAL' | 'PROFESSIONAL' | 'SARCASTIC' | 'HUMOROUS' | 'AUTHORITY' | 'STORY' | 'WARNING';
 export type ReframeHook = { text: string; category: ReframeHookCategory; score: number; recommended: boolean;
   source: 'OPENAI' | 'LOCAL' };
 export type ReframeEditPath = 'STYLEONE' | 'MANUAL';
 /** Social post copy is metadata, never a timeline element or burned-in subtitle. */
 export type ReframeSocialSource = { sourcePostText: string; sourceHashtags: string[];
   sourcePlatform: 'instagram' | 'x'; sourcePostUrl: string; sourceAuthor?: string; sourcePostTitle?: string };
-export type ReframeSocialCaption = { style: 'Concise' | 'Engaging' | 'Professional' | 'Conversational' | 'Bold';
+export type ReframeSocialCaption = { style: 'Concise' | 'Engaging' | 'Professional' | 'Conversational' | 'Bold' | 'Humorous';
   text: string; recommended: boolean };
 export type ReframeHashtagSet = { label: 'Focused' | 'Broad' | 'Niche'; hashtags: string[] };
 export type ReframeContentUnderstanding = { topic: string; mainMessage: string; audience: string; tone: string;
   keyPoints: string[]; importantEntities: string[]; callToAction: string; existingCaptionIntent: string };
 export type ReframePostCopy = { version: number; generatedCaptions: ReframeSocialCaption[];
   generatedHashtagSets: ReframeHashtagSet[]; selectedCaption: string; selectedHashtags: string[];
+  synopsis?: string; contentUnderstandingVersion?: string; creativePackage?: Record<string, unknown>;
   understanding?: ReframeContentUnderstanding; editingDirection?: string; purpose?: string;
   /** Media revision used to generate these suggestions; copy edits do not invalidate video exports. */
   contextRevision?: number };

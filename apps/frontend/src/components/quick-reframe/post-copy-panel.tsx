@@ -71,6 +71,7 @@ export function PostCopyPanel({ session, onSession, busy = false }: { session: R
       <Button type='button' variant='secondary' disabled={disabled || !session.analysis} onClick={() => void generate(undefined, true)}>Generate hashtags</Button></div>
     {original?.sourcePostText && <div className='grid gap-2'><label className='grid gap-1 text-xs'>Transform original caption<select aria-label='Rewrite direction' className={field} value={direction} onChange={e => setDirection(e.target.value)}>{directions.map(d => <option key={d}>{d}</option>)}</select></label>
       <Button type='button' variant='secondary' disabled={disabled || !session.analysis} onClick={() => void generate(direction)}>Rewrite original</Button></div>}
+    {session.postCopy?.synopsis && <div className='grid gap-1'><h3 className='text-xs font-semibold'>Synopsis</h3><p className='text-sm text-muted-foreground'>{session.postCopy.synopsis}</p></div>}
     {stale && <p className='text-xs text-warning-soft'>Your video edits changed. Generate again to refresh suggestions for the current edit.</p>}
     {warnings.map((w, i) => <p key={i} role='alert' className='break-words text-xs text-warning-soft'>{w}</p>)}
     {!!session.postCopy?.generatedCaptions.length && <div className='grid min-w-0 gap-3'>{session.postCopy.generatedCaptions.map(c => <article key={c.style} className='grid min-w-0 gap-2 rounded-xl border border-border p-3'>

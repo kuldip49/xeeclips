@@ -1,3 +1,6 @@
+import { ClipBoundaryService, transcriptBoundaryWords } from '../content-intelligence/clip-boundary.service';
+import { type CreativePackage } from '../content-intelligence/creative-package.service';
+import { normalize } from '../content-intelligence/content-understanding.service';
 import { UsageService } from '../auth/usage.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { AiProcessingMode, ClipCandidate, Prisma, ProcessingJob, Video } from '@prisma/client';
@@ -274,6 +277,15 @@ export class ClipExportService {
 
   async export(video: Video, candidate: ClipCandidate, options?: ClipExportOptions) {
     const exportStarted = Date.now();
+    const originalTranscript = candidate.transcriptText;
+    const transcriptContext = await this.prisma.video.findUniqueOrThrow({ where: { id: video.id },
+      select: { transcript: { include: { segments: { orderBy: { position: 'asc' } } } } } });
+    const boundaryWords = transcriptBoundaryWords(transcriptContext.transcript?.segments ?? []);
+    const repaired = new ClipBoundaryService().repair(candidate, boundaryWords, { sourceDuration: video.duration ?? undefined });
+    if (repaired.evidenceAvailable && !repaired.valid) throw new EditQualityError('Clip rejected before render: incomplete spoken thought',
+      { preRenderClassification: 'SKIP_BEFORE_RENDER', candidateSkippedBeforeRender: true, boundaryQa: repaired.qa, reasons: repaired.reasons });
+    if (repaired.evidenceAvailable) candidate = { ...candidate, startTime: repaired.startTime,
+      endTime: repaired.endTime, duration: repaired.endTime - repaired.startTime, transcriptText: repaired.transcriptText };
     let cachedJob: ProcessingJob | null | undefined;
     const latestJob = async () => cachedJob !== undefined ? cachedJob : (cachedJob = await this.prisma.processingJob
       .findFirst({ where: { videoId: video.id }, orderBy: { createdAt: 'desc' } }));
@@ -334,6 +346,18 @@ export class ClipExportService {
         await this.storage.downloadToFile(video.bucket, video.objectKey, sourcePath);
       const sourcePreparationMs = options?.preparedSourcePath ? 0 : Date.now() - sourcePreparationStarted;
       const job = await latestJob();
+      if (normalize(originalTranscript ?? '') !== normalize(candidate.transcriptText ?? '') ||
+        !(candidate.creativeCandidates as unknown as {sharedPackage?:CreativePackage}|null)?.sharedPackage) {
+        const mode = normalizeAiProcessingMode(job?.aiMode ?? AiProcessingMode.FALLBACK_ONLY);
+        const packaging = await performanceContext.run(createPerformanceTelemetry(mode), () => this.contentPackager.create({
+          aiMode:mode,sourceId:video.id,startTime:candidate.startTime,endTime:candidate.endTime,
+          transcript:candidate.transcriptText ?? '',title:candidate.title ?? '',synopsis:'',wholeVideoSummary:'',
+          originalName:video.originalName,targetPlatform:video.targetPlatform}));
+        const shared = packaging.sharedPackage!;
+        candidate = {...candidate,creativeCandidates:{sharedPackage:shared} as unknown as Prisma.JsonValue,
+          bestHook:shared.selectedHook,synopsis:shared.synopsis,caption:shared.captions[0]?.text ?? '',
+          hashtags:shared.hashtagSets.find(s=>s.label==='Focused')?.hashtags ?? []};
+      }
       const aspectRatio = options?.aspectRatio ?? parseOutputAspectRatio(job?.outputAspectRatio);
       let outputPath = baselinePath;
       let metadata: { duration: number; width: number; height: number; codec: string;
@@ -341,6 +365,9 @@ export class ClipExportService {
       let editPlan: Prisma.InputJsonValue | undefined;
       let editTelemetry: Prisma.InputJsonValue | undefined;
       let contentPackaging: Prisma.InputJsonValue | undefined;
+      const candidatePackage = (candidate.creativeCandidates as unknown as { sharedPackage?: CreativePackage } | null)?.sharedPackage;
+      if (candidatePackage) contentPackaging = { sharedPackage: candidatePackage, synopsis: candidatePackage.synopsis,
+        boundaryQa: repaired.qa } as unknown as Prisma.InputJsonValue;
       let thumbnailPath: string | null = null;
       let clipStart = candidate.startTime;
       let clipEnd = candidate.endTime;
@@ -611,7 +638,9 @@ export class ClipExportService {
     const speakerTrackIds = [...new Set(segments.map((segment) => segment.speaker)
       .filter((speaker): speaker is string => Boolean(speaker)))];
     let contentPackaging = await performanceContext.run(editMetrics, () => this.contentPackager.create({
-      aiMode, transcript: candidate.transcriptText,
+      aiMode, transcript: candidate.transcriptText, sourceId: video.id, startTime: candidate.startTime, endTime: candidate.endTime,
+      sharedPackage: (candidate.creativeCandidates as unknown as {sharedPackage?:CreativePackage}|null)?.sharedPackage,
+      analysis: candidate.clipUnderstanding as Record<string,unknown>,
       title: candidate.title || candidate.titleCandidate || video.originalName,
       synopsis: candidate.synopsis, wholeVideoSummary: context.understanding?.summary ?? '',
       originalName: video.originalName,
@@ -673,11 +702,26 @@ export class ClipExportService {
         endingReason: sponsor.trimEndTo != null ? 'SPONSOR_SEGMENT_TRIMMED' : decision.endingReason });
       let boundary = applySponsorTrim(decide(false));
       let timeline = toTimeline(boundary);
-      const loop = await evaluateLoop(windowPath, windowStart, timeline, plan, boundary);
+      let loop = await evaluateLoop(windowPath, windowStart, timeline, plan, boundary);
       if (loop.loopApplied) {
         boundary = applySponsorTrim(decide(true));
         timeline = toTimeline(boundary);
       }
+      let finalBoundaryQa = new ClipBoundaryService().validate({startTime:timeline.editedStart,endTime:timeline.editedEnd,
+        transcriptText:candidate.transcriptText}, transcriptBoundaryWords(segments), {sourceDuration:video.duration??undefined});
+      if (finalBoundaryQa.evidenceAvailable && !finalBoundaryQa.valid && !sponsor.trimmed) {
+        const semanticRepair = new ClipBoundaryService().repair({startTime:timeline.editedStart,endTime:timeline.editedEnd,
+          transcriptText:candidate.transcriptText}, transcriptBoundaryWords(segments), {sourceDuration:video.duration??undefined});
+        if (semanticRepair.valid && semanticRepair.startTime >= windowStart && semanticRepair.endTime <= windowEnd) {
+          boundary = {...boundary,editedStart:semanticRepair.startTime,editedEnd:semanticRepair.endTime,
+            optimizedStartSec:semanticRepair.startTime,optimizedEndSec:semanticRepair.endTime};
+          timeline = toTimeline(boundary); loop = {...loop,loopApplied:false};
+          finalBoundaryQa = new ClipBoundaryService().validate({startTime:timeline.editedStart,endTime:timeline.editedEnd,
+            transcriptText:semanticRepair.transcriptText},transcriptBoundaryWords(segments),{sourceDuration:video.duration??undefined});
+        }
+      }
+      if (finalBoundaryQa.evidenceAvailable && !finalBoundaryQa.valid) throw new EditQualityError('Edited clip rejected before render: unfinished sentence or context',
+        {preRenderClassification:'SKIP_BEFORE_RENDER',candidateSkippedBeforeRender:true,boundaryQa:finalBoundaryQa.qa,reasons:finalBoundaryQa.reasons});
       const invalidTimeline = !Number.isFinite(timeline.editedStart) || !Number.isFinite(timeline.editedEnd) ||
         timeline.editedEnd <= timeline.editedStart || timeline.editedDuration <= 0 || !timeline.segments.length;
       const badStart = !boundary.clipStartNatural && !boundary.clipStartContextComplete;
@@ -704,11 +748,15 @@ export class ClipExportService {
         word.start >= timeline.editedStart - .001 && word.end <= timeline.editedEnd + .001 &&
         !boundary.cuts.some((cut) => word.start < cut.end && cut.start < word.end));
       const finalTranscript = spoken.map((word) => word.text).join(' ').trim();
+      if (finalTranscript && finalTranscript !== candidate.transcriptText.trim()) {
+        contentPackaging = await performanceContext.run(editMetrics, () => this.contentPackager.create({aiMode,transcript:finalTranscript,title:candidate.title,
+          synopsis:'',wholeVideoSummary:'',sourceId:video.id,startTime:timeline.editedStart,endTime:timeline.editedEnd,ocrText:analysis.ocrText,targetPlatform}));
+      }
       let hooked = plan;
       if (plan.onScreenHook.enabled && finalTranscript &&
         finalTranscript !== candidate.transcriptText.trim()) {
         const realigned = this.editPlans.realignHook(plan,
-          { ...baseContext, aiMode, wholeVideoSummary: '', clipUnderstanding: null,
+          { ...baseContext, packaging: contentPackaging, aiMode, wholeVideoSummary: '', clipUnderstanding: null,
             visualEvidence: {}, start: timeline.editedStart, end: timeline.editedEnd,
             transcript: finalTranscript, words: spoken },
           hookPool.map((item) => ({ text: item.text,
@@ -839,6 +887,8 @@ export class ClipExportService {
       editedStart: timeline.editedStart, editedEnd: timeline.editedEnd,
       editedDuration: timeline.editedDuration, editWindow: { start: windowStart, end: windowEnd },
       timelineSegments: timeline.segments, timelineCuts: timeline.cuts,
+      sharedBoundaryQa: new ClipBoundaryService().validate({startTime:timeline.editedStart,endTime:timeline.editedEnd,transcriptText:candidate.transcriptText},
+        transcriptBoundaryWords(segments)).qa,
       openingReason: boundary.openingReason, endingReason: boundary.endingReason,
       // Retention boundary telemetry (§40): what the editor changed, why, and how
       // strongly the chosen opening/ending scored against the alternatives.

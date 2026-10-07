@@ -1,5 +1,6 @@
 'use client';
 
+import { EditorSuggestedHooks } from './suggested-hooks';
 import { useCallback, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { ScanSearch, X } from 'lucide-react';
@@ -576,7 +577,9 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
       onSession={setReframe} onCommand={(command) => void applyCommand(command)}
       onCommands={(commands) => void applySequence(commands)}
       onSelectElement={setSelectedElementId}
-      onOpenTool={(tool) => isMobile ? openMobilePanel(tool) : selectTool(tool)} /> : undefined };
+      onOpenTool={(tool) => isMobile ? openMobilePanel(tool) : selectTool(tool)} /> : <EditorSuggestedHooks project={project} busy={!!busy}
+      onApply={text => {const hook=(project.elements??[]).find(e=>e.type==='TEXT'&&e.properties.presetRole==='HOOK');
+        void applyCommand(hook?{action:'set-text-content',elementId:hook.id,content:text}:{action:'add-text',textStyleId:'HOOK',content:text,origin:'ASSISTANT',presetRole:'HOOK'});}} /> };
   const exportReframe = () => { if (reframe) router.push(quickReframeUrl(reframe.id, 'export')); };
 
   const closeMobilePanel = () => {

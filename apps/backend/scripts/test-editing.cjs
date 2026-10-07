@@ -56,6 +56,7 @@ async function main() {
         processingJobs: [{ id: `job-${uploads.length}` }] };
     } }
   };
+  prisma.$transaction=async action=>action(prisma);
   const storage = { uploadVideo: async () => ({ bucket: 'source', objectKey: 'source.mp4' }) };
   const queue = { enqueue: async (data) => { queueJobs.push(data); } };
   const videos = new VideosService(prisma, storage, queue, {});
@@ -202,33 +203,14 @@ async function main() {
     'DETERMINISTIC_FALLBACK');
   assert.equal(llmCalls, 0);
   assert.equal((await service.create({ ...context, aiMode: 'ONLINE' })).source, 'LUNA');
-  // A grounded in-plan or deterministic hook avoids a second model call.
-  assert.equal(llmCalls, 1);
-
-  // A rejected in-plan hook is replaced by the best scored candidate.
-  let repairCalls = 0;
-  const repairService = new EditPlanService({ generate: async () => {
-    repairCalls++;
-    return { data: repairCalls === 1 ? { ...plan, onScreenHook: {
-      ...plan.onScreenHook, text: 'This Changes Everything' } } :
-      { hookCuriosity: 'Why A Strong Opening Matters More Than Anything',
-        hookTension: 'This Changes Everything About How A Strong Opening Works',
-        hookDirect: 'and the opening', hookEmotion: '', hookHumor: '', hookInsight: '' },
-    metadata: { provider: 'openai', model: 'gpt-5.6-luna' } };
-  } }, validator);
-  const repaired = await repairService.create({ ...context, aiMode: 'ONLINE' });
-  assert.equal(repairCalls, 2);
-  assert.equal(repaired.hookValidationFailureReason, 'GENERIC_HOOK');
-  assert.equal(repaired.hookRepairAttempted, true);
-  assert.equal(repaired.hookRepairSucceeded, true);
-  assert.equal(repaired.hookFinalText, 'Why A Strong Opening Matters More Than Anything');
-  assert(repaired.hookWordCount >= 7, 'a headline is a complete thought, not a fragment');
-  assert.equal(repaired.hookSource, 'LUNA_CANDIDATE');
-  // Clickbait and fragments are rejected rather than chosen.
-  const rejections = repaired.hookCandidates.filter((item) => item.rejected)
-    .map((item) => item.rejected);
-  assert(rejections.includes('FABRICATED_CLICKBAIT'), rejections.join(','));
-
+  // The shared creative gate is separate from edit planning and bounded to one repair.
+  assert(llmCalls <= 4, 'at most two creative attempts, one critic and one edit-plan call');
+  const {transcriptSimilarity}=require('../dist/modules/content-intelligence/creative-quality.service');
+  const repairService=new EditPlanService({generate:async()=>({data:{...plan,onScreenHook:{...plan.onScreenHook,text:'This Changes Everything'}},metadata:{role:'editingPlan',provider:'openai',model:'configured'}})},validator);
+  const repaired=await repairService.create({...context,aiMode:'ONLINE'});
+  assert.notEqual(repaired.hookFinalText,'This Changes Everything','an unsupported in-plan hook cannot replace the shared package');
+  assert.ok(!transcriptSimilarity(repaired.hookFinalText,context.transcript).copied);
+  assert.ok(repaired.hookWordCount >= 3 && repaired.hookWordCount <= 12);
   // Luna unavailable: the headline is mandatory, so a deterministic one appears.
   const failing = new EditPlanService({ generate: async () => {
     throw new Error('synthetic outage');

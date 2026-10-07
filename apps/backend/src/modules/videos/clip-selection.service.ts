@@ -17,6 +17,7 @@ import { fullTemplate, STYLE_CATEGORIES, type StyleCategory } from '../edit-mode
 import { ClipExportService, ClipInfrastructureError } from './clip-export.service';
 import { EditQualityError } from '../editing/edit-quality-gate';
 import { generateCandidateRanges, ScoredClipCandidate } from '../processing/clip-candidates';
+import { transcriptBoundaryWords } from '../content-intelligence/clip-boundary.service';
 import { optimizeClipBoundaries, TranscriptWord } from '../processing/clip-boundary-optimizer';
 import {
   buildContentFingerprint,
@@ -273,6 +274,7 @@ export function toClipCard(clip: ResultClip, effectiveAiMode: unknown, position:
   const candidate = clip.candidate;
   const telemetry = jsonObject(clip.editTelemetry);
   const packaging = jsonObject(clip.contentPackaging);
+  const shared = jsonObject(packaging.sharedPackage);
   const captions = jsonObject(packaging.captions);
   const hashtagSets = jsonObject(packaging.hashtags);
   const platformKey = clip.targetPlatform === 'INSTAGRAM_REELS' ? 'instagramReels' :
@@ -284,7 +286,9 @@ export function toClipCard(clip: ResultClip, effectiveAiMode: unknown, position:
       typeof item === 'string') : [];
   const renderedHook = clip.processingType === 'EDITED_CLIPS' && telemetry.hookRendered === true &&
     typeof telemetry.hookFinalText === 'string' ? telemetry.hookFinalText.trim() : '';
-  const hook = renderedHook || candidate?.bestHook || candidate?.hookCandidate || '';
+  const hook = renderedHook || (typeof shared.selectedHook === 'string' ? shared.selectedHook : '') || candidate?.bestHook || candidate?.hookCandidate || '';
+  const sharedCaption = Array.isArray(shared.captions) ? jsonObject(shared.captions[0]).text : '';
+  const sharedTags = Array.isArray(shared.hashtagSets) ? jsonObject(shared.hashtagSets.find(s=>jsonObject(s).label==='Focused')).hashtags : [];
   return {
     id: clip.id,
     ...generatedClipEditLink(clip.editProject),
@@ -298,10 +302,10 @@ export function toClipCard(clip: ResultClip, effectiveAiMode: unknown, position:
     width: clip.width,
     height: clip.height,
     hook,
-    synopsis: candidate?.synopsis ?? '',
-    caption: clip.processingType === 'EDITED_CLIPS' && packagedCaption ? packagedCaption :
+    synopsis: typeof packaging.synopsis === 'string' ? packaging.synopsis : candidate?.synopsis ?? '',
+    caption: packagedCaption || (typeof sharedCaption === 'string' ? sharedCaption : '') ||
       candidate?.caption || candidate?.captionCandidate || '',
-    hashtags: clip.processingType === 'EDITED_CLIPS' && packagedHashtags.length ? packagedHashtags :
+    hashtags: packagedHashtags.length ? packagedHashtags : Array.isArray(sharedTags) && sharedTags.length ? sharedTags :
       candidate?.hashtags ?? [],
     aiModeUsed: userAiModeLabel(effectiveAiMode),
     generationJobId: clip.generationJobId ?? null,
@@ -1067,7 +1071,7 @@ export class ClipSelectionService {
     const context = await this.prisma.video.findUniqueOrThrow({ where: { id: video.id }, select: {
       chunks: { include: { analysis: true }, orderBy: { position: 'asc' } },
       understanding: { include: { chapters: { orderBy: { position: 'asc' } } } },
-      transcript: { select: { segments: { select: { words: true } } } }
+      transcript: { select: { segments: { select: { words: true, start:true, end:true, text:true, speaker:true } } } }
     } });
     if (!context.chunks?.length) return 0;
     const understanding = context.understanding;
@@ -1076,10 +1080,7 @@ export class ClipSelectionService {
       summary: understanding.summary, keyClaims: understanding.keyClaims,
       questions: understanding.questions, chapters: understanding.chapters
     } : null, 400);
-    const words: TranscriptWord[] = (context.transcript?.segments ?? []).flatMap((segment) =>
-      Array.isArray(segment.words) ? (segment.words as Array<Partial<TranscriptWord>>)
-        .filter((word): word is TranscriptWord => !!word && Number.isFinite(word.start) &&
-          Number.isFinite(word.end) && typeof word.text === 'string') : []);
+    const words: TranscriptWord[] = transcriptBoundaryWords(context.transcript?.segments ?? []);
     const knownKeys = new Set(existing.map((candidate) => candidate.rangeKey));
     const round2 = (value: number) => Math.round(value * 100) / 100;
     const accepted: ScoredClipCandidate[] = [];
@@ -1088,6 +1089,7 @@ export class ClipSelectionService {
       if (accepted.length >= target) break;
       if (candidate.reject) continue;
       const optimized = optimizeClipBoundaries(candidate, words);
+      if (optimized.evidenceAvailable && !optimized.valid) continue;
       const startTime = round2(optimized.startTime);
       const endTime = round2(optimized.endTime);
       const rangeKey = `${startTime.toFixed(3)}:${endTime.toFixed(3)}`;
@@ -1119,7 +1121,7 @@ export class ClipSelectionService {
     const context = await this.prisma.video.findUniqueOrThrow({ where: { id: video.id }, select: {
       chunks: { include: { analysis: true }, orderBy: { position: 'asc' } },
       understanding: { include: { chapters: { orderBy: { position: 'asc' } } } },
-      transcript: { select: { segments: { select: { words: true } } } }
+      transcript: { select: { segments: { select: { words: true, start:true, end:true, text:true, speaker:true } } } }
     } });
     if (!context.chunks?.length) return [];
     const understanding = context.understanding;
@@ -1128,10 +1130,7 @@ export class ClipSelectionService {
       summary: understanding.summary, keyClaims: understanding.keyClaims,
       questions: understanding.questions, chapters: understanding.chapters
     } : null, 400);
-    const words: TranscriptWord[] = (context.transcript?.segments ?? []).flatMap((segment) =>
-      Array.isArray(segment.words) ? (segment.words as Array<Partial<TranscriptWord>>)
-        .filter((word): word is TranscriptWord => !!word && Number.isFinite(word.start) &&
-          Number.isFinite(word.end) && typeof word.text === 'string') : []);
+    const words: TranscriptWord[] = transcriptBoundaryWords(context.transcript?.segments ?? []);
     if (!raw.length || !words.length) return [];
     // What a new fill must differ from: clips actually delivered and the other fills. Moments
     // that failed or were never reached do not occupy their range.
@@ -1144,6 +1143,7 @@ export class ClipSelectionService {
       const optimized = optimizeClipBoundaries({ startTime, endTime,
         transcriptText: words.filter((word) => word.start >= startTime - .01 && word.end <= endTime + .01)
           .map((word) => word.text).join(' ') }, words);
+      if (!optimized.valid) return;
       const start = round2(optimized.startTime);
       const end = round2(optimized.endTime);
       const rangeKey = `${start.toFixed(3)}:${end.toFixed(3)}`;
@@ -1221,12 +1221,13 @@ export class ClipSelectionService {
           hooks: (content.hooks ?? []) as Prisma.InputJsonValue,
           generatedHookScore: content.generatedHookScore ?? 0,
           selectedHookStrategy: content.selectedHookStrategy ?? 'educational/value',
+          creativeCandidates: content.creativeCandidates as Prisma.InputJsonValue,
           title: content.title ?? '', caption: content.caption ?? '', cta: content.cta ?? '',
           contentType: content.contentType ?? '', whySelected: content.whySelected ?? candidate.reason,
           promptVersion: CLIP_CONTENT_PROMPT_VERSION, generationStatus: 'FALLBACK',
           fallbackReason,
           contentFingerprint: buildContentFingerprint(candidate, video.targetPlatform ?? null),
-          evidence: marker as Prisma.InputJsonValue,
+          evidence: {...candidate.evidence,...marker} as Prisma.InputJsonValue,
           generationMode: 'DETERMINISTIC_FALLBACK', fallbackUsed: true,
           decisionSource: 'DETERMINISTIC_FALLBACK',
           openingStrength: candidate.openingStrength ?? 0,

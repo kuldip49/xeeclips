@@ -48,6 +48,13 @@ function HistoryCard({ clip, onDelete }: { clip: HistoryClip; onDelete?: (clip: 
       <div className='flex flex-wrap gap-1.5 text-xs'>
         {[clip.style, clip.mode, clip.status].map((item) => <span key={item} className='rounded-full border border-border bg-tint px-2.5 py-1 text-soft'>{item}</span>)}
       </div>
+      {(clip.synopsis || clip.caption) && <details className='rounded-xl border border-border p-3 text-sm'>
+        <summary className='cursor-pointer font-medium'>Post copy</summary>
+        {clip.synopsis && <p className='mt-3 text-xs text-muted-foreground'>{clip.synopsis}</p>}
+        {clip.caption && <p className='mt-3 whitespace-pre-wrap'>{clip.caption}</p>}
+        {!!clip.hashtags?.length && <p className='mt-2 break-words text-xs text-muted-foreground'>{clip.hashtags.join(' ')}</p>}
+        {clip.caption && <button type='button' className='mt-3 min-h-10 underline' onClick={()=>void navigator.clipboard.writeText([clip.caption,clip.hashtags?.join(' ')].filter(Boolean).join('\n\n')).catch(()=>setError('Copy is unavailable. Select the text above.'))}>Copy caption and hashtags</button>}
+      </details>}
       <div className='mt-auto grid grid-cols-2 gap-2 sm:flex sm:flex-wrap'>
         <button type='button' onClick={() => void open('edit')} disabled={!clip.editable || !!opening}
           className='inline-flex h-11 items-center justify-center gap-1.5 rounded-xl sm:h-10 border border-border px-3 text-sm font-medium text-soft transition-colors hover:border-border-strong hover:bg-tint hover:text-foreground disabled:opacity-50'>

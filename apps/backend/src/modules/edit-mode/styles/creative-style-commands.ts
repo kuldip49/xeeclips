@@ -112,7 +112,7 @@ export function chooseSupportingLine(options: HookOption[], hook: string | null 
 }
 
 export function compileCreativeStyle(resolved: ResolvedCreativeStyle, ctx: ChatContext,
-  info: { hookOptions: HookOption[]; hasWordTimings: boolean }): CompiledStyle {
+  info: { hookOptions: HookOption[]; supportingLine?: string; hasWordTimings: boolean }): CompiledStyle {
   const out: CompiledStyle = { commands: [], lines: [], skipped: [] };
   const component = <T>(category: keyof ResolvedCreativeStyle['components']) => {
     const value = resolved.components[category];
@@ -267,13 +267,12 @@ export function compileCreativeStyle(resolved: ResolvedCreativeStyle, ctx: ChatC
     }
   }
 
-  // --- OPTIONAL SUPPORTING LINE. Wording comes only from another grounded
-  // hook candidate; if the clip has no useful distinct line the region stays clean.
+  // Optional second angle from the shared creative package.
   const text = component<TextSpec>('TEXT');
   if (text?.spec.role === 'SUPPORTING_LINE' && visualLayout.supportingText) {
     const shownHook = String(ctx.elements.find((view) => view.semantic === 'HOOK')
       ?.properties.content ?? '');
-    const wording = chooseSupportingLine(info.hookOptions, [layoutHook, shownHook]);
+    const wording = chooseSupportingLine(info.supportingLine ? [{text:info.supportingLine}] : [], [layoutHook, shownHook]);
     if (wording) {
       const region = visualLayout.supportingText;
       out.commands.push(el('ADD_TEXT', { content: wording, textStyleId: text.spec.textStyle,

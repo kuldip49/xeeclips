@@ -40,12 +40,12 @@ export const revertCrop=(s:ReframeSession)=>reframeRequest(`/${s.id}/revert-crop
 export const applyStyleOne=(s:ReframeSession,options:{hookText?:string;captions?:'GENERATE'|'KEEP'|'OFF'}={})=>reframeRequest(`/${s.id}/styleone`,'POST',{revision:s.revision,...options});
 export const chooseManual=(s:ReframeSession,removeStyleOne=false)=>reframeRequest(`/${s.id}/path`,'POST',{revision:s.revision,path:'MANUAL',removeStyleOne});
 /** `exclude` (Regenerate): hooks already shown, which are never suggested again. */
-export const requestHooks=(id:string,externalAiAuthorized:boolean,exclude:string[]=[])=>reframeRequest<{session:ReframeSession;warnings:string[]}>(`/${id}/hooks`,'POST',{externalAiAuthorized,exclude});
+export const requestHooks=(id:string,externalAiAuthorized:boolean,exclude:string[]=[],options:{direction?:string;category?:ReframeHookCategory}={})=>reframeRequest<{session:ReframeSession;warnings:string[]}>(`/${id}/hooks`,'POST',{externalAiAuthorized,exclude,...options});
 export const generatePostCopy=(s:ReframeSession,options:{externalAiAuthorized:boolean;rewrite?:string;editingDirection?:string;purpose?:string;hashtagsOnly?:boolean})=>reframeRequest<{session:ReframeSession;warnings:string[]}>(`/${s.id}/post-copy`,'POST',{revision:s.revision,version:s.postCopy?.version??0,...options});
 export const savePostCopy=(s:ReframeSession,selectedCaption:string,selectedHashtags:string[],captionStyle?:string)=>reframeRequest(`/${s.id}/post-copy`,'PUT',{revision:s.revision,version:s.postCopy?.version??0,selectedCaption,selectedHashtags,...(captionStyle?{captionStyle}:{})});
 export const renderReframe=(s:ReframeSession,kind:'preview'|'export',resolution:720|1080=1080)=>reframeRequest(`/${s.id}/${kind}`,'POST',{revision:s.revision,resolution});
 export const reframeForProject=(editProjectId:string)=>reframeRequest(`/project/${encodeURIComponent(editProjectId)}`);
-export const HOOK_CATEGORY_LABEL:Record<ReframeHookCategory,string>={BOLD:'Bold',CURIOSITY:'Curiosity',QUESTION:'Question',CONTRARIAN:'Contrarian',EMOTIONAL:'Emotional',PROFESSIONAL:'Professional'};
+export const HOOK_CATEGORY_LABEL:Record<ReframeHookCategory,string>={BOLD:'Bold',CURIOSITY:'Curiosity',QUESTION:'Question',CONTRARIAN:'Contrarian',EMOTIONAL:'Emotional',PROFESSIONAL:'Professional',SARCASTIC:'Sarcastic',HUMOROUS:'Humorous',AUTHORITY:'Authority / Insight',STORY:'Story',WARNING:'Warning'};
 export const recommendedHook=(hooks:ReframeHook[])=>hooks.find(h=>h.recommended)??hooks[0];
 /** Where the wizard should open for a session that already exists. */
 export type ReframeStep='crop'|'choose'|'edit'|'export';

@@ -18,9 +18,10 @@ const {
   CLIP_CONTENT_PROMPT_VERSION,
   CLIP_JUDGE_MODEL,
   normalizedHookSimilarity,
-  OpenAiClipJudgeService
+  OpenAiClipJudgeService,
+  ensureSameVideoHookDiversity
 } = require('../dist/modules/processing/openai-clip-judge.service');
-const { VideosService } = require('../dist/modules/videos/videos.service');
+const { VideosService, publicVideoMetadata } = require('../dist/modules/videos/videos.service');
 const { VideosController, parseClipSelection } = require('../dist/modules/videos/videos.controller');
 const { ClipExportService } = require('../dist/modules/videos/clip-export.service');
 const { LlmProviderError } = require('../dist/modules/processing/llm-provider.service');
@@ -119,13 +120,13 @@ function testWeightedScoreMath() {
 }
 
 function testRecommendationPolicy() {
-  assert.equal(maximumClipCountForDuration(600), 6);
+  assert.equal(maximumClipCountForDuration(600), 8);
   assert.equal(maximumClipCountForDuration(601), 8);
   assert.equal(maximumClipCountForDuration(899), 8);
-  assert.equal(maximumClipCountForDuration(900), 12);
-  assert.equal(maximumClipCountForDuration(3600), 12);
-  assert.equal(maximumClipCountForDuration(3601), 20);
-  assert.equal(maximumClipCountForDuration(7200), 20);
+  assert.equal(maximumClipCountForDuration(900), 20);
+  assert.equal(maximumClipCountForDuration(3600), 20);
+  assert.equal(maximumClipCountForDuration(3601), 30);
+  assert.equal(maximumClipCountForDuration(7200), 30);
   assert.equal(maximumClipCountForDuration(7201), 0);
   assert.equal(recommendationTierForScore(75), 'PRIMARY');
   assert.equal(recommendationTierForScore(74.99), 'SECONDARY');
@@ -144,7 +145,7 @@ function testRecommendationPolicy() {
   ], 900);
   assert.deepEqual(recommendation, {
     recommendedClipCount: 5,
-    maximumClipCount: 12,
+    maximumClipCount: 20,
     primaryCount: 5,
     secondaryCount: 3,
     candidatesDiscovered: 8
@@ -203,235 +204,42 @@ async function testGenerationAndRanking() {
 }
 
 async function testJudgeFallbackAndStrictRequest(candidates) {
-  const originalFetch = global.fetch;
-  const originalSetTimeout = global.setTimeout;
-  const savedEnvironment = Object.fromEntries([
-    'LLM_PROVIDER', 'LLM_API_KEY', 'LLM_MODEL', 'LLM_API_STYLE',
-    'OPENAI_API_KEY', 'NVIDIA_API_KEY', 'LLM_MAX_RETRIES', 'LLM_RETRY_BASE_DELAY_MS'
-  ].map((key) => [key, process.env[key]]));
-  const originalBatch = process.env.CLIP_JUDGE_BATCH_SIZE;
-  process.env.LLM_PROVIDER = 'openai';
-  process.env.LLM_API_KEY = 'test-key';
-  process.env.LLM_MODEL = CLIP_JUDGE_MODEL;
-  process.env.LLM_API_STYLE = 'responses';
-  delete process.env.NVIDIA_API_KEY;
-  process.env.CLIP_JUDGE_BATCH_SIZE = '2';
-  process.env.LLM_MAX_RETRIES = '2';
-  process.env.LLM_RETRY_BASE_DELAY_MS = '1000';
-  try {
-    let requestBody;
-    let generatedFetches = 0;
-    global.fetch = async (_url, options) => {
-      generatedFetches += 1;
-      requestBody = JSON.parse(options.body);
-      return { ok: true, json: async () => ({
-        output_text: JSON.stringify({ candidates: JSON.parse(requestBody.input).map(() => judgeScore()) })
-      }) };
-    };
-    const generatedJudge = new OpenAiClipJudgeService();
-    const judged = await generatedJudge.judgeCandidates(candidates.slice(0, 2));
-    await generatedJudge.judgeCandidates(candidates.slice(0, 2));
-    assert.equal(generatedFetches, 2, 'one request per package; the second run must reuse both fingerprints');
-    assert.equal(requestBody.model, CLIP_JUDGE_MODEL);
-    assert.equal(CLIP_JUDGE_MODEL, 'gpt-5.6-luna');
-    assert.equal(requestBody.text.format.strict, true);
-    assert.equal(requestBody.store, false);
-    const supplied = JSON.parse(requestBody.input);
-    assert.equal(supplied.length, 1);
-    assert.ok(candidates.slice(0, 2).some(candidate => candidate.transcriptText === supplied[0].exactClipTranscript));
-    assert.ok('previousContext' in supplied[0] && 'nextContext' in supplied[0]);
-    assert.ok(supplied[0].existingCandidateFeatures);
-    assert.ok(judged.every(({ judgeSource }) => judgeSource === 'GPT_5_4_MINI'));
-    assert.ok(judged.every((candidate) =>
-      candidate.overallScore === calculateContentPotential(candidate)));
-    assert.ok(judged.every((candidate) =>
-      candidate.contentPotential === candidate.overallScore));
-    assert.ok(judged.every((candidate) => candidate.bestHook &&
-      !candidate.bestHook.endsWith('...') && candidate.bestHook !== candidate.transcriptText));
-    assert.ok(judged.every((candidate) => candidate.bestHook.toLowerCase()
-      .split(/[^a-z0-9]+/u).some((word) =>
-        word.length >= 4 && candidate.transcriptText.toLowerCase().includes(word))));
-    assert.ok(judged.every((candidate) => candidate.alternateHooks.length === 2));
-    assert.ok(judged.every((candidate) => candidate.hooks.length === 3));
-    assert.ok(judged.every((candidate) =>
-      new Set(candidate.hooks.map(({ style }) => style)).size === 3));
-    assert.ok(judged.every((candidate) => candidate.title && candidate.synopsis &&
-      candidate.caption && candidate.hashtags.length === 5 &&
-      candidate.synopsis.split(/\n\n/u).length === 3 && candidate.cta));
-    assert.equal(judged[0].generatedHookScore, 88.5);
-    assert.ok(judged.every((candidate) => candidate.selectedHookStrategy));
-    assert.ok(normalizedHookSimilarity(judged[0].bestHook, judged[1].bestHook) < 0.72);
-    assert.ok(judged.every((candidate) =>
-      [candidate.bestHook, ...candidate.alternateHooks].every((hook) => /[.!?]$/u.test(hook))));
-    assert.ok(judged.every((candidate) => candidate.sourceHookScore === candidate.hookScore));
-    let partialIndex = 0;
-    global.fetch = async () => {
-      const item = judgeScore();
-      if (partialIndex++ === 2) delete item.clipAnalysis;
-      return { ok: true, json: async () => ({ output_text: JSON.stringify({ candidates: [item] }) }) };
-    };
-    const partialPackages = await new OpenAiClipJudgeService().judgeCandidates(candidates.slice(0, 5));
-    assert.equal(partialPackages.filter(item => item.generationStatus === 'GENERATED').length, 4,
-      'one invalid creative package must retain the other four expensive results');
-    assert.equal(partialPackages[2].generationStatus, 'FALLBACK');
-    global.fetch = async () => ({ ok: true, json: async () => ({ output_text: 'not json' }) });
-    const fallbackInput = candidates.slice(0, 2);
-    const fallback = await new OpenAiClipJudgeService().judgeCandidates(fallbackInput);
-    assert.ok(fallback.every(({ judgeSource }) => judgeSource === 'HEURISTIC_FALLBACK'));
-    assert.ok(fallback.every(({ generationStatus }) => generationStatus === 'FALLBACK'));
-    assert.ok(fallback.every(({ fallbackReason }) =>
-      fallbackReason.startsWith('MALFORMED_RESPONSE_FAILURE:')));
-    assert.ok(fallback.every(({ bestHook, alternateHooks }) =>
-       bestHook && !bestHook.endsWith('...') && alternateHooks.length === 2));
-    assert.ok(fallback.every(({ bestHook }) => !/The key insight/iu.test(bestHook)));
-    assert.ok(fallback.every((candidate) => candidate.title && candidate.synopsis &&
-      candidate.caption && candidate.cta && candidate.selectedHookStrategy &&
-      candidate.hooks.length === 3 && candidate.hashtags.length === 5 &&
-      candidate.synopsis.split(/\n\n/u).length === 3));
-    assert.deepEqual(fallback.map(({ heuristicScore }) => heuristicScore),
-      fallbackInput.map(({ heuristicScore }) => heuristicScore));
-    let unavailableAttempts = 0;
-    const retryDelays = [];
-    global.setTimeout = (callback, delay) => {
-      retryDelays.push(delay);
-      callback();
-      return 0;
-    };
-    global.fetch = async () => {
-      unavailableAttempts += 1;
-      return { ok: false, status: 503, text: async () => 'unavailable' };
-    };
-    const providerFallback = await new OpenAiClipJudgeService().judgeCandidates(fallbackInput);
-    assert.ok(providerFallback.every(({ fallbackReason }) =>
-      fallbackReason.startsWith('PROVIDER_5XX_FAILURE:')));
-    assert.equal(unavailableAttempts, 4, 'at most two bounded attempts are made per package');
-    assert.equal(retryDelays.length, 2, 'each package receives only one transient retry');
-    assert.ok(retryDelays.every(delay => delay >= 1000 && delay <= 1750),
-      'retry delay uses one-second exponential base plus bounded jitter');
-    global.setTimeout = originalSetTimeout;
-    global.fetch = async (_url, options) => ({ ok: true, json: async () => ({
-      output_text: JSON.stringify({ candidates: JSON.parse(JSON.parse(options.body).input).map(() => ({
-        ...judgeScore(),
-        hookCandidates: judgeScore().hookCandidates.map((hook, index) => index
-          ? hook
-          : { ...hook, hook: 'This practical lesson guarantees a 900 percent result.' })
-      })) })
-    }) });
-    const copiedOpeningFallback = await new OpenAiClipJudgeService()
-      .judgeCandidates(fallbackInput);
-    assert.ok(copiedOpeningFallback.every(({ fallbackReason }) =>
-      fallbackReason.includes('unsupported number')));
-    const timeoutFallback = await new OpenAiClipJudgeService({
-      providerName: 'test-provider',
-      modelName: 'test-model',
-      isConfigured: () => true,
-      async generateStructured() {
-        throw new LlmProviderError('TIMEOUT_FAILURE', 'Structured generation timed out');
-      }
-    }).judgeCandidates(fallbackInput);
-    assert.ok(timeoutFallback.every(({ fallbackReason }) =>
-      fallbackReason.startsWith('TIMEOUT_FAILURE:')));
-    const configFallback = await new OpenAiClipJudgeService({
-      providerName: 'test-provider',
-      modelName: 'test-model',
-      isConfigured: () => false
-    }).judgeCandidates(fallbackInput);
-    assert.ok(configFallback.every(({ fallbackReason }) =>
-      fallbackReason.startsWith('CONFIGURATION_FAILURE:')));
-    const topicInputs = [
-      {
-        ...fallbackInput[0], rangeKey: 'solar', topic: 'Solar panel maintenance',
-        transcriptText: 'Dust blocks sunlight from reaching solar panels. Cleaning the panels monthly restored 12 percent of their output.'
-      },
-      {
-        ...fallbackInput[1], rangeKey: 'bread', topic: 'Sourdough fermentation',
-        transcriptText: 'Cold dough ferments more slowly overnight. The longer rest gives sourdough a deeper flavor before baking.'
-      }
-    ];
-    const topicFallback = await new OpenAiClipJudgeService({
-      providerName: 'unconfigured',
-      modelName: 'unconfigured',
-      isConfigured: () => false
-    }).judgeCandidates(topicInputs);
-    assert.notEqual(topicFallback[0].bestHook, topicFallback[1].bestHook);
-    assert.match(topicFallback[0].synopsis.toLowerCase(), /panel|solar|output|sunlight/);
-    assert.match(topicFallback[1].synopsis.toLowerCase(), /dough|sourdough|ferment|flavor/);
-    assert.ok(topicFallback[0].bestHook.toLowerCase().includes('panel') ||
-      topicFallback[0].bestHook.toLowerCase().includes('output'));
-    assert.ok(topicFallback[1].bestHook.toLowerCase().includes('dough') ||
-      topicFallback[1].bestHook.toLowerCase().includes('sourdough'));
-    assert.ok(normalizedHookSimilarity(
-      topicFallback[0].bestHook, topicFallback[1].bestHook) < 0.72);
-    const firstFingerprint = buildContentFingerprint(fallbackInput[0]);
-    assert.equal(buildContentFingerprint(fallbackInput[0]), firstFingerprint);
-    assert.equal(canReuseGeneratedContent(fallbackInput[0], {
-      generationStatus: 'GENERATED',
-      bestHook: 'A complete generated hook.',
-      alternateHooks: ['One complete hook.', 'Another complete hook.'],
-      hooks: [
-        { text: 'A complete generated hook.', style: 'strong claim', score: 90 },
-        { text: 'One complete hook.', style: 'question', score: 80 },
-        { text: 'Another complete hook.', style: 'curiosity', score: 70 }
-      ],
-      selectedHookStrategy: 'strong claim',
-      title: 'A complete title',
-      synopsis: 'The practical lesson establishes the clip context.\n\nThe idea develops into a measurable result.\n\nThe result makes this practical lesson useful.',
-      caption: 'A distinct caption.',
-      hashtags: ['#First', '#Second', '#Third', '#Fourth', '#Fifth'],
-      cta: '',
-      topic: 'Complete topic',
-      contentType: 'Educational insight',
-      whySelected: 'It is complete.',
-      provider: 'test',
-      model: 'test-model',
-      creativeCandidates: {
-        hooks: Array.from({ length: 10 }, (_, index) => ({ hook: `Hook ${index}.` })),
-        captions: ['One.', 'Two.', 'Three.'], titles: ['One', 'Two', 'Three'],
-        hashtags: Array.from({ length: 15 }, (_, index) => `#Tag${index}`),
-        synopses: ['One. Two.', 'Three. Four.']
-      },
-      contentFingerprint: firstFingerprint,
-      promptVersion: CLIP_CONTENT_PROMPT_VERSION
-    }), true);
-    assert.equal(canReuseGeneratedContent(fallbackInput[0], {
-      generationStatus: 'FALLBACK',
-      bestHook: 'A complete fallback hook.',
-      alternateHooks: ['One complete hook.', 'Another complete hook.'],
-      hooks: [
-        { text: 'A complete fallback hook.', style: 'strong claim', score: 90 },
-        { text: 'One complete hook.', style: 'question', score: 80 },
-        { text: 'Another complete hook.', style: 'curiosity', score: 70 }
-      ],
-      selectedHookStrategy: 'strong claim',
-      title: 'A complete title',
-      synopsis: 'The practical lesson establishes the clip context.\n\nThe idea develops into a measurable result.\n\nThe result makes this practical lesson useful.',
-      caption: 'A distinct caption.',
-      hashtags: ['#First', '#Second', '#Third', '#Fourth', '#Fifth'],
-      cta: '',
-      topic: 'Complete topic',
-      contentType: 'Educational insight',
-      whySelected: 'It is complete.',
-      provider: 'test',
-      model: 'test-model',
-      contentFingerprint: firstFingerprint,
-      promptVersion: CLIP_CONTENT_PROMPT_VERSION
-    }), false);
-    assert.notEqual(buildContentFingerprint({
-      ...fallbackInput[0], transcriptText: fallbackInput[0].transcriptText + ' New evidence.'
-    }), firstFingerprint);
-    assert.ok(normalizedHookSimilarity(
-      'Solar panels lose output when dust blocks sunlight.',
-      'Solar panels lose output because dust blocks the sunlight.') >= 0.72);
-  } finally {
-    global.fetch = originalFetch;
-    global.setTimeout = originalSetTimeout;
-    for (const [key, value] of Object.entries(savedEnvironment)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-    if (originalBatch === undefined) delete process.env.CLIP_JUDGE_BATCH_SIZE;
-    else process.env.CLIP_JUDGE_BATCH_SIZE = originalBatch;
-  }
+  const {deterministicCreative}=require('../dist/modules/content-intelligence/creative-package.service');
+  const {performanceContext,createPerformanceTelemetry}=require('../dist/modules/processing/performance-telemetry');
+  const fixture=require('./fixtures/content-intelligence.cjs')[0];
+  const transcript=fixture.turns.map(t=>t[1]).join(' ');
+  let calls=0;
+  const router={isAnyConfigured:()=>true,async generate(input){calls++;
+    const supplied=JSON.parse(input.request.userPrompt);
+    assert(!JSON.stringify(supplied).includes('apiKey'));
+    const data=input.role==='clipUnderstanding'?{}:input.role==='critic'?{supported:true,failures:[]}:deterministicCreative(supplied.evidence);
+    return{data,metadata:{role:input.role,model:'configured-test-model',provider:'test',cacheHit:false,attempts:[]}};
+  }};
+  const input=candidates.slice(0,2).map((c,i)=>({...c,videoId:'candidate-shared-test-'+i,transcriptText:transcript,clipUnderstanding:undefined}));
+  await performanceContext.run(createPerformanceTelemetry('ONLINE'),async()=>{
+    const judge=new OpenAiClipJudgeService(router);
+    const judged=await judge.judgeCandidates(input);
+    const previous=calls;await judge.judgeCandidates(input);assert.equal(calls,previous,'shared package cache reused');
+    assert(judged.every(c=>c.generationStatus==='GENERATED'));
+    assert(judged.every(c=>c.bestHook && c.synopsis && c.caption && c.hashtags.length && c.hooks.length>=3));
+    assert(judged.every(c=>c.sourceHookScore===c.hookScore));
+    assert.deepEqual(judged.map(c=>c.heuristicScore),input.map(c=>c.heuristicScore));
+    assert(judged.every(c=>c.creativeCandidates.sharedPackage.quality.passed));
+    const distinct=ensureSameVideoHookDiversity(judged.map((c,i)=>({...c,overallScore:90-i,reject:false})));
+    assert.notEqual(distinct[0].bestHook,distinct[1].bestHook,'same-video selection uses distinct shared recommendations');
+    distinct.forEach(c=>{
+      const p=c.creativeCandidates.sharedPackage;
+      assert.equal(c.bestHook,p.selectedHook);
+      assert.equal(p.hooks.filter(h=>h.recommended).length,1);
+      assert.equal(p.hooks.find(h=>h.recommended).text,p.selectedHook);
+      assert.deepEqual(p.captions,judged[0].creativeCandidates.sharedPackage.captions,'diversity preserves post copy');
+    });
+    const unavailable=new OpenAiClipJudgeService({isAnyConfigured:()=>true,generate:async()=>{throw Error('unavailable');}});
+    const fallback=await unavailable.judgeCandidates(input.map(c=>({...c,videoId:c.videoId+'-offline'})));
+    assert(fallback.every(c=>c.generationStatus==='FALLBACK' && c.fallbackUsed && c.bestHook && c.synopsis));
+    assert(fallback.every(c=>c.creativeCandidates.sharedPackage.internal.routes.length===0));
+    assert(fallback.every(c=>c.creativeCandidates.sharedPackage.hooks.every(h=>h.source==='LOCAL')),'unavailable provider uses grounded local hooks');
+  });
 }
 
 async function testSelectionAndApi(candidates) {
@@ -443,9 +251,9 @@ async function testSelectionAndApi(candidates) {
   assert.deepEqual(selectDiversifiedCandidates(strong, 5).map(({ id }) => id), ['one', 'two']);
   // Legacy `count` is accepted as requestedClipCount; duration fields are ignored.
   assert.deepEqual(parseClipSelection({ count: 5, minDuration: 30, maxDuration: 45 }),
-    { requestedClipCount: 5, outputStyle: null });
+    { requestedClipCount: 5, outputStyle: null, generation:null, regenerate:false });
   assert.deepEqual(parseClipSelection({ requestedClipCount: 3, outputStyle: 'AI_EDITED' }),
-    { requestedClipCount: 3, outputStyle: 'AI_EDITED' });
+    { requestedClipCount: 3, outputStyle: 'AI_EDITED', generation:null, regenerate:false });
   for (const invalid of [null, {}, { requestedClipCount: 2, outputStyle: 'FANCY' }])
     assert.throws(() => parseClipSelection(invalid));
   const stored = candidates.slice(0, 10).map((candidate, index) => ({
@@ -477,7 +285,7 @@ async function testSelectionAndApi(candidates) {
   }, {}, {}, {}));
   const recommendation = await recommendationController.getClipRecommendations('long-video');
   assert.equal(recommendation.recommendedClipCount, 5);
-  assert.equal(recommendation.maximumClipCount, 12);
+  assert.equal(recommendation.maximumClipCount, 20);
   assert.equal(recommendation.primaryCount, 5);
   assert.equal(recommendation.secondaryCount, 3);
   assert.deepEqual(recommendation.candidates.map(({ recommendationTier }) => recommendationTier),
@@ -490,8 +298,8 @@ async function testSelectionAndApi(candidates) {
     clipCandidate: { findMany: async () => [] }
   }, {}, {}, {});
   await assert.rejects(() => durationLimitedService.selectClips('short-video', {
-    requestedClipCount: 7, outputStyle: 'NORMAL'
-  }), /at most 6 clips/);
+    requestedClipCount: 9, outputStyle: 'NORMAL'
+  }), /at most 8 clips/);
   return { top5, top10 };
 }
 
@@ -499,7 +307,8 @@ async function testExportRetryIsIdempotent(candidates) {
   const persisted = { id: 'existing-clip', sizeBytes: 1000n, processingType: 'NORMAL_CLIPS',
     aspectRatio: '9:16', width: 1080, height: 1920 };
   let lookupCount = 0;
-  const prisma = { generatedClip: { findUnique: async (query) => {
+  const prisma = { video:{findUniqueOrThrow:async()=>({transcript:null})},generatedClip: { findUnique: async (query) => {
+    if(query.where.objectKey)return null;
     lookupCount += 1;
     assert.deepEqual(query.where.videoId_rangeKey_variantKey, { videoId: 'long-video',
       rangeKey: candidates[0].rangeKey, variantKey: 'NORMAL_CLIPS:TIKTOK' });
@@ -516,9 +325,16 @@ async function testExportRetryIsIdempotent(candidates) {
 }
 
 async function main() {
+  const persisted={sizeBytes:1n,createdAt:new Date(0),creativeCandidates:{sharedPackage:{selectedHook:'Grounded framing',internal:{routes:[{model:'private-model',provider:'private-provider'}]}}},model:'private-model'};
+  const visible=publicVideoMetadata(persisted);
+  assert.equal(visible.sizeBytes,1n);assert.equal(visible.createdAt,persisted.createdAt);
+  assert.equal(visible.creativeCandidates.sharedPackage.selectedHook,'Grounded framing');
+  assert.equal(visible.model,undefined);assert.equal(visible.creativeCandidates.sharedPackage.internal,undefined);
+  assert(persisted.model && persisted.creativeCandidates.sharedPackage.internal,'stored diagnostics remain intact');
   testWeightedScoreMath();
   testRecommendationPolicy();
   const candidates = await testGenerationAndRanking();
+  await testJudgeFallbackAndStrictRequest(candidates);
   // Legacy OpenAI response-shape coverage is superseded by test-online-resilience.cjs,
   // which exercises the compact ONLINE package and the current cloud allowlist.
   const { top5, top10 } = await testSelectionAndApi(candidates);

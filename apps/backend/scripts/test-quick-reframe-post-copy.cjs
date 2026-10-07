@@ -26,18 +26,18 @@ async function run() {
   assert.equal(local.generatedCaptions.length, 5);
   assert.equal(new Set(local.generatedCaptions.map(v => v.text)).size, 5);
   assert.equal(local.generatedCaptions.filter(c => c.recommended).length, 1);
-  assert.deepEqual(local.generatedHashtagSets.map(s => s.label), ['Focused', 'Broad', 'Niche']);
+  assert.deepEqual(local.generatedHashtagSets.map(s => s.label), ['Focused', 'Niche', 'Broad']);
   assert.ok(local.generatedHashtagSets.every(s => s.hashtags.length <= 8));
   const fallback = await generatePostCopy(router, context, true);
-  assert.equal(requests, 1); assert.equal(fallback.generatedCaptions.length, 5); assert.match(fallback.warnings.join(' '), /unavailable/);
+  assert.equal(requests, 3, 'one understanding call and at most two creative calls'); assert.equal(fallback.generatedCaptions.length, 5); assert.match(fallback.warnings.join(' '), /unavailable/);
   const noVideo = await generatePostCopy(router, { ...context, transcript: '', visibleText: '', subtitleText: '' }, true);
-  assert.equal(noVideo.generatedCaptions.length, 0); assert.equal(requests, 1, 'original caption alone must never drive copy');
+  assert.equal(noVideo.generatedCaptions.length, 0); assert.equal(requests, 3, 'original caption alone must never drive copy');
   let sent;
   const aiRouter = { generate: async ({ request }) => { sent = JSON.parse(request.userPrompt); return { data: {
     captions: [{ style: 'Bold', text: 'Healthy soil grows 500 plants overnight!' }],
     hashtagSets: [{ label: 'Focused', hashtags: ['#Gardening', '#soil', '#plants', '#Crypto', '#Viral'] }], understanding: local.understanding } }; } };
   const rewritten = await generatePostCopy(aiRouter, context, true, 'Stronger opening');
-  assert.equal(sent.rewriteOriginal, 'Stronger opening'); assert.ok(!('sourcePostUrl' in sent)); assert.ok(!('sourceAuthor' in sent));
+  assert.ok(sent.direction.includes('Stronger opening')); assert.ok(!('sourcePostUrl' in sent)); assert.ok(!('sourceAuthor' in sent));
   assert.ok(!JSON.stringify(sent).includes('SECRET'));
   assert.ok(!rewritten.generatedCaptions.some(c => /500/u.test(c.text)));
   assert.ok(!rewritten.generatedHashtagSets.some(s => s.hashtags.includes('#Crypto') || s.hashtags.includes('#Viral')));

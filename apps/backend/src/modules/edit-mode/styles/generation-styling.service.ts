@@ -22,6 +22,7 @@ import { compileCreativeStyle, type HookOption } from './creative-style-commands
 import type { ResolvedCreativeStyle } from './creative-style-resolver';
 import { readGenerationSettings } from '../../videos/clip-selection.service';
 import { processingTypeForOutputStyle } from '../../processing/clip-selection-policy';
+import type { CreativePackage } from '../../content-intelligence/creative-package.service';
 
 export type GenerationStyleStatus = 'BASE_READY' | 'STYLE_APPLYING' | 'STYLE_READY' | 'STYLE_FAILED' |
   'EXPORT_READY' | 'SKIPPED' | 'STYLING' | 'RENDERING' | 'READY' | 'FAILED';
@@ -276,13 +277,16 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
         return save({ status: 'SKIPPED', error: 'This clip was edited after styling; your edits were kept.' });
       }
       const { context } = await this.chat.loadContext(editProjectId, 'apply generation style', {});
-      const hookOptions: HookOption[] = [
+      const stored = await this.prisma.generatedClip.findUnique({where:{id:clip.id},select:{contentPackaging:true}});
+      const shared = record(stored?.contentPackaging).sharedPackage as CreativePackage | undefined;
+      const hookOptions: HookOption[] = shared ? shared.hooks.map(h => ({text:h.text,style:h.category})) : [
         ...(Array.isArray(clip.candidate?.hooks) ? (clip.candidate!.hooks as Array<Record<string, unknown>>)
           .map((hook) => ({ text: String(hook.text ?? ''), style: String(hook.style ?? '') })) : []),
         ...(clip.candidate?.bestHook ? [{ text: clip.candidate.bestHook, style: null }] : []),
         ...(clip.candidate?.hookCandidate ? [{ text: clip.candidate.hookCandidate, style: null }] : [])
       ];
       const compiled = compileCreativeStyle(resolved, context, { hookOptions,
+        supportingLine: shared?.supportingLine,
         hasWordTimings: context.project.hasWordTimings });
       const styleResolveMs = Date.now() - styleResolveStartedAt;
       project = await this.prisma.editProject.findUniqueOrThrow({ where: { id: editProjectId } });

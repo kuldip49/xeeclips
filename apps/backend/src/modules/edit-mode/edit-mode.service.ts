@@ -358,6 +358,16 @@ export class EditModeService {
     return serialize(project);
   }
 
+  async saveCreativeSuggestions(id:string, revision:number, creativePackage:unknown, hooksOnly=true) {
+    const project=await this.prisma.editProject.findUniqueOrThrow({where:{id},select:{settings:true}});
+    const previous=settingsRecord(settingsRecord(project.settings).contentIntelligence), incoming=settingsRecord(creativePackage);
+    const saved=hooksOnly ? {...previous,version:incoming.version,understanding:incoming.understanding,hooks:incoming.hooks,selectedHook:incoming.selectedHook,
+      status:incoming.status,contextRevision:revision} : {...incoming,contextRevision:revision,copyRevision:revision};
+    const result=await this.prisma.editProject.updateMany({where:{id,revision,settings:{equals:project.settings as Prisma.InputJsonValue}},data:{settings:
+      {...settingsRecord(project.settings),contentIntelligence:saved} as Prisma.InputJsonValue}});
+    if (!result.count) throw new ConflictException('Your edits changed. Refresh before generating suggestions.');
+  }
+
   async update(id: string, input: { revision?: unknown; name?: unknown; settings?: unknown }) {
     const expectedRevision = parseRevision(input.revision);
     return serialize(await this.prisma.$transaction(async (tx) => {
