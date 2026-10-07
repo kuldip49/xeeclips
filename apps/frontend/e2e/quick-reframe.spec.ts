@@ -1,4 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+test.beforeEach(async ({ page }) => {
+  await page.route('**/auth/session', route => route.fulfill({ json: { id: 'crop-qa', email: 'crop@example.com', displayName: 'Crop QA', role: 'ADMIN', creditBalance: 5, creditsConsumed: 0, aiProcessingConsentAt: null } }));
+});
 /** Quick Reframe V3 crop step (mocked API): a fully manual crop, no AI before Done Cropping. */
 const plan={version:1,aspect:'SOURCE',crop:{x:0,y:0,w:1,h:1},framing:'CROP',cleanup:[],grid:'THIRDS',hook:{enabled:false,text:'',y:.24},captions:{enabled:false,replaceExisting:false,font:'Inter, sans-serif',size:36,y:.57,color:'#FFFFFF',cues:[]},color:{exposure:0,contrast:1,saturation:1,temperature:0,sharpness:0,denoise:false},audio:{muted:false,volume:1},resolution:1080,reasons:[]};
 const base={id:'responsive-fixture',editProjectId:'project-fixture',revision:4,name:'authorized-video.mp4',duration:30,width:720,height:1280,originalUrl:'/fixture.mp4',sourceUrl:'/fixture.mp4',sourceWidth:720,sourceHeight:1280,

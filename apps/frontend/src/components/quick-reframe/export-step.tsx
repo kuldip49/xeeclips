@@ -6,6 +6,7 @@ import { ArrowLeft, Check, Download, History, Loader2, Play } from 'lucide-react
 import { Button } from '@/components/ui/button';
 import { isProcessing, mediaUrl, renderReframe, type ReframeSession } from '@/lib/quick-reframe-api';
 import { cn } from '@/lib/utils';
+import { PostCopyPanel } from './post-copy-panel';
 
 const clock = (t: number) => `${Math.floor(t / 60)}:${String(Math.round(t % 60)).padStart(2, '0')}`;
 const gcd = (a: number, b: number): number => b ? gcd(b, a % b) : a;
@@ -69,5 +70,6 @@ export function ExportStep({ session, onSession, onBack, onError }: {
       {noCredits && <p className='text-sm text-soft'>You've used your available generations.</p>}
       <Button type='button' variant='ghost' className='justify-start' disabled={processing} onClick={onBack}><ArrowLeft size={15} />Back to editing</Button>
     </aside>
+    <div className='min-w-0 md:col-span-2'><PostCopyPanel session={session} onSession={onSession} busy={busy} /></div>
   </div>;
 }

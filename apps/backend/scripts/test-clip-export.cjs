@@ -26,7 +26,9 @@ async function testOutputVariants(source, directory) {
   let downloads = 0;
   const prisma = {
     generatedClip: {
-      findUnique: async ({ where }) => rows.get(keyOf(where.videoId_rangeKey_variantKey)) ?? null,
+      findUnique: async ({ where }) => where.objectKey
+        ? [...rows.values()].find(row => row.objectKey === where.objectKey) ?? null
+        : rows.get(keyOf(where.videoId_rangeKey_variantKey)) ?? null,
       delete: async ({ where }) => {
         for (const [key, row] of rows) if (row.id === where.id) rows.delete(key);
       },

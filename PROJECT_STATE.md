@@ -4,6 +4,12 @@ Last updated: 2026-10-07
 
 ## Milestones
 
+- Quick Reframe social copy (2026-10-07): public Instagram/X post context retained; Caption & Hashtags
+  in StyleOne, Manual and Export; five grounded caption styles, original rewrite, three editable
+  hashtag sets, independent persisted copy/version and History copy actions. Account + per-request
+  OpenAI consent, bounded text-only context, local fallback; no AI during manual crop, no social copy
+  in subtitles or rendered media. Details and verification: `docs/quick-reframe-post-copy.md`.
+
 - Multi-user accounts and credits (2026-10-07): secure database-backed sessions, bcrypt passwords,
   per-user API/media/History/editor/import ownership, private MinIO, atomic credit reservations and
   ledger, sole owner admin, dashboard/users/confirmed credit changes, suspension and audit. Deployed

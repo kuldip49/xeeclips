@@ -3,6 +3,10 @@
 Implementation and acceptance report. V2 (2026-10-07) introduced crop-first; V3 (2026-10-07) makes the crop
 stage 100% manual and moves every AI step after the editing-mode choice.
 
+Social post caption/hashtag import and the separate Caption & Hashtags tool are described in
+[Quick Reframe social post copy](quick-reframe-post-copy.md). These are metadata tools and do not
+alter the manual crop, video subtitle layer or rendering pipeline.
+
 ## The guided sequence
 
 **Import → 1. Crop (manual) → Done Cropping → 2. Choose Style → 3. Edit (StyleOne or Manual) → 4. Export → History.**

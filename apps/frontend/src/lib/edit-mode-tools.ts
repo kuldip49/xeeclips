@@ -8,7 +8,7 @@
  * control that silently does nothing.
  */
 export type EditToolId = 'MEDIA' | 'TEMPLATES' | 'AUDIO' | 'TEXT' | 'CAPTIONS' | 'OVERLAY'
-  | 'CROP' | 'EFFECTS' | 'FILTERS' | 'ADJUST' | 'HOOKS';
+  | 'CROP' | 'EFFECTS' | 'FILTERS' | 'ADJUST' | 'HOOKS' | 'POST_COPY';
 
 export type EditToolDefinition = {
   id: EditToolId;
@@ -21,11 +21,12 @@ export type EditToolDefinition = {
 
 export const EDIT_TOOLS: EditToolDefinition[] = [
   { id: 'HOOKS', label: 'Hooks', quickReframeOnly: true },
+  { id: 'POST_COPY', label: 'Caption & Hashtags', quickReframeOnly: true },
   { id: 'MEDIA', label: 'Media' },
   { id: 'TEMPLATES', label: 'Templates' },
   { id: 'AUDIO', label: 'Audio' },
   { id: 'TEXT', label: 'Text' },
-  { id: 'CAPTIONS', label: 'Captions' },
+  { id: 'CAPTIONS', label: 'Video Captions' },
   { id: 'CROP', label: 'Crop' },
   { id: 'OVERLAY', label: 'Overlay' },
   { id: 'EFFECTS', label: 'Effects', pending: 'Transitions and effects are not implemented yet. Crop, rotation, flip, scale and speed are in the Inspector.' },

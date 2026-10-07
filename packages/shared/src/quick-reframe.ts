@@ -36,6 +36,19 @@ export type ReframeHookCategory = 'BOLD' | 'CURIOSITY' | 'QUESTION' | 'CONTRARIA
 export type ReframeHook = { text: string; category: ReframeHookCategory; score: number; recommended: boolean;
   source: 'OPENAI' | 'LOCAL' };
 export type ReframeEditPath = 'STYLEONE' | 'MANUAL';
+/** Social post copy is metadata, never a timeline element or burned-in subtitle. */
+export type ReframeSocialSource = { sourcePostText: string; sourceHashtags: string[];
+  sourcePlatform: 'instagram' | 'x'; sourcePostUrl: string; sourceAuthor?: string; sourcePostTitle?: string };
+export type ReframeSocialCaption = { style: 'Concise' | 'Engaging' | 'Professional' | 'Conversational' | 'Bold';
+  text: string; recommended: boolean };
+export type ReframeHashtagSet = { label: 'Focused' | 'Broad' | 'Niche'; hashtags: string[] };
+export type ReframeContentUnderstanding = { topic: string; mainMessage: string; audience: string; tone: string;
+  keyPoints: string[]; importantEntities: string[]; callToAction: string; existingCaptionIntent: string };
+export type ReframePostCopy = { version: number; generatedCaptions: ReframeSocialCaption[];
+  generatedHashtagSets: ReframeHashtagSet[]; selectedCaption: string; selectedHashtags: string[];
+  understanding?: ReframeContentUnderstanding; editingDirection?: string; purpose?: string;
+  /** Media revision used to generate these suggestions; copy edits do not invalidate video exports. */
+  contextRevision?: number };
 export type ReframeExport = { id: string; url: string; revision: number | null; width: number | null;
   height: number | null; duration: number | null; sizeBytes: number | null; createdAt: string; current: boolean };
 export type ReframeSession = { id: string; editProjectId: string; revision: number; name: string; duration: number;
@@ -50,6 +63,7 @@ export type ReframeSession = { id: string; editProjectId: string; revision: numb
   exports: ReframeExport[];
   status: string; progress: number; message: string; error: string | null;
   analysis: ReframeAnalysis | null; plan: ReframePlan | null; hooks: ReframeHook[];
+  sourceContext?: ReframeSocialSource | null; postCopy?: ReframePostCopy;
   /** Exact export canvases for each quality (null until the crop is confirmed). */
   outputs: { 720: { width: number; height: number }; 1080: { width: number; height: number } } | null;
   hasAudio: boolean; hasTranscript: boolean; captionCount: number; createdAt: string };

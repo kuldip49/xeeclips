@@ -666,6 +666,10 @@ model QuickReframe {
   undo Json @default("[]")
   redo Json @default("[]")
   externalAiAuthorized Boolean @default(false)
+  /// Public social context only. Provider/debug metadata is never persisted here.
+  sourceContext Json?
+  /// Social copy and its own edit version; independent of canonical media revisions.
+  postCopy Json @default("{}")
   /// STYLEONE | MANUAL, chosen only after the crop is confirmed.
   editPath String?
   /// The source preparation (crop, tracking, cleanup, denoise) baked into the SOURCE asset.

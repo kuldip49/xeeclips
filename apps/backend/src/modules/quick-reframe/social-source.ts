@@ -7,6 +7,7 @@ import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import { Transform } from 'stream';
 import type { LookupFunction } from 'net';
+import type { ReframeSocialSource } from '@ai-content-platform/shared';
 const exec=promisify(execFile);
 export const MAX_REFRAME_BYTES=1024*1024*1024;
 export function socialSource(value: unknown) {
@@ -27,6 +28,20 @@ function publicAddress(ip:string) {
 const allowedMediaHost=(host:string,platform:string)=>platform==='instagram' ? /(?:^|\.)(?:cdninstagram\.com|fbcdn\.net)$/u.test(host) : /(?:^|\.)twimg\.com$/u.test(host);
 export function pinnedLookup(address: string): LookupFunction {
   return (_host,options,callback)=>callback(null,options.all ? [{address,family:4}] : address,4);
+}
+/** Whitelist public post context from the existing retriever. Missing/malformed copy never fails media import. */
+export function socialPostContext(meta: unknown, source: ReturnType<typeof socialSource>): ReframeSocialSource {
+  const data = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta as Record<string, unknown> : {};
+  const clean = (value: unknown, limit: number) => typeof value === 'string'
+    ? value.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/gu, '').trim().slice(0, limit) : '';
+  const text = clean(data.description, 6000);
+  const tags = [...(text.match(/#[\p{L}\p{N}_]+/gu) ?? []),
+    ...(Array.isArray(data.tags) ? data.tags.filter((t): t is string => typeof t === 'string').map(t => `#${t.replace(/^#+/u, '')}`) : [])];
+  const seen = new Set<string>();
+  const hashtags = tags.filter(t => /^#[\p{L}\p{N}_]{1,60}$/u.test(t) && !seen.has(t.toLowerCase()) && !!seen.add(t.toLowerCase())).slice(0, 30);
+  return { sourcePlatform: source.platform, sourcePostUrl: source.url, sourcePostText: text, sourceHashtags: hashtags,
+    ...(clean(data.uploader ?? data.channel, 120) ? { sourceAuthor: clean(data.uploader ?? data.channel, 120) } : {}),
+    ...(clean(data.title, 300) ? { sourcePostTitle: clean(data.title, 300) } : {}) };
 }
 export async function downloadSocial(value:unknown,path:string,signal:AbortSignal) {
   signal=AbortSignal.any([signal,AbortSignal.timeout(180000)]);
@@ -53,5 +68,5 @@ export async function downloadSocial(value:unknown,path:string,signal:AbortSigna
   };
   const response=await fetchStream(meta.url);let bytes=0;
   const bound=new Transform({transform(chunk,_encoding,cb){bytes+=chunk.length;cb(bytes>MAX_REFRAME_BYTES?new Error('Video exceeds the file limit'):null,chunk);}});
-  await pipeline(response,bound,createWriteStream(path),{signal});return source;
+  await pipeline(response,bound,createWriteStream(path),{signal});return socialPostContext(meta, source);
 }

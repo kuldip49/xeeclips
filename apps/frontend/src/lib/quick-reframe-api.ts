@@ -41,6 +41,8 @@ export const applyStyleOne=(s:ReframeSession,options:{hookText?:string;captions?
 export const chooseManual=(s:ReframeSession,removeStyleOne=false)=>reframeRequest(`/${s.id}/path`,'POST',{revision:s.revision,path:'MANUAL',removeStyleOne});
 /** `exclude` (Regenerate): hooks already shown, which are never suggested again. */
 export const requestHooks=(id:string,externalAiAuthorized:boolean,exclude:string[]=[])=>reframeRequest<{session:ReframeSession;warnings:string[]}>(`/${id}/hooks`,'POST',{externalAiAuthorized,exclude});
+export const generatePostCopy=(s:ReframeSession,options:{externalAiAuthorized:boolean;rewrite?:string;editingDirection?:string;purpose?:string;hashtagsOnly?:boolean})=>reframeRequest<{session:ReframeSession;warnings:string[]}>(`/${s.id}/post-copy`,'POST',{revision:s.revision,version:s.postCopy?.version??0,...options});
+export const savePostCopy=(s:ReframeSession,selectedCaption:string,selectedHashtags:string[],captionStyle?:string)=>reframeRequest(`/${s.id}/post-copy`,'PUT',{revision:s.revision,version:s.postCopy?.version??0,selectedCaption,selectedHashtags,...(captionStyle?{captionStyle}:{})});
 export const renderReframe=(s:ReframeSession,kind:'preview'|'export',resolution:720|1080=1080)=>reframeRequest(`/${s.id}/${kind}`,'POST',{revision:s.revision,resolution});
 export const reframeForProject=(editProjectId:string)=>reframeRequest(`/project/${encodeURIComponent(editProjectId)}`);
 export const HOOK_CATEGORY_LABEL:Record<ReframeHookCategory,string>={BOLD:'Bold',CURIOSITY:'Curiosity',QUESTION:'Question',CONTRARIAN:'Contrarian',EMOTIONAL:'Emotional',PROFESSIONAL:'Professional'};
@@ -54,4 +56,4 @@ export function defaultStep(s:ReframeSession):ReframeStep{
   return 'edit';
 }
 export const quickReframeUrl=(id:string,step?:ReframeStep)=>`/quick-reframe?video=${encodeURIComponent(id)}${step?`&step=${step}`:''}`;
-export const editorUrl=(s:Pick<ReframeSession,'editProjectId'>,panel?:'hooks')=>`/edit-mode/${encodeURIComponent(s.editProjectId)}${panel?`?tool=${panel}`:''}`;
+export const editorUrl=(s:Pick<ReframeSession,'editProjectId'>,panel?:'hooks'|'post-copy')=>`/edit-mode/${encodeURIComponent(s.editProjectId)}${panel?`?tool=${panel}`:''}`;

@@ -33,6 +33,7 @@ import { EditTopBar } from './shell/edit-top-bar';
 import type { EditToolId } from '@/lib/edit-mode-tools';
 import { quickReframeUrl, type ReframeSession } from '@/lib/quick-reframe-api';
 import { QuickReframeHooksTool } from '@/components/quick-reframe/hooks-panel';
+import { PostCopyPanel } from '@/components/quick-reframe/post-copy-panel';
 import { StepIndicator } from '@/components/quick-reframe/step-indicator';
 
 /** Where a dragged timeline height is remembered (per browser, view state only). */
@@ -90,7 +91,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
   const typing = useTypingFlag();
   const viewport = useVisualViewport(isMobile);
   const [mobilePanel, setMobilePanel] = useState<MobilePanelId | null>(initialRightTab === 'AI' ? 'AI'
-    : quickReframe && initialTool === 'HOOKS' ? 'HOOKS' : null);
+    : quickReframe && (initialTool === 'HOOKS' || initialTool === 'POST_COPY') ? initialTool : null);
   // The colour clipboard. Pure view state: pasting is a normal typed command
   // that reads the SOURCE segment on the server, so a clipboard pointing at an
   // element that has since been deleted is refused rather than acted on.
@@ -570,6 +571,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
     onImportSource: (videoId) => run('import', () => importEditSource(project.id, project.revision, videoId)),
     onUploadAsset: (role, file) => void uploadLibraryAsset(role, file),
     onAddAsset: addAsset, onDeleteAsset: (asset) => void deleteLibraryAsset(asset),
+    postCopyPanel: reframe ? <PostCopyPanel session={{...reframe,revision:project.revision}} onSession={setReframe} busy={!!busy} /> : undefined,
     hooksPanel: reframe ? <QuickReframeHooksTool session={reframe} project={project} busy={!!busy}
       onSession={setReframe} onCommand={(command) => void applyCommand(command)}
       onCommands={(commands) => void applySequence(commands)}

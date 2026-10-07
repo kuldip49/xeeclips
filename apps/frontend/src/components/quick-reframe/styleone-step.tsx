@@ -8,6 +8,7 @@ import { getEditProject, runManualEditCommand, undoEdit } from '@/lib/edit-mode-
 import type { EditProject } from '@/lib/edit-mode-types';
 import { applyStyleOne, editorUrl, isProcessing, mediaUrl, renderReframe, type ReframeSession } from '@/lib/quick-reframe-api';
 import { SuggestedHooks, hookElementOf } from './hooks-panel';
+import { PostCopyPanel } from './post-copy-panel';
 
 /** The finished StyleOne video: rendered preview plus the quick changes the brief asks for. */
 export function StyleOneStep({ session, onSession, onStep, onError }: {
@@ -56,9 +57,10 @@ export function StyleOneStep({ session, onSession, onStep, onError }: {
       <div className='grid grid-cols-2 gap-2'>
         <Button type='button' variant='secondary' className='h-12' disabled={busy || processing} onClick={() => onStep('crop')}><Crop size={16} />Re-edit Crop</Button>
         <Button type='button' variant='secondary' className='h-12' disabled={busy || processing} onClick={() => setSheet('hook')}><Type size={16} />Change Hook</Button>
-        <Button type='button' variant='secondary' className='h-12' disabled={busy || processing} onClick={() => setSheet('captions')}><Captions size={16} />Adjust Captions</Button>
+        <Button type='button' variant='secondary' className='h-12' disabled={busy || processing} onClick={() => setSheet('captions')}><Captions size={16} />Video Captions</Button>
         <Button type='button' variant='secondary' className='h-12' asChild><Link href={editorUrl(session)}><SlidersHorizontal size={16} />Edit More</Link></Button>
       </div>
+      <PostCopyPanel session={session} onSession={onSession} busy={busy} />
       <Button type='button' size='lg' className='h-12' disabled={busy || processing} onClick={() => onStep('export')} data-testid='go-export'><Download size={16} />Export Video</Button>
       <button type='button' disabled={busy || processing} className='inline-flex items-center gap-1.5 justify-self-start text-xs text-muted-foreground hover:text-foreground disabled:opacity-40'
         onClick={() => void (async () => { setBusy(true); try { const undone = await undoEdit(session.editProjectId, session.revision); void undone; onStep('choose'); } catch (error) { onError(error instanceof Error ? error.message : 'Undo failed.'); } finally { setBusy(false); } })()}>
@@ -70,7 +72,7 @@ export function StyleOneStep({ session, onSession, onStep, onError }: {
         onApply={(text) => void restyle({ hookText: text, captions: captions.length ? 'KEEP' : 'OFF' })} />
       <p className='mt-3 text-[11px] text-muted-foreground'>StyleOne re-fits the new hook in its serif typography above the media window. Undo restores the previous one.</p>
     </BottomSheet>
-    <BottomSheet open={sheet === 'captions'} onClose={() => setSheet(null)} title='Captions'>
+    <BottomSheet open={sheet === 'captions'} onClose={() => setSheet(null)} title='Video Captions'>
       <div className='grid gap-3 text-sm'>
         {captions.length ? <>
           <p>{captions.length} synchronized caption{captions.length > 1 ? 's' : ''} in StyleOne&apos;s active-word style.</p>

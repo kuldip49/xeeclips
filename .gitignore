@@ -35,6 +35,7 @@ __pycache__/
 tmp/
 temp/
 storage/
+!apps/backend/src/modules/storage/
 uploads/
 clips/
 *.log

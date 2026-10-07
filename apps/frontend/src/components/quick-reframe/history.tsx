@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Download, Pencil, Share2, Trash2 } from 'lucide-react';
 import { editorUrl, mediaUrl, quickReframeUrl, reframeRequest, type ReframeSession } from '@/lib/quick-reframe-api';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { PostCopyButtons } from './post-copy-panel';
 
 const action = 'inline-flex min-h-11 items-center gap-2 rounded-xl border border-border px-3 text-xs hover:bg-tint';
 /** Exported Quick Reframe videos: preview, re-edit in the same state, export again, download, delete. */
@@ -30,7 +31,9 @@ export function QuickReframeHistory(){
           <Link className={action} href={quickReframeUrl(s.id,s.cropConfirmed&&s.editPath?'export':undefined)}><Share2 size={14}/>Export</Link>
           {latest&&<a className={action} href={`${mediaUrl(latest.url)}?download=1`} download><Download size={14}/>Download</a>}
           <button className={action} onClick={()=>setSelected(s)}><Trash2 size={14}/>Delete</button>
-        </div></div>
+        </div>
+        <PostCopyButtons caption={s.postCopy?.selectedCaption ?? ''} hashtags={s.postCopy?.selectedHashtags ?? []} />
+        </div>
     </article>;})}</div>
     <ConfirmDialog open={!!selected} title='Delete this Quick Reframe video?' description='This removes its exports, previews, the cropped copy and the uploaded original. Other videos are kept.' busy={busy} confirmLabel='Delete' busyLabel='Deleting…' onConfirm={()=>void remove()} onCancel={()=>setSelected(null)}/>
   </section>;

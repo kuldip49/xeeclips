@@ -10,6 +10,8 @@
     "prisma:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "test:resume": "npm run build && node scripts/test-processing-resume.cjs",
+    "test:quick-reframe-post-copy": "npm run build && node scripts/test-quick-reframe-post-copy.cjs",
+    "verify:quick-reframe-post-copy": "node scripts/verify-quick-reframe-post-copy.cjs",
     "test:clips": "npm run build && node scripts/test-clip-candidates.cjs && node scripts/test-clip-ui.cjs && node scripts/test-clip-export.cjs && node scripts/test-clip-selection-flow.cjs && node scripts/test-style-readiness.cjs",
     "test:clip-selection": "npm run build && node scripts/test-clip-selection-flow.cjs",
     "test:style-readiness": "npm run build && node scripts/test-style-readiness.cjs",

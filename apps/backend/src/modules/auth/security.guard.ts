@@ -38,7 +38,7 @@ export class SecurityGuard implements CanActivate {
       if (!identity.admin) throw new ForbiddenException('Administrator access required.');
       identity.adminView = path.startsWith('/admin');
     }
-    const submission = req.method === 'POST' && /clip-selection|\/export$|\/retry$|\/import|\/analyze$|\/hooks$|\/styleone$|\/agent\/run|\/chat\/plan|\/creative\/resolve|\/review|\/brief/.test(path);
+    const submission = req.method === 'POST' && /clip-selection|\/export$|\/retry$|\/import|\/analyze$|\/hooks$|\/post-copy$|\/styleone$|\/agent\/run|\/chat\/plan|\/creative\/resolve|\/review|\/brief/.test(path);
     if (submission) await this.limit('submit:' + user.id, 30, 60);
     // Avoid uploads/import downloads when the definitive current balance is already zero.
     if (user.role !== 'ADMIN' && user.creditBalance <= 0 && req.method === 'POST' &&
@@ -47,7 +47,8 @@ export class SecurityGuard implements CanActivate {
       Logger.warn('generation_blocked_no_credits', 'Security');
       throw new ForbiddenException({ code: 'NO_CREDITS', message: 'No generations remaining.' });
     }
-    const askAi = /\/agent\/run|\/chat\/(plan|apply)|\/review(\/propose)?$|\/brief/.test(path) || path.endsWith('/creative/resolve') && req.body?.useAi === true;
+    const askAi = /\/agent\/run|\/chat\/(plan|apply)|\/review(\/propose)?$|\/brief/.test(path) || path.endsWith('/creative/resolve') && req.body?.useAi === true
+      || /\/(post-copy|hooks)$/.test(path) && req.body?.externalAiAuthorized === true;
     if (askAi && !user.aiProcessingConsentAt) throw new ForbiddenException({ code: 'AI_CONSENT_REQUIRED', message: 'Allow AI processing in Settings first.' });
     return true;
   }

@@ -9,7 +9,7 @@ import { promisify } from 'util';
 import { mkdtemp, rm, stat, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, basename, extname } from 'path';
-import type { ReframeEditPath, ReframeExport, ReframeHook, ReframeSession } from '@ai-content-platform/shared';
+import type { ReframeEditPath, ReframeExport, ReframeHook, ReframeSession, ReframeSocialSource, ReframePostCopy } from '@ai-content-platform/shared';
 import { PrismaService } from '../database/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { EditModeService } from '../edit-mode/edit-mode.service';
@@ -20,12 +20,13 @@ import { probeMedia } from '../processing/media-probe';
 import { postAiServiceJson } from '../processing/ai-service-http';
 import { LlmRouterService } from '../processing/llm-router.service';
 import { sampleImageStats, type ImageStats } from '../editing/color-grade';
-import { analyzeRegions, defaultPlan, isIdentityPreparation, preparationOf, record, subtitleStateFor, validatePlan,
+import { analyzeRegions, defaultPlan, isIdentityPreparation, preparationOf, record, subtitleStateFor, validatePlan, contains, overlap,
   type ReframeAnalysis, type ReframeBox, type ReframePlan } from './quick-reframe-plan';
 import { preparationFingerprint, quickCleanRender, quickComposeRender, quickOutputCanvas, quickStyleOneCommands,
   QUICK_REFRAME_PIPELINE } from './quick-reframe-render';
 import { suggestHooks, HOOK_CATEGORIES } from './quick-reframe-hooks';
 import { downloadSocial, MAX_REFRAME_BYTES, socialSource } from './social-source';
+import { CAPTION_STYLES, emptyPostCopy, generatePostCopy, normalizeHashtags, REWRITE_DIRECTIONS, type PostCopyContext } from './quick-reframe-post-copy';
 const exec=promisify(execFile);
 const json=(v:unknown):Prisma.InputJsonValue=>JSON.parse(JSON.stringify(v));
 const include={editProject:{include:{assets:true,elements:true}}};
@@ -101,6 +102,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       styleOneApplied:record(settings.resolvedVisualLayout).editingProfile==='AUTOMATIC_2',
       previewUrl:url(preview),exportUrl:exports[0]?.url??null,previewRevision:current(preview),exportRevision:exports[0]?.revision??null,exports,
       status:q.status,progress:q.progress,message:q.message,error:q.error,analysis:this.analysisOf(q),plan:q.plan as ReframeSession['plan'],hooks,
+      sourceContext:q.sourceContext as ReframeSocialSource|null,postCopy:{...emptyPostCopy(),...record(q.postCopy)} as ReframePostCopy,
       outputs:source?.width&&source.height&&this.cropConfirmed(q)?{720:quickOutputCanvas(project.settings,source.width,source.height,720),1080:quickOutputCanvas(project.settings,source.width,source.height,1080)}:null,
       hasAudio:record(original?.metadata).hasAudio===true,hasTranscript:!!transcriptText(original?.transcript??source?.transcript),
       captionCount:project.elements.filter(e=>e.type==='SUBTITLE').length,createdAt:q.createdAt.toISOString()};
@@ -120,7 +122,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
   async startUpload(id:string,body:Record<string,unknown>){const q=await this.load(id);if(q.editProject.assets.some(a=>a.role==='SOURCE'))throw new ConflictException('This video already has a source. Start a new Quick Reframe.');
     if(typeof body.size!=='number'||body.size>MAX_REFRAME_BYTES||!['.mp4','.mov','.m4v','.webm'].includes(extname(String(body.name)).toLowerCase()))throw new BadRequestException('Upload an MP4, MOV, M4V, or WebM up to 1 GiB.');
     await this.prisma.quickReframe.update({where:{id},data:{status:'INPUT',message:'Uploading video',error:null}});return this.uploads.create(id,body);}
-  private async ingest(id:string,path:string,name:string,operationId?:string){
+  private async ingest(id:string,path:string,name:string,operationId?:string,sourceContext?:ReframeSocialSource){
     const q=await this.load(id);if(q.editProject.assets.some(a=>a.role==='SOURCE'))throw new ConflictException('This video already has a source.');
     let media;try{media=await probeMedia(path,{timeoutMs:15000,localOnly:true});}catch{throw new BadRequestException('This file could not be read. Upload a compatible MP4, MOV, or WebM.');}const size=(await stat(path)).size;
     if(!media.hasVideo||!media.width||!media.height||!media.durationSec||media.durationSec<=0)throw new BadRequestException('Upload a readable video file.');
@@ -136,7 +138,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
         await tx.editAsset.create({data:{id:assetId,editProjectId:current.editProjectId,role:'SOURCE',...stored,originalName:basename(name).slice(0,255),mimeType:media.formatName?.includes('webm')?'video/webm':'video/mp4',sizeBytes:BigInt(size),duration:media.durationSec,width:media.width,height:media.height,fps:media.fps,metadata:{hasAudio:media.hasAudio,videoCodec:media.videoCodec,audioCodec:media.audioCodec}}});
         await tx.editElement.create({data:{editProjectId:current.editProjectId,assetId,type:'VIDEO',track:0,position:0,startTime:0,duration:media.durationSec!,trimEnd:media.durationSec}});
         await tx.editProject.update({where:{id:current.editProjectId},data:{revision:{increment:1}}});
-        await tx.quickReframe.update({where:{id},data:{status:'INPUT',message:'Checking video',progress:100,error:null,operationId:null}});
+        await tx.quickReframe.update({where:{id},data:{status:'INPUT',message:'Checking video',progress:100,error:null,operationId:null,...(sourceContext?{sourceContext:json(sourceContext)}:{})}});
       },{isolationLevel:'Serializable'});
       return this.get(id);
     }catch(error){await this.storage.removeObject(stored.bucket,stored.objectKey);throw error;}
@@ -189,7 +191,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const controller=new AbortController();this.aborts.set(task.id,controller);const dir=await mkdtemp(join(tmpdir(),'quick-reframe-'));let uploaded:{bucket:string;objectKey:string}|null=null;
     try{
       const q=await this.load(task.id);if(q.operationId!==task.operationId)return;
-      if(task.kind==='IMPORT'){const path=join(dir,'import.mp4');await downloadSocial(task.url,path,controller.signal);await this.ingest(task.id,path,'Imported video.mp4',task.operationId);return;}
+      if(task.kind==='IMPORT'){const path=join(dir,'import.mp4');const context=await downloadSocial(task.url,path,controller.signal);await this.ingest(task.id,path,'Imported video.mp4',task.operationId,context);return;}
       if(task.kind==='PLAYBACK'){await this.playback(task,q,dir,controller.signal,(v)=>{uploaded=v;});return;}
       if(task.kind==='ANALYZE'){await this.analyze(task,q,controller.signal);if(task.next==='STYLEONE')await this.continueStyleOne(task);return;}
       if(task.kind==='PREPARE'){await this.prepare(task,q,dir,controller.signal,(v)=>{uploaded=v;});return;}
@@ -371,6 +373,9 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
   /** Six-category hook suggestions. OpenAI only runs when this request explicitly authorizes it. */
   async hooks(id:string,body:Record<string,unknown>){
     const q=await this.load(id);const original=this.originalOf(q);if(!original)throw new BadRequestException('Upload a video first.');
+    if(!this.cropConfirmed(q))throw new BadRequestException('Confirm the crop first.');
+    if(!q.editPath)throw new BadRequestException('Choose StyleOne or Manual editing first.');
+    if(activeStatuses.includes(q.status))throw new ConflictException('Wait for processing to finish.');
     const external=body.externalAiAuthorized===true;
     if(this.needsAnalysis(q)&&record(original.metadata).hasAudio===true)throw new BadRequestException(activeStatuses.includes(q.status)?'XeeClip is still checking the speech in your video. Try again in a moment.':'Check the video first, then ask for hook suggestions.');
     const exclude=Array.isArray(body.exclude)?body.exclude.filter((t):t is string=>typeof t==='string').map(t=>t.slice(0,200)).slice(0,30):[];
@@ -378,6 +383,64 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     // Regenerate with nothing new keeps the current list rather than emptying it.
     if(hooks.length||!exclude.length)await this.prisma.quickReframe.update({where:{id},data:{hooks:json(hooks),externalAiAuthorized:external}});
     return {session:await this.get(id),warnings};
+  }
+  /** Use only content retained by the confirmed crop and canonical timeline. Original post text is supporting context. */
+  private postCopyContext(q:Loaded,body:Record<string,unknown>):PostCopyContext {
+    const source=this.sourceOf(q)!;const original=this.originalOf(q)!;
+    const clips=q.editProject.elements.filter(e=>e.type==='VIDEO'&&e.assetId===source.id&&record(e.properties).hidden!==true);
+    const ranges=clips.map(e=>({start:e.trimStart??0,end:e.trimEnd??((e.trimStart??0)+e.duration)}));
+    const kept=(start:number,end:number)=>ranges.some(r=>start<r.end&&end>r.start);
+    const transcript=record(source.transcript??original.transcript);
+    const segments=Array.isArray(transcript.segments)?transcript.segments:[];
+    const speech=segments.length?segments.filter(s=>kept(Number(record(s).start)||0,Number(record(s).end)||0)).map(s=>String(record(s).text??'')).join(' ')
+      :ranges.some(r=>r.start<=.01&&r.end>=original.duration!-.01)?transcriptText(transcript):'';
+    const preparation=record(q.confirmed) as ReframePlan;
+    const regions=(q.analysis as unknown as ReframeAnalysis|null)?.regions??[];
+    const retained=regions.filter(r=>r.text&&r.confidence>=.65&&r.kind!=='ATTRIBUTION'&&kept(r.start,r.end)&&contains(preparation.crop,r)
+      &&!(preparation.cleanup??[]).some(c=>c.start<r.end&&c.end>r.start&&overlap(c,r)>.001));
+    const unique=(lines:string[])=>[...new Set(lines)].join('\n');
+    const subtitles=q.editProject.elements.filter(e=>e.type==='SUBTITLE'&&record(e.properties).hidden!==true).map(e=>String(record(e.properties).content??record(e.properties).text??''));
+    const hook=q.editProject.elements.find(e=>e.type==='TEXT'&&record(e.properties).presetRole==='HOOK'&&record(e.properties).hidden!==true);
+    const copy={...emptyPostCopy(),...record(q.postCopy)};
+    return {transcript:speech,visibleText:unique(retained.filter(r=>r.kind!=='CAPTION').map(r=>r.text)),
+      subtitleText:unique([...retained.filter(r=>r.kind==='CAPTION').map(r=>r.text),...subtitles]),sourceContext:q.sourceContext as ReframeSocialSource|null,
+      selectedHook:hook?String(record(hook.properties).content??''):'',editingDirection:typeof body.editingDirection==='string'?body.editingDirection.slice(0,500):copy.editingDirection??'',
+      purpose:typeof body.purpose==='string'?body.purpose.slice(0,500):copy.purpose??'',selectedCaption:copy.selectedCaption};
+  }
+  private assertPostCopy(q:Loaded,body:Record<string,unknown>){
+    this.assertEditable(q,body.revision);
+    if(!q.editPath)throw new BadRequestException('Choose StyleOne or Manual editing first.');
+    if(body.version!==(record(q.postCopy).version??0))throw new ConflictException('Post copy changed. Refresh before saving.');
+  }
+  private async writePostCopy(q:Loaded,copy:ReframePostCopy){
+    const result=await this.prisma.quickReframe.updateMany({where:{id:q.id,postCopy:{equals:q.postCopy as Prisma.InputJsonValue},
+      editProject:{revision:q.editProject.revision},status:q.status,operationId:q.operationId},data:{postCopy:json(copy)}});
+    if(!result.count)throw new ConflictException('The video or post copy changed. Refresh and try again.');
+    return this.get(q.id);
+  }
+  async generateCopy(id:string,body:Record<string,unknown>){
+    const q=await this.load(id);this.assertPostCopy(q,body);
+    if(this.needsAnalysis(q))throw new BadRequestException('Check video speech and on-screen text first.');
+    const rewrite=body.rewrite;
+    if(rewrite!==undefined&&(!(REWRITE_DIRECTIONS as readonly unknown[]).includes(rewrite)||!record(q.sourceContext).sourcePostText))throw new BadRequestException('Choose a rewrite direction for an imported post caption.');
+    const context=this.postCopyContext(q,body);
+    const result=await generatePostCopy(this.router,context,body.externalAiAuthorized===true,typeof rewrite==='string'?rewrite:'');
+    const prior={...emptyPostCopy(),...record(q.postCopy)} as ReframePostCopy;
+    const hashtagOnly=body.hashtagsOnly===true;
+    const copy:ReframePostCopy={...prior,version:prior.version+1,generatedCaptions:hashtagOnly?prior.generatedCaptions:result.generatedCaptions,generatedHashtagSets:result.generatedHashtagSets,
+      understanding:result.understanding,editingDirection:context.editingDirection,purpose:context.purpose,contextRevision:q.editProject.revision,
+      selectedCaption:prior.selectedCaption||(!hashtagOnly?result.generatedCaptions.find(c=>c.recommended)?.text:'')||'',
+      selectedHashtags:prior.selectedHashtags.length?prior.selectedHashtags:result.generatedHashtagSets[0]?.hashtags??[]};
+    return {session:await this.writePostCopy(q,copy),warnings:result.warnings};
+  }
+  async saveCopy(id:string,body:Record<string,unknown>){
+    const q=await this.load(id);this.assertPostCopy(q,body);
+    if(typeof body.selectedCaption!=='string'||body.selectedCaption.length>2200||!Array.isArray(body.selectedHashtags)||body.selectedHashtags.length>15
+      ||body.selectedHashtags.some(t=>typeof t!=='string'||!/^#?[\p{L}\p{N}_]{1,60}$/u.test(t)))throw new BadRequestException('Use a Social Caption up to 2200 characters and up to 15 valid hashtags.');
+    const copy={...emptyPostCopy(),...record(q.postCopy)} as ReframePostCopy;
+    if(body.captionStyle!==undefined&&!(CAPTION_STYLES as readonly unknown[]).includes(body.captionStyle))throw new BadRequestException('Choose a valid Social Caption style.');
+    return this.writePostCopy(q,{...copy,version:copy.version+1,selectedCaption:body.selectedCaption.trim(),selectedHashtags:normalizeHashtags(body.selectedHashtags),
+      generatedCaptions:copy.generatedCaptions.map(c=>c.style===body.captionStyle?{...c,text:body.selectedCaption as string}:c)});
   }
   private assertEditable(q:Loaded,revision:unknown,claimed=false){
     if(!claimed&&activeStatuses.includes(q.status))throw new ConflictException('Wait for processing to finish.');

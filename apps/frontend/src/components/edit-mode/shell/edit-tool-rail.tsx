@@ -8,7 +8,7 @@ import { toolsFor, type EditToolId } from '@/lib/edit-mode-tools';
 const ICONS: Record<EditToolId, LucideIcon> = {
   MEDIA: Video, TEMPLATES: LayoutTemplate, AUDIO: Music, TEXT: Type, CAPTIONS: Captions,
   CROP: Crop, OVERLAY: ImageIcon, EFFECTS: Sparkles, FILTERS: Palette, ADJUST: SlidersHorizontal,
-  HOOKS: Lightbulb
+  HOOKS: Lightbulb, POST_COPY: Type
 };
 
 /**
@@ -36,7 +36,7 @@ export function EditToolRail({ active, cropDisabled = false, quickReframe = fals
             : selected ? 'bg-primary/15 text-primary-soft'
               : 'text-muted-foreground hover:bg-tint hover:text-soft'}`}>
         <Icon size={19} aria-hidden />
-        <span className='text-[10px] font-medium leading-none'>{tool.label}</span>
+        <span className='text-center text-[10px] font-medium leading-tight'>{tool.label}</span>
       </button>;
     })}
   </nav>;

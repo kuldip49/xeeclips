@@ -49,5 +49,5 @@ export function EditModeProjectRoute() {
   if (!loaded || loaded.id !== id) return <EditModeLoadingScreen />;
   return <EditModeWorkspace key={id} initialProject={loaded.project} initialHistory={loaded.history}
     initialRightTab={panel === 'ai' ? 'AI' : 'INSPECTOR'} quickReframe={loaded.reframe}
-    initialTool={loaded.reframe && tool === 'hooks' ? 'HOOKS' : undefined} />;
+    initialTool={loaded.reframe && tool === 'hooks' ? 'HOOKS' : loaded.reframe && tool === 'post-copy' ? 'POST_COPY' : undefined} />;
 }

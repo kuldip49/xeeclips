@@ -11,9 +11,10 @@ export type MobilePanelId = 'AI' | 'INSPECTOR' | 'EXPORT' | Exclude<EditToolId, 
 
 const ITEMS: Array<{ id: MobilePanelId; label: string; icon: LucideIcon; quickReframeOnly?: boolean }> = [
   { id: 'HOOKS', label: 'Hooks', icon: Lightbulb, quickReframeOnly: true },
+  { id: 'POST_COPY', label: 'Caption & Hashtags', icon: Type, quickReframeOnly: true },
   { id: 'AI', label: 'Ask AI', icon: Sparkles },
   { id: 'INSPECTOR', label: 'Inspect', icon: MousePointerClick },
-  { id: 'CAPTIONS', label: 'Captions', icon: Captions },
+  { id: 'CAPTIONS', label: 'Video Captions', icon: Captions },
   { id: 'TEXT', label: 'Text', icon: Type },
   { id: 'CROP', label: 'Crop', icon: Crop },
   { id: 'AUDIO', label: 'Audio', icon: Music },
@@ -25,9 +26,9 @@ const ITEMS: Array<{ id: MobilePanelId; label: string; icon: LucideIcon; quickRe
 ];
 
 export const MOBILE_PANEL_TITLES: Record<MobilePanelId, string> = {
-  AI: 'AI editor', INSPECTOR: 'Inspector', EXPORT: 'Export', CAPTIONS: 'Captions', TEXT: 'Text',
+  AI: 'AI editor', INSPECTOR: 'Inspector', EXPORT: 'Export', CAPTIONS: 'Video Captions', TEXT: 'Text',
   CROP: 'Crop', AUDIO: 'Audio', TEMPLATES: 'Style', ADJUST: 'Adjust', FILTERS: 'Filters',
-  OVERLAY: 'Overlay', MEDIA: 'Media', HOOKS: 'Hooks & captions'
+  OVERLAY: 'Overlay', MEDIA: 'Media', HOOKS: 'Hooks & Video Captions', POST_COPY: 'Caption & Hashtags'
 };
 
 /**
