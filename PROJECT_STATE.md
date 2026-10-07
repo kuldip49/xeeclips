@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-10-07
+Last updated: 2026-10-08
 
 ## Milestones
 
@@ -8,7 +8,9 @@ Last updated: 2026-10-07
   in StyleOne, Manual and Export; five grounded caption styles, original rewrite, three editable
   hashtag sets, independent persisted copy/version and History copy actions. Account + per-request
   OpenAI consent, bounded text-only context, local fallback; no AI during manual crop, no social copy
-  in subtitles or rendered media. Details and verification: `docs/quick-reframe-post-copy.md`.
+  in subtitles or rendered media. Deployed 2026-10-08 with 16 production browser tests and live
+  OCR/OpenAI/History/export/credit verification; existing data and credit totals preserved.
+  Details and verification: `docs/quick-reframe-post-copy.md`.
 
 - Multi-user accounts and credits (2026-10-07): secure database-backed sessions, bcrypt passwords,
   per-user API/media/History/editor/import ownership, private MinIO, atomic credit reservations and

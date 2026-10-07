@@ -45,6 +45,8 @@ API: `POST /quick-reframe/:id/post-copy` generates suggestions; `PUT` saves sele
 Both require the current media `revision` and copy `version`. Generation also accepts per-request
 `externalAiAuthorized`, optional `rewrite`, `editingDirection` and `purpose`. Existing ownership,
 CSRF and submission rate limits apply. Conflicting saves or edits during generation return 409.
+`hashtagsOnly` refreshes hashtag suggestions while retaining existing caption variants. Saving an
+edited option with `captionStyle` also persists that variant's wording.
 
 Verification:
 
@@ -62,3 +64,30 @@ Social import metadata is tested with disposable public-post fixtures. No third-
 is fetched during verification. Live platform eligibility remains subject to the public adapter's
 availability. `.gitignore` now explicitly retains the existing backend Storage module, which the
 runtime `storage/` ignore pattern previously excluded from fresh Git checkouts.
+
+## Production acceptance — 2026-10-08
+
+Feature commit `3ba9fad` was pushed to `kuldip49/xeeclips` main. A clean snapshot excluded the
+pre-existing unrelated authentication changes. The static Cloudflare deployment is version
+`d3a64240-f266-4192-b8fb-42005a6e8a33`; only the backend container was restarted, preserving its
+existing asset mounts and persistent volumes. The additive migration ran at backend startup.
+The user approved a local database backup before deployment; the Git-ignored dump is retained
+under `storage/reframe-post-copy-qa/production-before.dump`.
+
+All 16 browser acceptance/crop regression tests passed against the public `xeeclip.me` frontend,
+using disposable mocked API fixtures. A separate live HTTPS API smoke test used a synthetic owned
+video and disposable account: actual OCR, no analysis before crop/mode, five caption variants,
+three hashtag groups, account/per-request consent, successful OpenAI with no fallback warning,
+copy editing, History restore, unchanged canonical composition, H.264 download and exactly one
+export credit passed. The account, media and its own credit records were removed afterward.
+
+Both StyleOne and Manual paths also passed live OCR/render/export verification in an isolated
+database, Redis database and private media bucket, including readable burned-in subtitles versus
+missing subtitles. The isolated backend, test database, empty media bucket and test queue were
+removed after verification. Existing Create Clips selection, content-package, UI and FFmpeg export
+regressions passed; its export test fixture was updated to support the existing object-key lookup.
+
+Production record counts and credit totals matched the pre-deployment snapshot: 2 users,
+26 projects, 24 videos, 162 generated clips, 87 edit projects, 4 Quick Reframe items, 3 credit
+transactions, 1 credit reservation, total balance 5 and consumed credits 0. Existing authentication
+changes in the working directory remain uncommitted and were not deployed with this release.
