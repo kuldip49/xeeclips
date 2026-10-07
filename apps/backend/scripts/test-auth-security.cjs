@@ -37,6 +37,14 @@ async function main() {
   assert.equal((await req('/auth/signup', null, 'POST', { email: a.body.email, password })).status, 409);
   assert.equal((await req('/projects')).status, 401); assert.equal((await req('/admin/stats', a.cookie)).status, 403); assert.equal((await req('/admin/stats', owner.cookie)).status, 200);
   passed('login, wrong password, duplicate email, protected API and admin authorization');
+  assert.equal((await req('/auth/signup', null, 'POST', { email: 'policy-short@example.com', password: 'a'.repeat(7) })).status, 400);
+  assert.equal((await req('/auth/signup', null, 'POST', { email: 'policy-long@example.com', password: 'a'.repeat(129) })).status, 400);
+  assert.equal((await req('/auth/signup', null, 'POST', { email: 'policy-min@example.com', password: 'a'.repeat(8) })).status, 201);
+  const maxPassword = 'b'.repeat(128);
+  assert.equal((await req('/auth/signup', null, 'POST', { email: 'policy-max@example.com', password: maxPassword })).status, 201);
+  assert.equal((await req('/auth/login', null, 'POST', { email: 'policy-max@example.com', password: maxPassword })).status, 201);
+  assert.equal((await req('/auth/login', null, 'POST', { email: 'policy-max@example.com', password: maxPassword.slice(0, -1) + 'c' })).status, 401);
+  passed('HTTP password bounds 8–128 and complete long-password verification');
   assert.equal((await req('/projects', a.cookie, 'POST', { name: 'CSRF' }, 'https://evil.example')).status, 403);
   assert.equal((await req('/projects', a.cookie, 'POST', { name: 'Missing origin' }, '')).status, 403); passed('CSRF origin validation');
   const pa = await req('/projects', a.cookie, 'POST', { name: 'A private' }); const pb = await req('/projects', b.cookie, 'POST', { name: 'B private' });

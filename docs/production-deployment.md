@@ -24,6 +24,7 @@ contain `https://xeeclip.me,http://localhost:3000`. Keep
 the Worker build uses the public API URL separately. Do not commit `.env`.
 
 Production requires `AUTH_COOKIE_SECURE=true`, `DEFAULT_USER_CREDITS=5` (configurable),
+and a stable random `PASSWORD_HASH_PEPPER` of at least 32 bytes in ignored configuration,
 `ADMIN_EMAIL=<confirmed-owner>`, and an initial secret `ADMIN_INITIAL_PASSWORD` for the
 first startup only. `TRUST_CLOUDFLARE_IP=true` uses the tunnel's edge-provided client IP
 for login limits. Use false for direct local development. Production secure cookies require

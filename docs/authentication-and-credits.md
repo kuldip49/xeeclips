@@ -7,7 +7,12 @@ Cloudflare Tunnel. Authentication runs entirely in NestJS/PostgreSQL. An opaque 
 256-bit session token lives in an API-host-only `__Host-xeeclip-session` cookie: HttpOnly,
 Secure, SameSite=Lax, Path=/, seven-day absolute expiry. PostgreSQL stores only its SHA-256
 digest. Login/signup rotate a prior session; logout deletes it. Backend restarts preserve
-sessions. Passwords use bcrypt cost 12, with a 12-character minimum and 72-byte maximum.
+sessions. Passwords accept 8–128 characters and use bcrypt cost 12. Inputs above bcrypt's
+72-byte limit use tagged HMAC-SHA384/base64 preparation with a stable `PASSWORD_HASH_PEPPER`
+kept outside the database. Existing direct bcrypt hashes remain compatible. Generate the
+pepper with a cryptographically secure random generator (at least 32 bytes), retain it in
+the ignored environment configuration, and back it up privately; changing or losing it
+invalidates passwords stored with the tagged preparation format.
 This works across the same-site `xeeclip.me` and `api.xeeclip.me` without adding Next SSR,
 an identity-provider dependency, JWT refresh tokens, or client-side secrets.
 
@@ -98,7 +103,8 @@ is configured. For account recovery, an authorized laptop operator can pipe a ne
 over stdin to `node scripts/reset-password.cjs <email>` inside the backend container. It
 validates/hashes the password and revokes existing sessions. Do not pass it as a CLI argument.
 Remove ADMIN_INITIAL_PASSWORD from production configuration after securely saving the
-credential; existing account startup needs only ADMIN_EMAIL.
+credential; existing account startup does not need the initial password. Retain
+`PASSWORD_HASH_PEPPER` across deployments and operator password resets.
 
 ## Migration and verification
 
