@@ -20,6 +20,7 @@ import { StorageService } from '../../storage/storage.service';
 import { probeMedia } from '../../processing/media-probe';
 import type { StyleCategory } from './creative-style-library';
 import type { StyleChoice } from './creative-style-resolver';
+import { downloadPublicVideo } from './private-safe-download';
 
 const execFileAsync = promisify(execFile);
 const MAX_REFERENCE_BYTES = 300 * 1024 * 1024;
@@ -153,18 +154,14 @@ export class ReferenceAnalysisService {
       throw new BadRequestException('Only direct video-file links (.mp4, .mov, .webm) are supported; ' +
         'streaming-site pages are not downloaded. Upload the file instead.');
     }
-    const response = await fetch(url, { signal: AbortSignal.timeout(60_000) }).catch(() => null);
-    if (!response?.ok || !response.body) throw new BadRequestException('The reference URL could not be downloaded');
-    const length = Number(response.headers.get('content-length') ?? 0);
-    if (length > MAX_REFERENCE_BYTES) throw new BadRequestException('A reference must be under 300 MB');
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length > MAX_REFERENCE_BYTES) throw new BadRequestException('A reference must be under 300 MB');
+    const { buffer, mimeType } = await downloadPublicVideo(parsed, MAX_REFERENCE_BYTES);
     return this.store(buffer, parsed.pathname.split('/').pop() || 'reference.mp4',
-      response.headers.get('content-type') || 'video/mp4', videoId, url);
+      mimeType, videoId, url);
   }
 
   private async store(buffer: Buffer, name: string, mimeType: string, videoId: string | null,
     sourceUrl: string | null) {
+    if (videoId && !await this.prisma.video.findUnique({ where: { id: videoId }, select: { id: true } })) throw new NotFoundException('Video not found');
     const id = randomUUID();
     const objectKey = `references/${id}/${name.replace(/[^\w.-]+/gu, '_').slice(0, 80)}`;
     const uploaded = await this.storage.uploadBuffer({ buffer, objectKey, mimeType });

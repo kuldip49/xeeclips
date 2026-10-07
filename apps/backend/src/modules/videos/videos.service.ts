@@ -1,3 +1,4 @@
+import { UsageService } from '../auth/usage.service';
 import { ModuleRef } from '@nestjs/core';
 import { LlmRouterService } from '../processing/llm-router.service';
 import { interpretBrief, scoreCandidatesWithOpenAi } from '../edit-mode/styles/creative-brief';
@@ -113,6 +114,7 @@ const serializeVideo = (video: {
 
 @Injectable()
 export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
+  private get usage() { return new UsageService(this.prisma); }
   private readonly logger = new Logger(VideosService.name);
 
   constructor(
@@ -183,13 +185,20 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
    * Attach a pre-selected clip request to an existing source (a re-imported YouTube video).
    * Starts it now when analysis is already complete, otherwise when it completes.
    */
-  async requestAutoGeneration(videoId: string, request: ClipCreationRequest) {
+  async requestAutoGeneration(videoId: string, request: ClipCreationRequest, reservationKey?: string | null) {
     const job = await this.prisma.processingJob.findFirst({ where: { videoId },
       orderBy: { createdAt: 'desc' } });
     if (!job) return;
-    await this.prisma.processingJob.update({ where: { id: job.id }, data: {
+    await this.prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT id FROM "ProcessingJob" WHERE id = ${job.id} FOR UPDATE`;
+    const current = await tx.processingJob.findUniqueOrThrow({ where: { id: job.id } });
+    if (reservationKey && ['QUEUED', 'RENDERING'].includes(current.clipRenderStatus ?? '')) throw new ConflictException('Generation is already in progress.');
+    if (reservationKey) await tx.creditReservation.update({ where: { jobKey: reservationKey }, data: { resourceId: job.id } });
+    await tx.processingJob.update({ where: { id: job.id }, data: {
+      ...(reservationKey ? { creditReservationKey: reservationKey } : {}),
       autoGeneration: request as unknown as Prisma.InputJsonValue,
       autoGenerationStatus: 'PENDING', autoGenerationError: null } });
+    });
     if (job.status === 'COMPLETED') await this.startAutoGeneration(job.id);
   }
 
@@ -659,7 +668,7 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
    */
   async createFromUpload(projectId: string, file: Express.Multer.File, requestedAiMode?: unknown,
     requestedProcessingType?: unknown, requestedAspectRatio?: unknown, requestedPlatform?: unknown,
-    source?: { sourceUrl: string; externalVideoId: string },
+    source?: { sourceUrl: string; externalVideoId: string; creditReservationKey?: string | null },
     autoGeneration?: ClipCreationRequest | null) {
     try {
       return await this.createFromUploadFile(projectId, file, requestedAiMode, requestedProcessingType,
@@ -671,7 +680,7 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
 
   private async createFromUploadFile(projectId: string, file: Express.Multer.File, requestedAiMode?: unknown,
     requestedProcessingType?: unknown, requestedAspectRatio?: unknown, requestedPlatform?: unknown,
-    source?: { sourceUrl: string; externalVideoId: string },
+    source?: { sourceUrl: string; externalVideoId: string; creditReservationKey?: string | null },
     autoGeneration?: ClipCreationRequest | null) {
     const aiMode = normalizeAiProcessingMode(requestedAiMode);
     const targetPlatform = parseTargetPlatform(requestedPlatform);
@@ -708,7 +717,8 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
       }
     }
 
-    const video = await this.prisma.video.create({
+    const video = await this.prisma.$transaction(async tx => {
+      const video = await tx.video.create({
       data: {
         projectId,
         originalName: file.originalname,
@@ -734,6 +744,15 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
       } as never,
       include: { processingJobs: true }
     });
+      if (autoGeneration) {
+        const owner = await tx.project.findUniqueOrThrow({ where: { id: projectId }, select: { userId: true } });
+        const key = source?.creditReservationKey ?? `analysis:${video.processingJobs[0].id}`;
+        await this.usage.reserve(tx, owner.userId, key, 'CREATE_CLIPS', video.processingJobs[0].id);
+        await tx.creditReservation.update({ where: { jobKey: key }, data: { resourceId: video.processingJobs[0].id } });
+        await tx.processingJob.update({ where: { id: video.processingJobs[0].id }, data: { creditReservationKey: key } });
+      }
+      return video;
+    }).catch(async error => { await this.storage.removeObject(stored.bucket, stored.objectKey).catch(() => undefined); throw error; });
 
     const processingJob = video.processingJobs[0];
     try {

@@ -257,6 +257,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   });
 
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith('/auth/') && typeof window !== 'undefined') window.dispatchEvent(new Event('xeeclip-auth-expired'));
     if (isProcessingServerUnavailableStatus(response.status)) {
       throw new ApiError("Processing server is currently unavailable.", response.status);
     }

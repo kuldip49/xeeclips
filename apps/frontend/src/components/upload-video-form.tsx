@@ -1,4 +1,5 @@
 'use client';
+import { useAuth } from '@/components/auth-provider';
 
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useRef, useState } from 'react';
 import { RAW_LOOK } from '@/lib/automatic-looks';
@@ -75,6 +76,8 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
   offline?: boolean;
 }) {
   const router = useRouter();
+  const { user } = useAuth();
+  const noCredits = user?.role !== 'ADMIN' && (user?.creditBalance ?? 0) <= 0;
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const createdProject = useRef<string | null>(projectId ?? null);
@@ -379,7 +382,8 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
           <button type='button' onClick={() => abortRef.current?.abort()} className='h-9 shrink-0 rounded-lg px-3 font-semibold text-soft hover:bg-tint-strong'>Cancel</button>
         </div>
       </div> : null}
-      <Button disabled={busy || !ready || offline} type='submit' className='h-14 w-full rounded-2xl text-base sm:h-12 sm:rounded-xl sm:text-sm'>
+      {noCredits && <p role='status' className='text-sm text-soft'>You've used your available generations.</p>}
+      <Button disabled={busy || !ready || offline || noCredits} type='submit' className='h-14 w-full rounded-2xl text-base sm:h-12 sm:rounded-xl sm:text-sm'>
         {busy ? <><Loader2 className='animate-spin' size={18} aria-hidden />{busyLabel}</>
           : <><Sparkles size={18} aria-hidden />Generate {settings.count} Clip{settings.count === 1 ? '' : 's'}</>}
       </Button>

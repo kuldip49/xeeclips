@@ -25,6 +25,8 @@ import { join } from 'path';
 import { promisify } from 'util';
 import { sampleImageStats, type ImageStats } from '../../editing/color-grade';
 import { PrismaService } from '../../database/prisma.service';
+import { UsageService } from '../../auth/usage.service';
+import { QUICK_REFRAME_PIPELINE } from '../../quick-reframe/quick-reframe-render';
 import { editAssetStorageLocation } from '../edit-asset-storage';
 import { probeMedia } from '../../processing/media-probe';
 import { normalizeProbedSourceTrims } from './edit-mode-source-trim';
@@ -80,7 +82,7 @@ export class EditModeRenderService {
   async startExport(id: string, revisionValue: unknown) {
     const revision = parseRevision(revisionValue);
     const project = await this.prisma.editProject.findUnique({
-      where: { id }, include: { assets: true, elements: true } });
+      where: { id }, include: { assets: true, elements: true, quickReframe: true } });
     if (!project) throw new NotFoundException('EditProject not found');
     if (project.revision !== revision) {
       throw new ConflictException({ code: 'STALE_REVISION',
@@ -100,8 +102,20 @@ export class EditModeRenderService {
     const progress: EditExportProgress = { exportId: randomUUID(), phase: 'PREPARING',
       percent: PHASE_PERCENT.PREPARING, sourceRevision: revision, startedAt: now,
       updatedAt: now, attempt: 1, assetId: null, errorCode: null, message: null };
+    if (project.quickReframe) {
+      await this.prisma.$transaction(async tx => {
+        const q = project.quickReframe!;
+        const claimed = await tx.quickReframe.updateMany({ where: { id: q.id, operationId: null, status: { notIn: ['EXPORT', 'PREVIEW', 'PREPARE', 'PLAYBACK', 'ANALYZE', 'IMPORT'] } }, data: { status: 'EXPORT', operationId: progress.exportId, progress: 5, error: null, message: 'Exporting video' } });
+        if (!claimed.count) throw new ConflictException('Processing is already in progress.');
+        await new UsageService(this.prisma).reserve(tx, project.userId, `reframe:${progress.exportId}`, 'QUICK_REFRAME', q.id);
+        // Persist recoverable progress with the reservation: a crash before run() must refund.
+        const settings = project.settings && typeof project.settings === 'object' && !Array.isArray(project.settings) ? project.settings as Record<string, Prisma.JsonValue> : {};
+        await tx.editProject.update({ where: { id }, data: { status: 'EXPORTING', settings: { ...settings, export: progress } as unknown as Prisma.InputJsonValue } });
+      });
+    }
     this.running.set(id, progress);
-    await this.persistProgress(id, progress, 'EXPORTING');
+    try { await this.persistProgress(id, progress, 'EXPORTING'); }
+    catch (e) { this.running.delete(id); if(project.quickReframe){await this.prisma.quickReframe.updateMany({where:{editProjectId:id,operationId:progress.exportId},data:{status:'FAILED',operationId:null}});await new UsageService(this.prisma).settle(`reframe:${progress.exportId}`,false);} throw e; }
 
     // Direct async execution: no background queue, no worker, no job row.
     void this.run(id, progress).catch((error) => {
@@ -191,6 +205,8 @@ export class EditModeRenderService {
         exportId: progress.exportId, failureCategory: code,
         wallMs: Date.now() - started, attempt: progress.attempt }));
       await this.update(id, progress, { phase: 'FAILED', errorCode: code, message }, 'FAILED');
+      await this.prisma.quickReframe.updateMany({ where: { editProjectId: id, operationId: progress.exportId }, data: { status: 'FAILED', operationId: null, error: message.slice(0, 500) } });
+      await new UsageService(this.prisma).settle(`reframe:${progress.exportId}`, false);
       return null;
     } finally {
       // The job directory is unique per export (mkdtemp) and is removed on
@@ -423,13 +439,18 @@ export class EditModeRenderService {
     // The project is then simply an export short, which a retry fixes.
     let asset: Awaited<ReturnType<typeof this.prisma.editAsset.create>>;
     try {
-      asset = await this.prisma.editAsset.create({ data: {
+      asset = await this.prisma.$transaction(async tx => {
+        const q = await tx.quickReframe.findUnique({ where: { editProjectId: id } });
+        const asset = await tx.editAsset.create({ data: {
         id: assetId, editProjectId: id, role: 'EXPORT',
         originalName: `${plan.presetId.toLowerCase()}-r${progress.sourceRevision}.mp4`,
         bucket: stored.bucket, objectKey: stored.objectKey, mimeType: 'video/mp4',
         sizeBytes: BigInt(size), duration: qa.measured.durationSec,
         width: qa.measured.width, height: qa.measured.height, fps: plan.canvas.fps,
-        metadata: metadata as unknown as Prisma.InputJsonValue } });
+        metadata: { ...metadata, ...(q ? { quickReframeKind: 'EXPORT', pipeline: QUICK_REFRAME_PIPELINE, operationId: progress.exportId } : {}) } as unknown as Prisma.InputJsonValue } });
+        if(q){await new UsageService(this.prisma).settleInTransaction(tx,`reframe:${progress.exportId}`,true);await tx.quickReframe.updateMany({where:{id:q.id,operationId:progress.exportId},data:{status:'COMPLETE',operationId:null,progress:100,message:'Export complete'}});}
+        return asset;
+      });
     } catch (error) {
       await this.storage.removeObject(stored.bucket, stored.objectKey).catch(() => undefined);
       throw new EditExportError('UPLOAD_FAILED',
@@ -494,4 +515,3 @@ export class EditModeRenderService {
     }
   }
 }
-

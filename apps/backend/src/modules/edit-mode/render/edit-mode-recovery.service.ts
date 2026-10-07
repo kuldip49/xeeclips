@@ -1,7 +1,7 @@
 // EditMode Phase 7 startup recovery.
 //
 // An EditMode export runs in the backend process itself - no queue, no worker,
-// no job row. That is the right shape for a single-user editor, but it has one
+// no job row. That fits the laptop-hosted editor, but it has one
 // consequence: if the process dies mid-render, the EditProject is left saying
 // EXPORTING forever and the UI waits on progress that will never move again.
 //
@@ -15,7 +15,8 @@
 //   - Anything else becomes FAILED with a stated reason, which the export panel
 //     shows and which a plain retry clears.
 //   - Elements, revisions, history and previous exports are never touched. This
-//     changes `status` and the `settings.export` progress block, nothing else.
+//     changes `status` and the `settings.export` progress block. Quick Reframe
+//     exports also settle their usage reservation and workflow state.
 //
 // It touches only EditMode rows. Nothing here reads or writes Project, Video,
 // ProcessingJob, ClipCandidate or GeneratedClip.
@@ -25,6 +26,7 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { StorageService } from '../../storage/storage.service';
 import type { EditExportProgress } from './edit-mode-render.types';
+import { UsageService } from '../../auth/usage.service';
 
 export type EditModeRecoveryOutcome = {
   editProjectId: string;
@@ -150,6 +152,18 @@ export class EditModeRecoveryService implements OnApplicationBootstrap {
     await this.prisma.editProject.update({ where: { id }, data: { status,
       ...(progress ? { settings: { ...settings, export: progress } as Prisma.InputJsonValue }
         : {}) } });
+    if (progress?.exportId) {
+      const quickReframe = await this.prisma.quickReframe.findUnique({ where: { editProjectId: id } });
+      if (quickReframe?.operationId === progress.exportId) {
+        await this.prisma.$transaction(async tx => {
+          await new UsageService(this.prisma).settleInTransaction(tx, `reframe:${progress.exportId}`, status !== 'FAILED');
+          await tx.quickReframe.update({ where: { id: quickReframe.id }, data: {
+            status: status === 'FAILED' ? 'FAILED' : 'COMPLETE', operationId: null,
+            error: status === 'FAILED' ? 'Export interrupted by restart. Please try again.' : null
+          } });
+        });
+      }
+    }
   }
 
   private log(editProjectId: string, exportId: string | null, status: string, reason: string) {

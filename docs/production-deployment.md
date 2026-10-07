@@ -11,10 +11,10 @@ yt-dlp, and BullMQ workers stay in Docker on the laptop. Only the frontend
 Worker and backend API hostname are public; Docker publishes service ports to
 Windows loopback only.
 
-The API does not have application authentication. Anyone who knows its public
-hostname can use its project, media, upload, generation, and deletion routes.
-This deployment intentionally has no Cloudflare Access policy. CORS restricts
-browser origins, but does not restrict direct HTTP clients.
+The API validates database-backed secure cookie sessions and per-user ownership on all
+private routes, including media. Admin operations require the sole owner role. Browser
+mutations require an explicit allowed Origin. MinIO remains private and loopback-only.
+See [accounts and credits](authentication-and-credits.md) for policy and recovery procedures.
 
 ## Start the laptop services
 
@@ -22,6 +22,18 @@ The ignored root `.env` holds production secrets. Its `FRONTEND_ORIGIN` should
 contain `https://xeeclip.me,http://localhost:3000`. Keep
 `NEXT_PUBLIC_API_URL=http://localhost:4000` for local Compose development;
 the Worker build uses the public API URL separately. Do not commit `.env`.
+
+Production requires `AUTH_COOKIE_SECURE=true`, `DEFAULT_USER_CREDITS=5` (configurable),
+`ADMIN_EMAIL=<confirmed-owner>`, and an initial secret `ADMIN_INITIAL_PASSWORD` for the
+first startup only. `TRUST_CLOUDFLARE_IP=true` uses the tunnel's edge-provided client IP
+for login limits. Use false for direct local development. Production secure cookies require
+the HTTPS site/API; use AUTH_COOKIE_SECURE=false with NODE_ENV=development for a separate
+local backend. Never disable secure cookies in the public production deployment.
+
+Back up the database before deployment. The backend container runs additive migrations
+before starting; do not use db push or migrate reset on production. Attribute legacy records
+only after exact counts and owner confirmation, using the count-checked CLI. Restarting does
+not alter existing passwords, balances or ownership.
 
 From PowerShell after Docker Desktop starts:
 

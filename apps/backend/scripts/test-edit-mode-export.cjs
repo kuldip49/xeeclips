@@ -399,6 +399,19 @@ async function main() {
       'a source with no audio exports no audio stream rather than silence');
     console.log('  silent source: 1:1 export with no fabricated audio track');
 
+    const muted = seedProject(harness, { revision: 1, settings: {
+      selectedPreset: 'SOURCE_MANUAL', aspectRatio: 'SOURCE', reframePolicy: 'SOURCE',
+      zoomPolicy: 'OFF', gradingPolicy: 'NONE', subtitlePolicy: 'OFF'
+    }, assets: [source()], elements: [{ id: 'muted-video', assetId: 'src', type: 'VIDEO',
+      track: 0, position: 0, startTime: 0, duration: 3, trimStart: 0, trimEnd: 3,
+      properties: { sourceMuted: true } }] });
+    await harness.service.startExport(muted, 1);
+    const mutedDone = await settle(harness.service, muted);
+    assert.equal(mutedDone.phase, 'COMPLETED', mutedDone.message ?? '');
+    const mutedAsset = (await harness.service.listExports(muted))[0];
+    assert(!probe(harness.storage.localPath(mutedAsset.objectKey)).streams.some(stream => stream.codec_type === 'audio'));
+    console.log('  intentional source mute: video-only output passes QA');
+
     // --- 5. Typed failures --------------------------------------------------
     const noSource = seedProject(harness, { revision: 0, status: 'DRAFT',
       settings: {}, assets: [], elements: [] });

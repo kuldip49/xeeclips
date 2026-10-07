@@ -7,7 +7,103 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum UserRole {
+  USER
+  ADMIN
+}
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+enum CreditType {
+  INITIAL_GRANT
+  ADMIN_GRANT
+  ADMIN_DEDUCTION
+  MANUAL_ADJUSTMENT
+  GENERATION_RESERVE
+  GENERATION_CONSUME
+  GENERATION_REFUND
+}
+enum ReservationStatus {
+  RESERVED
+  CONSUMED
+  REFUNDED
+}
+model User {
+  id String @id @default(uuid())
+  email String @unique
+  passwordHash String
+  displayName String @default("")
+  role UserRole @default(USER)
+  status UserStatus @default(ACTIVE)
+  creditBalance Int @default(0)
+  creditsConsumed Int @default(0)
+  aiProcessingConsentAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lastLoginAt DateTime?
+  sessions Session[]
+  transactions CreditTransaction[]
+  reservations CreditReservation[]
+  projects Project[]
+  editProjects EditProject[]
+  references ReferenceAsset[]
+  styles SavedStyle[]
+  templates EditTemplate[]
+  @@index([createdAt])
+}
+model Session {
+  id String @id @default(uuid())
+  tokenHash String @unique
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([userId])
+  @@index([expiresAt])
+}
+model CreditReservation {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  jobKey String @unique
+  operation String
+  resourceId String
+  amount Int @default(1)
+  status ReservationStatus @default(RESERVED)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId, createdAt])
+  @@index([status])
+}
+model CreditTransaction {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  amount Int
+  type CreditType
+  reason String
+  jobId String?
+  adminId String?
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
+}
+model AuditLog {
+  id String @id @default(uuid())
+  adminId String
+  targetUserId String
+  action String
+  before Json
+  after Json
+  reason String?
+  createdAt DateTime @default(now())
+  @@index([targetUserId, createdAt])
+}
+
 model Project {
+  userId String?
+  user User? @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@index([userId, createdAt])
   id          String   @id @default(uuid())
   name        String
   description String?
@@ -63,6 +159,7 @@ model Video {
 }
 
 model VideoImport {
+  creditReservationKey String?
   id              String   @id @default(uuid())
   projectId       String
   project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -172,6 +269,7 @@ model VideoProcessingStage {
 }
 
 model ProcessingJob {
+  creditReservationKey String?
   id                   String              @id @default(uuid())
   videoId              String
   video                Video               @relation(fields: [videoId], references: [id], onDelete: Cascade)
@@ -527,6 +625,9 @@ enum EditHistoryActor {
 }
 
 model EditProject {
+  userId String?
+  user User? @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@index([userId, createdAt])
   id              String            @id @default(uuid())
   name            String
   sourceProjectId String?
@@ -637,6 +738,9 @@ model EditElement {
 /// Step 12: an optional reference video a user supplies to guide editing style.
 /// It is ANALYZED (measured editing principles), never copied into output.
 model ReferenceAsset {
+  userId String?
+  user User? @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@index([userId])
   id           String   @id @default(uuid())
   videoId      String?
   video        Video?   @relation(fields: [videoId], references: [id], onDelete: Cascade)
@@ -659,6 +763,9 @@ model ReferenceAsset {
 /// Step 17: a user-saved reusable component style ("My Podcast Captions").
 /// Addressed by stable id; the name is a label only.
 model SavedStyle {
+  userId String?
+  user User? @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@index([userId])
   id         String   @id @default(uuid())
   ownerScope String   @default("LOCAL")
   category   String
@@ -672,6 +779,9 @@ model SavedStyle {
 }
 
 model EditTemplate {
+  userId String?
+  user User? @relation(fields: [userId], references: [id], onDelete: Restrict)
+  @@index([userId])
   id          String   @id @default(uuid())
   name        String
   description String   @default("")

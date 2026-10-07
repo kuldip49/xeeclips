@@ -1,3 +1,4 @@
+import { UsageService } from '../auth/usage.service';
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Queue, Worker } from 'bullmq';
@@ -55,6 +56,18 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     this.uploads=new DiskUploadSessionStore((manifest,file)=>this.ingest(manifest.projectId,file.path,file.originalname),'quick-reframe');
   }
   async onModuleInit(){
+    // A committed claim without a queue entry means the previous process died before dispatch.
+    // Manual-editor exports recover through their atomically persisted EditProject progress.
+    const stranded = await this.prisma.quickReframe.findMany({ where: { operationId: { not: null }, status: { in: activeStatuses } }, include: { editProject: { select: { status: true } } } });
+    for (const q of stranded) {
+      if (q.status === 'EXPORT' && q.editProject.status === 'EXPORTING') continue;
+      const queued = await this.queue.getJob(q.operationId!);
+      if (!queued || ['failed','completed'].includes(await queued.getState())) {
+        await this.prisma.quickReframe.updateMany({ where: { id: q.id, operationId: q.operationId }, data: { status: 'FAILED', operationId: null, error: 'Processing was interrupted. Retry to continue.', message: 'Processing interrupted' } });
+        // Output settlement is atomic, so any still-reserved orphan has no delivered output.
+        if(q.status === 'EXPORT') await new UsageService(this.prisma).settle(`reframe:${q.operationId}`, false);
+      }
+    }
     this.worker=new Worker<Task>('quick-reframe',job=>this.run(job.data),{connection:this.connection,concurrency:1,lockDuration:120000});
     this.worker.on('error',error=>this.logger.error(error.message));
     this.worker.on('failed',(job)=>{if(job)void this.prisma.quickReframe.updateMany({where:{id:job.data.id,operationId:job.data.operationId},data:{status:'FAILED',operationId:null,error:'Processing was interrupted. Retry to continue.',message:'Processing interrupted'}});});
@@ -152,10 +165,14 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       if(process.env.QUICK_REFRAME_SOCIAL_IMPORT_APPROVED!=='true')throw new BadRequestException('Automatic social import is unavailable. Upload your authorized video file instead.');}
     const operationId=randomUUID();
     const message={PLAYBACK:'Preparing your video for cropping',ANALYZE:chain.next==='STYLEONE'?'Checking speech and captions for StyleOne':'Checking speech and on-screen captions',IMPORT:'Checking video',PREPARE:'Applying your crop',PREVIEW:'Rendering preview',EXPORT:`Exporting ${resolution}p video`}[kind];
-    const claimed=await this.prisma.quickReframe.updateMany({where:{id,status:q.status,operationId:q.operationId},data:{status:kind,operationId,message,progress:5,error:null}});
+    const claimed=await this.prisma.$transaction(async tx=>{
+      const result=await tx.quickReframe.updateMany({where:{id,status:q.status,operationId:q.operationId},data:{status:kind,operationId,message,progress:5,error:null}});
+      if(result.count&&kind==='EXPORT')await new UsageService(this.prisma).reserve(tx,q.editProject.userId,`reframe:${operationId}`,'QUICK_REFRAME',id);
+      return result;
+    });
     if(!claimed.count)throw new ConflictException('Another operation started. Refresh this video.');
     try{await this.queue.add(kind,{id,operationId,kind,url,resolution,...chain},{jobId:operationId,attempts:1,removeOnComplete:100,removeOnFail:100});}
-    catch{await this.prisma.quickReframe.updateMany({where:{id,operationId},data:{status:'FAILED',error:'Processing could not start. Please retry.',operationId:null}});throw new BadRequestException('Processing could not start. Please retry.');}
+    catch{await this.prisma.quickReframe.updateMany({where:{id,operationId},data:{status:'FAILED',error:'Processing could not start. Please retry.',operationId:null}});await new UsageService(this.prisma).settle(`reframe:${operationId}`,false);throw new BadRequestException('Processing could not start. Please retry.');}
     return this.get(id);
   }
   private async stage(task:Task,message:string,progress:number,data:Prisma.QuickReframeUpdateManyMutationInput={}){
@@ -177,9 +194,11 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       if(task.kind==='ANALYZE'){await this.analyze(task,q,controller.signal);if(task.next==='STYLEONE')await this.continueStyleOne(task);return;}
       if(task.kind==='PREPARE'){await this.prepare(task,q,dir,controller.signal,(v)=>{uploaded=v;});return;}
       await this.compose(task,q,dir,controller.signal,(v)=>{uploaded=v;});
+      if(task.kind==='EXPORT')await new UsageService(this.prisma).settle(`reframe:${task.operationId}`,true);
     }catch(error){this.logger.warn(`Quick Reframe ${task.kind} failed: ${error instanceof Error?error.message:String(error)}`);
       const message=error instanceof BadRequestException?error.message:task.kind==='IMPORT'?'This link could not be imported. Upload your authorized video file instead.':'Processing could not finish. Retry or upload another copy of the video.';
       await this.prisma.quickReframe.updateMany({where:{id:task.id,operationId:task.operationId},data:{status:'FAILED',error:message,message,operationId:null}});
+      if(task.kind==='EXPORT')await new UsageService(this.prisma).settle(`reframe:${task.operationId}`,false);
     }finally{if(uploaded)await this.storage.removeObject((uploaded as {bucket:string}).bucket,(uploaded as {objectKey:string}).objectKey).catch(()=>undefined);this.aborts.delete(task.id);await rm(dir,{recursive:true,force:true});}
   }
   /**
@@ -324,6 +343,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
         metadata:json({quickReframeKind:task.kind,sourceRevision:project.revision,operationId:task.operationId,pipeline:QUICK_REFRAME_PIPELINE,editPath:q.editPath,resolution:preview?null:resolution,sourceKey:record(source.metadata).quickReframeKey,
           codec:{video:media.videoCodec,audio:media.audioCodec??null},hasAudio:media.hasAudio})}});
       await tx.quickReframe.update({where:{id:task.id},data:{status:preview?'READY':'COMPLETE',message:preview?'Preview ready':'Export complete',progress:100,operationId:null,error:null}});
+      if(!preview)await new UsageService(this.prisma).settleInTransaction(tx,`reframe:${task.operationId}`,true);
     });track(null);
     // Previews are owned and bounded; final exports persist until deletion.
     if(preview)for(const old of project.assets.filter(a=>kindOf(a)==='PREVIEW')){await this.storage.removeObject(old.bucket,old.objectKey).catch(()=>undefined);await this.prisma.editAsset.deleteMany({where:{id:old.id}});}

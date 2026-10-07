@@ -1,4 +1,5 @@
 'use client';
+import { useAuth } from '@/components/auth-provider';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { isAutomaticLook } from '@/lib/automatic-looks';
@@ -249,6 +250,8 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
 const EMPTY_CHOICES: GenerationChoices = { look: null, components: {}, brief: '', reference: null };
 
 export function ClipCreationPanel({ video }: { video: Video }) {
+  const { user } = useAuth();
+  const noCredits = user?.role !== 'ADMIN' && (user?.creditBalance ?? 0) <= 0;
   const job = video.processingJobs?.[0];
   const analysisDone = job?.status === 'COMPLETED';
   // One-step entry: clips were requested with the upload/import and start by themselves.
@@ -405,7 +408,7 @@ export function ClipCreationPanel({ video }: { video: Video }) {
   // Cards only for the request the backend is currently serving.
   const clips = results?.outputStyle === request?.outputStyle ? results?.clips ?? [] : [];
   const busy = submitting || rendering;
-  const canCreate = canCreateClips({ analysisReady: analysis.analysisStatus === 'READY',
+  const canCreate = !noCredits && canCreateClips({ analysisReady: analysis.analysisStatus === 'READY',
     outputStyle, requestedClipCount: count, maxClipCount: max, submitting, rendering });
   // Same look/brief/count as the clips already shown: the button re-generates them.
   const regenerating = request?.status === 'COMPLETED' && clips.length > 0 &&
@@ -442,6 +445,7 @@ export function ClipCreationPanel({ video }: { video: Video }) {
               disabled={busy || count >= max} onClick={() => setCount((value) => clampClipCount(value + 1, max))}><Plus size={17} /></Button>
           </div>
         </div>
+        {noCredits && <p className='text-sm text-soft'>You've used your available generations.</p>}
         <Button className='h-12 w-full rounded-2xl text-base sm:h-11 sm:w-auto sm:justify-self-start sm:rounded-xl sm:text-sm' disabled={!canCreate}
           onClick={() => void submit()}>
           {busy ? <><Loader2 className='animate-spin' size={16} />Creating clips...</>

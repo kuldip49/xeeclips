@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { Readable } from 'stream';
 import { parseAutoGeneration } from './auto-generation';
+import { requestIdentity } from '../auth/request-context';
 
 
 const CHUNK_BYTES = 20 * 1024 * 1024;
@@ -13,6 +14,7 @@ const MAX_BYTES = 4 * 1024 * 1024 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 type Manifest = {
+  userId?: string;
   id: string; projectId: string; name: string; mimeType: string; size: number;
   chunks: number; createdAt: string; aiMode?: unknown; processingType?: unknown;
   aspectRatio?: unknown; targetPlatform?: unknown;
@@ -25,7 +27,7 @@ export class DiskUploadSessionStore {
   constructor(private readonly finalize: (manifest: Manifest, file: Express.Multer.File) => Promise<unknown>, namespace = '') {
     this.root = join(process.env.UPLOAD_STAGING_DIR || join(tmpdir(), 'ai-content-upload-staging'), namespace);
   }
-  async cancel(id: string) { await rm(this.directory(id), { recursive: true, force: true }); }
+  async cancel(id: string) { await this.manifest(id); await rm(this.directory(id), { recursive: true, force: true }); }
 
   private directory(id: string) {
     if (!UUID.test(id)) throw new BadRequestException('Invalid upload session ID');
@@ -34,7 +36,10 @@ export class DiskUploadSessionStore {
 
   private async manifest(id: string): Promise<Manifest> {
     try {
-      return JSON.parse(await readFile(join(this.directory(id), 'manifest.json'), 'utf8')) as Manifest;
+      const manifest = JSON.parse(await readFile(join(this.directory(id), 'manifest.json'), 'utf8')) as Manifest;
+      const userId = requestIdentity.getStore()?.userId;
+      if (userId && manifest.userId !== userId) throw new NotFoundException('Upload session not found');
+      return manifest;
     } catch {
       throw new NotFoundException('Upload session not found');
     }
@@ -53,6 +58,7 @@ export class DiskUploadSessionStore {
     }
     const id = randomUUID();
     const manifest: Manifest = {
+      userId: requestIdentity.getStore()?.userId,
       id, projectId, name: basename(name), mimeType, size,
       chunks: Math.ceil(size / CHUNK_BYTES), createdAt: new Date().toISOString(),
       aiMode: body.aiMode, processingType: body.processingType,

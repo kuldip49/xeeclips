@@ -1,4 +1,5 @@
 'use client';
+import { useAuth } from '@/components/auth-provider';
 
 import { useEffect, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
@@ -15,7 +16,6 @@ import { EditPresetPanel } from '../edit-preset-panel';
 
 export type RightTab = 'INSPECTOR' | 'AI';
 export type AiMode = 'CHAT' | 'REVIEW' | 'BRIEF';
-const ASK_AI_CONSENT_KEY = 'xeeclip-ask-ai-consent-v1';
 const ASK_AI_DISCLOSURE = 'Ask AI uses an AI service to understand your request and relevant clip content.';
 
 export type EditPanelContentProps = {
@@ -63,11 +63,11 @@ export function EditAiContent({ project, source, selected, style, busy, selected
   /** Optional controlled mode, so a parent can keep it across tab switches. */
   mode?: AiMode; onModeChange?: (mode: AiMode) => void }) {
   const [ownMode, setOwnMode] = useState<AiMode>('CHAT');
+  const { user, preferences } = useAuth();
   const [consent, setConsent] = useState<'loading' | 'needed' | 'declined' | 'granted'>('loading');
   useEffect(() => {
-    try { setConsent(localStorage.getItem(ASK_AI_CONSENT_KEY) === 'allowed' ? 'granted' : 'needed'); }
-    catch { setConsent('needed'); }
-  }, []);
+    setConsent(user?.aiProcessingConsentAt ? 'granted' : 'needed');
+  }, [user?.aiProcessingConsentAt]);
   const aiMode = mode ?? ownMode;
   const setAiMode = (next: AiMode) => { setOwnMode(next); onModeChange?.(next); };
   const sheet = layout === 'sheet';
@@ -84,9 +84,7 @@ export function EditAiContent({ project, source, selected, style, busy, selected
         className='btn-primary h-11 rounded-xl px-4 text-sm md:h-10'>Enable Ask AI</button> : <>
         <button type='button' onClick={() => setConsent('declined')}
           className='h-11 rounded-xl border border-border px-4 text-sm font-medium text-soft transition-colors hover:border-border-strong hover:bg-tint hover:text-foreground md:h-10'>Cancel</button>
-        <button type='button' onClick={() => { try { localStorage.setItem(ASK_AI_CONSENT_KEY, 'allowed'); }
-          catch { /* Keep consent for this open editor only when storage is unavailable. */ }
-          setConsent('granted'); }} className='btn-primary h-11 rounded-xl px-4 text-sm md:h-10'>Allow Ask AI</button>
+        <button type='button' onClick={() => { void preferences({ aiProcessingConsent: true }).then(() => setConsent('granted')).catch(e => onError(e instanceof Error ? e.message : 'Please try again.')); }} className='btn-primary h-11 rounded-xl px-4 text-sm md:h-10'>Allow Ask AI</button>
       </>}
     </div>
   </section>;

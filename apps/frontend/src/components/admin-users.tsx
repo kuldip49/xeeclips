@@ -1,0 +1,15 @@
+'use client';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { apiFetch } from '@/lib/api';
+import { AppShell } from './app-shell';
+import type { Account } from './auth-provider';
+type User = Account & { status: string; createdAt: string; lastLoginAt: string | null; _count: { reservations: number } };
+export function AdminUsers() {
+  const [q, setQ] = useState(''); const [page, setPage] = useState(1); const [data, setData] = useState<{ users: User[]; total: number } | null>(null); const [error, setError] = useState('');
+  useEffect(() => { let alive = true; const t = setTimeout(() => void apiFetch<{ users: User[]; total: number }>(`/admin/users?q=${encodeURIComponent(q)}&page=${page}`).then(v => { if (alive) { setData(v); setError(''); } }).catch(e => { if (alive) setError(e.message); }), 200); return () => { alive = false; clearTimeout(t); }; }, [q, page]);
+  return <AppShell><Link href='/admin' className='text-sm text-primary-soft'>← Admin</Link><h1 className='mt-3 font-display text-3xl font-bold'>Users</h1><input aria-label='Search users by email or name' placeholder='Search email or name' value={q} onChange={e => { setQ(e.target.value); setPage(1); }} className='mt-6 h-12 w-full max-w-md rounded-xl border border-border bg-surface px-4'/>
+    {error && <p role='alert' className='mt-4 text-danger'>{error}</p>}<div className='mt-5 overflow-x-auto rounded-2xl border border-border bg-surface'><table className='w-full text-left text-sm'><thead className='bg-inset text-xs text-muted-foreground'><tr>{['Account', 'Role', 'Status', 'Remaining', 'Consumed', 'Generations', 'Created', 'Last login'].map(h => <th key={h} className='whitespace-nowrap px-4 py-4 font-medium'>{h}</th>)}</tr></thead><tbody>{data?.users.map(u => <tr key={u.id} className='border-t border-border'><td className='px-4 py-4'><Link href={'/admin/users/detail?id=' + u.id} className='text-primary-soft'>{u.email}</Link><p className='text-xs text-muted-foreground'>{u.displayName}</p></td><td className='px-4'>{u.role === 'ADMIN' ? 'Owner' : 'User'}</td><td className='px-4'>{u.status.toLowerCase()}</td><td className='px-4 tabular-nums'>{u.role === 'ADMIN' ? 'Unlimited' : u.creditBalance}</td><td className='px-4 tabular-nums'>{u.creditsConsumed}</td><td className='px-4'>{u._count.reservations}</td><td className='whitespace-nowrap px-4'>{new Date(u.createdAt).toLocaleDateString()}</td><td className='whitespace-nowrap px-4'>{u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : '—'}</td></tr>)}</tbody></table></div>
+    <div className='my-6 flex items-center justify-between gap-3 text-sm'><button disabled={page <= 1} onClick={() => setPage(p => p - 1)} className='rounded-xl border border-border px-4 py-3 disabled:opacity-40'>Previous</button><span>Page {page} · {data?.total ?? 0} users</span><button disabled={!data || page * 25 >= data.total} onClick={() => setPage(p => p + 1)} className='rounded-xl border border-border px-4 py-3 disabled:opacity-40'>Next</button></div>
+  </AppShell>;
+}

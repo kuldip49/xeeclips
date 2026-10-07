@@ -184,8 +184,8 @@ ok(panel.includes('clip.editUrl ?? (await materializeGeneratedClipForEditing(cli
   'an already-linked clip opens its project; an unlinked one materializes through the shared API');
 ok(panel.includes("target === 'AI' ? `${editUrl}${editUrl.includes('?') ? '&' : '?'}panel=ai`"),
   'Ask AI opens the SAME project with the AI editor showing');
-ok(editorPage.includes("initialRightTab={panel === 'ai' ? 'AI' : 'INSPECTOR'}") && editorPage.includes("useSearchParams().get('panel')") &&
-  rightPanel.includes('useState<RightTab>(initialTab)'), 'the editor honours panel=ai');
+ok(editorPage.includes("initialRightTab={panel === 'ai' ? 'AI' : 'INSPECTOR'}") && editorPage.includes("params.get('panel')") &&
+  editorPage.includes('useSearchParams()'), 'the static editor honours panel=ai');
 ok(panel.includes('STYLE_READY_STATUSES.has(clip.style?.status') &&
   panel.includes('clip.style.playbackUrl'),
   'a styled clip previews and exports its styled render');

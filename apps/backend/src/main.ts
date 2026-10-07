@@ -1,9 +1,15 @@
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./modules/app/app.module";
+import { requestIdentity } from './modules/auth/request-context';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.enableShutdownHooks();
+  app.use((_req: unknown, res: any, next: () => void) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    requestIdentity.run({}, next);
+  });
   const frontendOrigins = (process.env.FRONTEND_ORIGIN ?? "http://localhost:3000")
     .split(",")
     .map((origin) => origin.trim())

@@ -207,7 +207,8 @@ async function main() {
       'components', 'edit-mode', 'edit-mode-workspace.tsx'), 'utf8');
     assert.ok(!/selectedTimeRange=\{null\}/u.test(workspace),
       'the workspace still hard-codes selectedTimeRange={null}');
-    assert.ok(/selectedTimeRange=\{selectedRange\}/u.test(workspace));
+    // The panel refactor forwards a typed props object instead of inline JSX props.
+    assert.ok(/selectedTimeRange:\s*selectedRange/u.test(workspace));
     ok('the workspace passes the real selected range to the AI editor');
 
     // 8. The timeline owns the gesture, and a plain click is still a seek.

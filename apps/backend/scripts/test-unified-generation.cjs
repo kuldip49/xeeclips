@@ -229,6 +229,7 @@ function fakeStore(candidates) {
       findMany: async () => [] },
     $transaction: async (operations) => Promise.all(operations)
   };
+  require('./lib-usage-fixture.cjs')(store.prisma);
   return store;
 }
 

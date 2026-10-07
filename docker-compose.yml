@@ -156,6 +156,12 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in the ignored .env file}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      NODE_ENV: production
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-true}
+      TRUST_CLOUDFLARE_IP: ${TRUST_CLOUDFLARE_IP:-true}
+      DEFAULT_USER_CREDITS: ${DEFAULT_USER_CREDITS:-5}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
       UPLOAD_STAGING_DIR: /app/upload-staging
       MINIO_BUCKET: ai-content-platform
     ports:

@@ -3,7 +3,8 @@ export type { ReframeSession, ReframePlan, ReframeRegion, ReframeBox, ReframeHoo
   ReframeCleanup, ReframeExport, ReframeEditPath, ReframePreparation, ReframeAnalysis, ReframeCropGrid } from '@ai-content-platform/shared';
 import type { ReframeHook, ReframeHookCategory, ReframePlan, ReframeSession } from '@ai-content-platform/shared';
 export async function reframeRequest<T=ReframeSession>(path='',method='GET',body?:unknown,signal?:AbortSignal):Promise<T>{
-  const response=await fetch(`${getPublicApiBaseUrl()}/quick-reframe${path}`,{method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined,signal,cache:'no-store'});
+  const response=await fetch(`${getPublicApiBaseUrl()}/quick-reframe${path}`,{credentials:'include',method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined,signal,cache:'no-store'});
+  if(response.status===401&&typeof window!=='undefined')window.dispatchEvent(new Event('xeeclip-auth-expired'));
   if(!response.ok){const error=await response.json().catch(()=>({}));throw new Error(typeof error.message==='string'?error.message:'The video could not be processed. Please retry.');}
   return response.json();
 }
@@ -15,7 +16,7 @@ export async function uploadReframe(id:string,file:File,progress:(percent:number
       const start=i*session.chunkBytes,chunk=file.slice(start,Math.min(file.size,start+session.chunkBytes));
       for(let attempt=0;attempt<3;attempt++){
         try{await new Promise<void>((resolve,reject)=>{
-          const xhr=new XMLHttpRequest();const abort=()=>xhr.abort();xhr.open('PUT',`${getPublicApiBaseUrl()}/quick-reframe/uploads/${session.id}/chunks/${i}`);xhr.setRequestHeader('Content-Type','application/octet-stream');
+          const xhr=new XMLHttpRequest();const abort=()=>xhr.abort();xhr.open('PUT',`${getPublicApiBaseUrl()}/quick-reframe/uploads/${session.id}/chunks/${i}`);xhr.withCredentials=true;xhr.setRequestHeader('Content-Type','application/octet-stream');
           xhr.upload.onprogress=e=>progress(Math.floor((start+e.loaded)/file.size*100));
           const cleanup=()=>signal.removeEventListener('abort',abort);
           xhr.onload=()=>{cleanup();xhr.status>=200&&xhr.status<300?resolve():reject(new Error('Upload interrupted. Please retry.'));};

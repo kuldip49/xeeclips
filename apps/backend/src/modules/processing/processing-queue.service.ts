@@ -13,7 +13,7 @@ export class ProcessingQueueService implements OnModuleDestroy {
     process.env.REDIS_URL ?? "redis://localhost:6379",
     { maxRetriesPerRequest: null }
   );
-  private readonly queue = new Queue<ProcessVideoJobData>(VIDEO_PROCESSING_QUEUE, {
+  private readonly queue = new Queue<ProcessVideoJobData, unknown, string>(VIDEO_PROCESSING_QUEUE, {
     connection: this.connection
   });
 

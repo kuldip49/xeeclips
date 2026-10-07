@@ -136,7 +136,7 @@ export async function runEditModeQa(input: QaInput): Promise<QaReport> {
   // --- 5/6. Streams ---------------------------------------------------------
   add('VIDEO_STREAM', probe.hasVideo ? 'PASS' : 'REJECT',
     probe.hasVideo ? `Video stream present (${probe.videoCodec}).` : 'No video stream.');
-  const audioExpected = plan.hasSourceAudio ||
+  const audioExpected = (plan.hasSourceAudio && plan.videoSegments.some(segment => !segment.sourceMuted && segment.sourceVolume > 0)) ||
     plan.audioTracks.some((track) => !track.muted && track.volume > 0);
   add('AUDIO_STREAM', !audioExpected ? 'PASS' : probe.hasAudio ? 'PASS' : 'REJECT',
     audioExpected ? (probe.hasAudio ? `Audio stream present (${probe.audioCodec}).`

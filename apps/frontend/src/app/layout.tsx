@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { Inter, Manrope } from "next/font/google";
 import "./globals.css";
+import { AuthProvider } from '@/components/auth-provider';
 
 // Self-hosted at build time with metric-matched fallbacks, so text never shifts when they load.
 // Both are variable fonts: one file each covers every weight the UI uses.
@@ -39,7 +40,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${inter.variable} ${manrope.variable}`}>
-      <body>{children}</body>
+      <body><AuthProvider>{children}</AuthProvider></body>
     </html>
   );
 }

@@ -26,6 +26,8 @@ function createHarness() {
     return result;
   };
   const prisma = {
+    quickReframe: { findUnique: async () => null, updateMany: async () => ({ count: 0 }) },
+    creditReservation: { findUnique: async () => null },
     $transaction: async (callback) => callback(prisma),
     editProject: {
       create: async ({ data }) => {

@@ -191,6 +191,7 @@ export class GeneratedClipEditProjectMaterializerService {
 
       await this.prisma.$transaction(async (tx) => {
         await tx.editProject.create({ data: {
+          userId: (await tx.project.findUniqueOrThrow({ where: { id: clip.video.projectId } })).userId,
           id: projectId, name, sourceProjectId: clip.video.projectId, generatedClipId: clip.id,
           originalVideoId: clip.videoId,
           status: 'READY', settings, revision: 1,

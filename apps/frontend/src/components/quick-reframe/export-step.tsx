@@ -1,4 +1,5 @@
 'use client';
+import { useAuth } from '@/components/auth-provider';
 import { useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Check, Download, History, Loader2, Play } from 'lucide-react';
@@ -18,6 +19,8 @@ export function ExportStep({ session, onSession, onBack, onError }: {
   session: ReframeSession; onSession: (s: ReframeSession) => void; onBack: () => void; onError: (message: string) => void;
 }) {
   const [quality, setQuality] = useState<720 | 1080>(1080);
+  const { user } = useAuth();
+  const noCredits = user?.role !== 'ADMIN' && (user?.creditBalance ?? 0) <= 0;
   const [busy, setBusy] = useState(false);
   const processing = isProcessing(session);
   const exporting = session.status === 'EXPORT';
@@ -59,10 +62,11 @@ export function ExportStep({ session, onSession, onBack, onError }: {
         <p className='flex items-center gap-2 text-sm text-success'><Check size={16} />Your video is ready and saved in History.</p>
         <Button type='button' size='lg' className='h-12' asChild><a href={`${mediaUrl(latest.url)}?download=1`} download data-testid='download-video'><Download size={16} />Download Video</a></Button>
         <Button type='button' variant='secondary' asChild><Link href='/history'><History size={15} />Open History</Link></Button>
-        <Button type='button' variant='ghost' disabled={busy} onClick={() => void run('export')}>Export again at {quality}p</Button>
-      </div> : <Button type='button' size='lg' className='h-12' disabled={busy || processing} onClick={() => void run('export')} data-testid='export-video'>
+        <Button type='button' variant='ghost' disabled={busy || noCredits} onClick={() => void run('export')}>Export again at {quality}p</Button>
+      </div> : <Button type='button' size='lg' className='h-12' disabled={busy || processing || noCredits} onClick={() => void run('export')} data-testid='export-video'>
         {exporting ? <Loader2 size={16} className='animate-spin' /> : <Download size={16} />}{exporting ? 'Exporting…' : `Export ${quality}p`}</Button>}
       {latest && !latest.current && !processing && <p className='text-xs text-muted-foreground'>An earlier export is in History. Export again to include your latest edits.</p>}
+      {noCredits && <p className='text-sm text-soft'>You've used your available generations.</p>}
       <Button type='button' variant='ghost' className='justify-start' disabled={processing} onClick={onBack}><ArrowLeft size={15} />Back to editing</Button>
     </aside>
   </div>;

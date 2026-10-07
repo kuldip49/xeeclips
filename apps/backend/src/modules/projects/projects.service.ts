@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
 import { CreateProjectDto } from "./dto/create-project.dto";
 
@@ -70,8 +70,9 @@ export class ProjectsService {
   }
 
   async create(input: CreateProjectDto) {
+    if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 120) throw new BadRequestException('Enter a project name of at most 120 characters.');
     const project = await this.prisma.project.create({
-      data: input,
+      data: { name: input.name.trim(), description: typeof input.description === 'string' ? input.description.slice(0, 2000) : undefined },
       include: { videos: true }
     });
 

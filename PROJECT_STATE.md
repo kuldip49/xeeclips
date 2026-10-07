@@ -4,6 +4,14 @@ Last updated: 2026-10-07
 
 ## Milestones
 
+- Multi-user accounts and credits (2026-10-07): secure database-backed sessions, bcrypt passwords,
+  per-user API/media/History/editor/import ownership, private MinIO, atomic credit reservations and
+  ledger, sole owner admin, dashboard/users/confirmed credit changes, suspension and audit. Deployed
+  to xeeclip.me with static Cloudflare hosting preserved. All confirmed historical content assigned
+  to the owner after backup; disposable production users removed. Real production 2→1→0/refill and
+  cross-workflow concurrency passed, as did Quick Reframe/manual exports and account consent.
+  Report: `docs/multi-user-launch-report.md`; operations: `docs/authentication-and-credits.md`.
+
 - Quick Reframe V3 (2026-10-07): the Crop step is fully manual. No detection, OCR, smart crop, tracking or
   crop restrictions before Done Cropping (only finite, inside the frame, ≥16×16 px; low-resolution warning).
   Original/Free/9:16/16:9/1:1/4:5/5:4/3:4/4:3/2:3/3:2/21:9 + custom W:H, six grid overlays, corner/edge/move

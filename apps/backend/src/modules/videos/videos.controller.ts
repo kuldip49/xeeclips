@@ -149,7 +149,7 @@ export class VideosController {
   async getVideoPoster(@Param('id') id: string, @Res({ passthrough: true }) response: Response) {
     const poster = await this.videosService.getVideoPoster(id);
     response.setHeader('Content-Type', poster.mimeType);
-    response.setHeader('Cache-Control', 'public, max-age=86400');
+    response.setHeader('Cache-Control', 'private, no-store');
     return new StreamableFile(poster.stream);
   }
 
@@ -181,7 +181,7 @@ export class VideosController {
     const poster = await this.videosService.getGeneratedClipPoster(clipId);
     response.setHeader('Content-Type', poster.mimeType);
     // The cover is immutable for a given clip id.
-    response.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    response.setHeader('Cache-Control', 'private, no-store');
     return new StreamableFile(poster.stream);
   }
 

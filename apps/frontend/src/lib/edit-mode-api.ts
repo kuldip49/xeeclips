@@ -49,6 +49,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       throw error;
     });
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new Event('xeeclip-auth-expired'));
     if (isProcessingServerUnavailableStatus(response.status)) {
       throw new EditModeApiError('Processing server is currently unavailable.', response.status);
     }

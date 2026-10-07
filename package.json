@@ -15,5 +15,9 @@
     "test:editing-media": "npm --workspace apps/backend run test:editing-media",
     "build": "npm --workspaces run build",
     "lint": "npm --workspaces run lint"
+  },
+  "overrides": {
+    "postcss": "8.5.23",
+    "sharp": "^0.35.5"
   }
 }

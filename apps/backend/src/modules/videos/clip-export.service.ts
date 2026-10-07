@@ -1,3 +1,4 @@
+import { UsageService } from '../auth/usage.service';
 import { Injectable, Logger } from '@nestjs/common';
 import { AiProcessingMode, ClipCandidate, Prisma, ProcessingJob, Video } from '@prisma/client';
 import { execFile } from 'child_process';
@@ -213,6 +214,15 @@ type PreparedEdit = { plan: EditPlan; boundary: BoundaryDecision; timeline: Edit
 
 @Injectable()
 export class ClipExportService {
+  private async publish<T>(jobId: string | undefined, write: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    if (!jobId) return write(this.prisma);
+    return this.prisma.$transaction(async tx => {
+      const output = await write(tx);
+      const job = await tx.processingJob.findUnique({ where: { id: jobId } });
+      if (job?.creditReservationKey) await new UsageService(this.prisma).settleInTransaction(tx, job.creditReservationKey, true);
+      return output;
+    });
+  }
   private readonly logger = new Logger(ClipExportService.name);
   // Recently used music track ids per source video, so a source doesn't hear
   // the same bed on every clip. Process-local and small: a soft variety signal,
@@ -292,7 +302,7 @@ export class ClipExportService {
       if (options?.templateId && existing.templateId && existing.templateId !== options.templateId)
         throw new ClipInfrastructureError('CONTRACT_VIOLATION',
           `Stored clip template ${existing.templateId} differs from ${options.templateId}`);
-      const reused = options?.generationJobId ? await this.prisma.generatedClip.update({
+      const reused = options?.generationJobId ? await this.publish(options.generationJobId, tx => tx.generatedClip.update({
         where: { id: existing.id }, data: {
           generationJobId: options.generationJobId,
           templateId: options.templateId ?? null,
@@ -300,7 +310,7 @@ export class ClipExportService {
           effectiveTemplate: options.templateId ?? null,
           styleVariant: options.styleVariant ?? options.templateId ?? null,
           requestedClipIndex: options.rank ?? null
-        } }) : existing;
+        } })) : existing;
       this.logger.log(JSON.stringify({ event: 'clip_export_performance', videoId: video.id,
         rangeKey: candidate.rangeKey, variantKey, exportMs: Date.now() - exportStarted, cacheHits: 1 }));
       return reused;
@@ -375,7 +385,7 @@ export class ClipExportService {
           sourceCacheHit: Boolean(options?.preparedSourcePath), storageMs,
           totalCandidateMs: Date.now() - exportStarted });
       let clip;
-      try { clip = await this.prisma.generatedClip.upsert({
+      try { clip = await this.publish(options?.generationJobId, tx => tx.generatedClip.upsert({
         where: variantWhere,
         create: {
           videoId: video.id, candidateId: candidate.id, rangeKey: candidate.rangeKey,
@@ -396,7 +406,7 @@ export class ClipExportService {
           ...(editPlan ? { editPlan } : {}), ...(editTelemetry ? { editTelemetry } : {}),
           ...(contentPackaging ? { contentPackaging } : {})
         }, update: {}
-      }); } catch (error) {
+      })); } catch (error) {
         // A concurrent retry may have committed the identical variant. Reuse only
         // after checking its canonical identity; never hide a different owner.
         const winner = await this.prisma.generatedClip.findUnique({ where: variantWhere });

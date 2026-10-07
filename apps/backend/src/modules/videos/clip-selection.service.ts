@@ -1,3 +1,4 @@
+import { UsageService } from '../auth/usage.service';
 import { AUTOMATIC_RAW } from '../editing/raw-edit-plan';
 import {
   BadRequestException,
@@ -370,6 +371,7 @@ type RequestUpdate = (data: Prisma.ProcessingJobUpdateManyMutationInput) => Prom
 class SupersededRequestError extends Error {}
 
 export class ClipSelectionService {
+  private get usage() { return new UsageService(this.prisma); }
   private readonly logger = new Logger(ClipSelectionService.name);
   private readonly dispatcher: ClipRenderDispatcher;
 
@@ -608,11 +610,15 @@ export class ClipSelectionService {
       return !request.regenerate && current.clipRenderStatus === 'COMPLETED' && identical(current) &&
         current.selectedCandidateIds.length === requestedClipCount;
     };
-    if (await alreadySatisfied(job)) return this.getAnalysis(videoId);
+    if (await alreadySatisfied(job)) {
+      if(job.clipRenderStatus === 'COMPLETED' && job.creditReservationKey) await this.usage.settle(job.creditReservationKey, false);
+      return this.getAnalysis(videoId);
+    }
 
     const requestedAt = new Date();
     // Conditional claim so concurrent POSTs cannot both start a request.
-    const claimed = await this.prisma.processingJob.updateMany({
+    const claimed = await this.prisma.$transaction(async tx => {
+      const result = await tx.processingJob.updateMany({
       where: { id: job.id, OR: [{ clipRenderStatus: null },
         { clipRenderStatus: { notIn: ACTIVE_RENDER_STATES } }] },
       data: { outputStyle, requestedClipCount, maxClipCount,
@@ -621,6 +627,15 @@ export class ClipSelectionService {
         processingType: processingTypeForOutputStyle(outputStyle), selectedCandidateIds: [],
         clipRenderStatus: 'QUEUED', clipRenderError: null, clipRequestedAt: requestedAt,
         clipRenderStartedAt: null } });
+      if (result.count) {
+        const owner = await tx.project.findUniqueOrThrow({ where: { id: video.projectId }, select: { userId: true } });
+        const previous = job.creditReservationKey ? await tx.creditReservation.findUnique({ where: { jobKey: job.creditReservationKey } }) : null;
+        const key = previous?.status === 'RESERVED' ? previous.jobKey : `clips:${job.id}:${requestedAt.toISOString()}`;
+        await this.usage.reserve(tx, owner.userId, key, 'CREATE_CLIPS', job.id);
+        await tx.processingJob.update({ where: { id: job.id }, data: { creditReservationKey: key } });
+      }
+      return result;
+    });
     if (!claimed.count) {
       const current = await this.prisma.processingJob.findUniqueOrThrow({ where: { id: job.id } });
       if (await alreadySatisfied(current)) return this.getAnalysis(videoId);
@@ -643,6 +658,14 @@ export class ClipSelectionService {
     await this.prisma.processingJob.updateMany({ where: { id: request.processingJobId,
       clipRequestedAt: new Date(request.requestedAt), clipRenderStatus: { in: ACTIVE_RENDER_STATES } },
     data: { clipRenderStatus: 'FAILED', clipRenderError: message } }).catch(() => undefined);
+    await this.settleRequest(request);
+  }
+
+  private async settleRequest(request: ClipRenderRequest) {
+    const current = await this.prisma.processingJob.findUnique({ where: { id: request.processingJobId } });
+    if (!current?.creditReservationKey || current.clipRequestedAt?.toISOString() !== request.requestedAt) return;
+    const delivered = await this.prisma.generatedClip.count({ where: { generationJobId: current.id, createdAt: { gte: new Date(request.requestedAt) }, sizeBytes: { gt: 0 } } });
+    await this.usage.settle(current.creditReservationKey, delivered > 0);
   }
 
   /**
@@ -670,6 +693,7 @@ export class ClipSelectionService {
         job.maxClipCount ?? maxClipCountForDuration(video.duration), job.outputStyle, update,
         readGenerationSettings(job.generationSettings),
         String(jsonObject(job.telemetry).effectiveAiMode ?? job.aiMode), request.requestedAt);
+      await this.settleRequest(request);
       // Styling runs after delivery, in the editor, on each clip's own project.
       if (this.hooks.afterDelivery) void this.hooks.afterDelivery(request.videoId).catch((error) =>
         this.logger.warn(JSON.stringify({ event: 'generation_styling_trigger_failed',

@@ -281,6 +281,7 @@ function fakeStore(job, { candidates = [], clips = [], sourceVideo = video } = {
     },
     $transaction: async (operations) => Promise.all(operations)
   };
+  require('./lib-usage-fixture.cjs')(store.prisma);
   return store;
 }
 

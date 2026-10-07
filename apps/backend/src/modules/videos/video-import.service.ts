@@ -17,6 +17,8 @@ import IORedis from 'ioredis';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { UsageService } from '../auth/usage.service';
+import { randomUUID } from 'crypto';
 
 const QUEUE = 'video-import';
 const JOB = 'import-youtube';
@@ -27,7 +29,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
   private readonly adapter = new YouTubeImportAdapter();
   private readonly connection = new IORedis(process.env.REDIS_URL ?? 'redis://localhost:6379',
     { maxRetriesPerRequest: null });
-  private readonly queue = new Queue<{ importId: string }>(QUEUE, { connection: this.connection });
+  private readonly queue = new Queue<{ importId: string }, unknown, string>(QUEUE, { connection: this.connection });
   private worker?: Worker<{ importId: string }>;
   private readonly running = new Map<string, AbortController>();
 
@@ -95,8 +97,10 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
     const found = await this.prisma.videoImport.findUnique({ where });
     if (found) {
       // The latest choice wins, so a resubmitted link never resets the user's settings.
-      const existing = await this.prisma.videoImport.update({ where: { id: found.id },
-        data: { autoGeneration: autoGenerationJson } });
+      const existing = await this.prisma.$transaction(async tx => {
+        const row = await tx.videoImport.update({ where: { id: found.id }, data: { autoGeneration: autoGenerationJson } });
+        return ['PENDING', 'IMPORTING'].includes(row.status) ? this.reserveImport(tx, row) : row;
+      });
       if (existing.status === 'READY' && existing.videoId) {
         if (autoGeneration) await this.videos.requestAutoGeneration(existing.videoId, autoGeneration);
         return this.publicJob(existing);
@@ -104,10 +108,13 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
       if (existing.status === 'PENDING' || existing.status === 'IMPORTING') return this.publicJob(existing);
       return this.retry(existing.id);
     }
-    const row = await this.prisma.videoImport.upsert({ where, update: {},
+    const row = await this.prisma.$transaction(async tx => {
+      const row = await tx.videoImport.upsert({ where, update: {},
       create: { projectId: project.id, provider: 'YOUTUBE',
         externalVideoId: parsed.externalVideoId, sourceUrl: parsed.sourceUrl, ...settings,
         autoGeneration: autoGenerationJson } });
+      return row.status === 'PENDING' ? this.reserveImport(tx, row) : row;
+    });
     if (row.status === 'READY' && row.videoId) return this.publicJob(row);
     if (row.status === 'IMPORT_FAILED' || row.status === 'CANCELLED' || row.status === 'READY')
       return this.retry(row.id);
@@ -121,6 +128,18 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
   async list(projectId: string) {
     return (await this.prisma.videoImport.findMany({ where: { projectId },
       orderBy: { createdAt: 'desc' } })).map((row) => this.publicJob(row));
+  }
+
+  private async reserveImport(tx: Prisma.TransactionClient, row: Prisma.VideoImportGetPayload<{}>) {
+    await tx.$queryRaw`SELECT id FROM "VideoImport" WHERE id = ${row.id} FOR UPDATE`;
+    row = await tx.videoImport.findUniqueOrThrow({ where: { id: row.id } });
+    if (!row.autoGeneration) return row;
+    const reservation = row.creditReservationKey ? await tx.creditReservation.findUnique({ where: { jobKey: row.creditReservationKey } }) : null;
+    if (reservation?.status === 'RESERVED') return row;
+    const key = `import:${row.id}:${randomUUID()}`;
+    const owner = await tx.project.findUniqueOrThrow({ where: { id: row.projectId } });
+    await new UsageService(this.prisma).reserve(tx, owner.userId, key, 'CREATE_CLIPS', `import:${row.id}`);
+    return tx.videoImport.update({ where: { id: row.id }, data: { creditReservationKey: key } });
   }
 
   async get(id: string) {
@@ -138,9 +157,14 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
     const queued = await this.queue.getJob(id);
     if (queued && await queued.isActive()) throw new ConflictException('Import is still stopping');
     if (queued) await queued.remove();
-    const updated = await this.prisma.videoImport.update({ where: { id }, data: {
-      status: 'PENDING', stage: 'FETCHING_INFO', progress: 0, error: null, errorCode: null } });
-    await this.enqueue(id);
+    const updated = await this.prisma.$transaction(async tx => {
+      const row = await tx.videoImport.update({ where: { id }, data: { status: 'PENDING', stage: 'FETCHING_INFO', progress: 0, error: null, errorCode: null } });
+      return this.reserveImport(tx, row);
+    });
+    try { await this.enqueue(id); } catch {
+      await this.fail(id, 'IMPORT_UNAVAILABLE', 'Import could not be queued. Please try again.');
+      throw new ImportError('IMPORT_UNAVAILABLE', 'Import could not be queued. Please try again.');
+    }
     return this.publicJob(updated);
   }
 
@@ -159,6 +183,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
     this.running.get(id)?.abort();
     const queued = await this.queue.getJob(id);
     if (queued && !await queued.isActive()) await queued.remove().catch(() => undefined);
+    await this.refundImport(id);
     return this.get(id);
   }
 
@@ -213,7 +238,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
           videoId: existingVideo.id, status: 'READY', stage: 'READY', progress: 100 } });
         if (!reused.count) throw new ImportError('IMPORT_CANCELLED', 'Import cancelled.');
         const request = row.autoGeneration as unknown as ClipCreationRequest | null;
-        if (request) await this.videos.requestAutoGeneration(existingVideo.id, request);
+        if (request) await this.videos.requestAutoGeneration(existingVideo.id, request, row.creditReservationKey);
         return;
       }
       let clock = Date.now();
@@ -253,7 +278,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
         path: normalized.filePath, originalname: `${(metadata.title || row.externalVideoId).replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 200)}.mp4`,
         mimetype: 'video/mp4', size: normalized.size
       } as Express.Multer.File, row.aiMode, row.processingType, row.outputAspectRatio,
-      row.targetPlatform, { sourceUrl: row.sourceUrl, externalVideoId: row.externalVideoId },
+      row.targetPlatform, { sourceUrl: row.sourceUrl, externalVideoId: row.externalVideoId, creditReservationKey: row.creditReservationKey },
       row.autoGeneration as unknown as ClipCreationRequest | null);
       const storedVideo = await this.prisma.video.findUniqueOrThrow({ where: { id: video.id },
         select: { bucket: true, objectKey: true, sizeBytes: true } });
@@ -295,6 +320,15 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
   private async fail(id: string, code: string, message: string) {
     await this.prisma.videoImport.updateMany({ where: { id, status: { not: 'CANCELLED' } },
       data: { status: 'IMPORT_FAILED', stage: 'IMPORT_FAILED', errorCode: code, error: message } });
+    await this.refundImport(id);
+  }
+
+  private async refundImport(id: string) {
+    const row = await this.prisma.videoImport.findUnique({ where: { id } });
+    if (!row?.creditReservationKey) return;
+    const reservation = await this.prisma.creditReservation.findUnique({ where: { jobKey: row.creditReservationKey } });
+    // A transferred reservation belongs to the canonical generation job, which settles it.
+    if (reservation?.resourceId === `import:${id}`) await new UsageService(this.prisma).settle(row.creditReservationKey, false);
   }
 
   private publicJob(row: { id: string; projectId: string; videoId: string | null;
