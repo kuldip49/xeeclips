@@ -214,17 +214,16 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
       const region = element.type === 'SUBTITLE' ? visualLayout?.captions
         : role === 'HOOK' ? visualLayout?.hook
           : role === 'KEY_POINT' ? visualLayout?.supportingText : null;
-      if (region) {
-        const preferred = element.type === 'SUBTITLE' ? region.fontSize
-          : autoFitText(overlay.content, { width: region.width, height: region.height,
-            maxLines: region.maxLines, preferred: region.fontSize,
-            minimum: Math.min(30, region.fontSize), lineHeight: region.lineHeight,
-            ...('glyphWidthEm' in region && region.glyphWidthEm
-              ? { glyphWidthEm: region.glyphWidthEm } : {}) });
-        overlay = { ...overlay,
-          x: Math.round(region.x * canvas.width), y: Math.round(region.y * canvas.height),
-          width: Math.round(region.width * canvas.width), height: Math.round(region.height * canvas.height),
-          fontSizePx: fontSizePx(preferred, canvas.width), lineSpacing: region.lineHeight };
+      // The element's own box and size are what the editor shows, so they are what exports: a hook or
+      // caption the user moved, resized or re-sized renders exactly there. The template only applies
+      // its deterministic auto-fit while a hook still has the template's font size (the editor
+      // preview applies the same fit, `layoutFittedText` on the frontend).
+      if (region && element.type !== 'SUBTITLE' && Math.abs(number(properties.fontSize, region.fontSize) - region.fontSize) < 0.01) {
+        const fitted = autoFitText(overlay.content, { width: clamp01(number(properties.width, region.width)),
+          height: clamp01(number(properties.height, region.height)), maxLines: region.maxLines, preferred: region.fontSize,
+          minimum: Math.min(30, region.fontSize), lineHeight: region.lineHeight,
+          ...('glyphWidthEm' in region && region.glyphWidthEm ? { glyphWidthEm: region.glyphWidthEm } : {}) });
+        overlay = { ...overlay, fontSizePx: fontSizePx(fitted, canvas.width) };
       }
       (element.type === 'SUBTITLE' ? subtitles : textOverlays).push(overlay);
       continue;

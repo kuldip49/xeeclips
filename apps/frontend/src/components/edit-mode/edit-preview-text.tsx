@@ -1,8 +1,8 @@
 'use client';
 
-import { memo } from 'react';
-import { activeWordIndex, canHighlightWords, readCaptionWords, readTextRuns, readTextStyle,
-  textStyleCss } from '@/lib/edit-mode-text';
+import { Fragment, memo } from 'react';
+import { activeWordIndex, canHighlightWords, exportLines, readCaptionWords, readTextStyle,
+  textStyleCss, wordColors } from '@/lib/edit-mode-text';
 import type { EditElement } from '@/lib/edit-mode-types';
 
 /**
@@ -35,21 +35,23 @@ export const EditPreviewText = memo(function EditPreviewText({ element, offsetSe
   const highlight = canHighlightWords(properties);
   const words = highlight ? readCaptionWords(properties) : [];
   const active = highlight ? activeWordIndex(words, offsetSec) : -1;
-  const textRuns = readTextRuns(properties);
+  // The export's own line breaks and per-word colours (runs), so both show identical lines.
+  const { tokens, lines } = exportLines(properties);
+  const colors = wordColors(properties).map((word) => word.color);
 
   return <div className='flex h-full w-full items-center'>
     {/* The block's own strut must match the text, or an inherited 24px line box inflates the
         line pitch (visible with the tight editorial serif). */}
     <div className='w-full' style={{ textAlign, ...(style.fontFamily === 'EB Garamond, serif'
       ? { lineHeight: css.lineHeight, fontSize: css.fontSize } : {}) }}>
-      <span style={{ ...run, display: 'inline',
+      {/* nowrap: only the export's breaks (<br>) apply; the space before each break keeps the text
+          readable as one sentence and is dropped at the line end, so it is never painted. */}
+      <span style={{ ...run, display: 'inline', whiteSpace: 'nowrap',
         WebkitBoxDecorationBreak: 'clone', boxDecorationBreak: 'clone' }}>
-        {highlight
-          ? words.map((word, index) => <span key={`${index}-${word.start}`}
-            style={index === active ? { color: style.activeWord.color } : undefined}>
-            {index === 0 ? '' : ' '}{word.text}</span>)
-          : textRuns.length ? textRuns.map((item, index) =>
-            <span key={`${index}-${item.text}`} style={{ color: item.color }}>{item.text}</span>) : content}
+        {lines.length ? lines.map((line, row) => <Fragment key={row}>{row > 0 && <>{' '}<br /></>}
+          {line.map((at, position) => { const color = highlight && at === active ? style.activeWord.color : colors[at];
+            return <span key={at} style={color && color !== style.color.toLowerCase() ? { color } : undefined}>{position ? ' ' : ''}{tokens[at]}</span>; })}
+        </Fragment>) : content}
       </span>
     </div>
   </div>;

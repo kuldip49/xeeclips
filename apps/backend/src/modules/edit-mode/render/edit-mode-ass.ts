@@ -94,10 +94,10 @@ export const isTransparent = (color: string) =>
  */
 /** Per-family correction to the sans-serif-tuned width estimate. EB Garamond averages
  * ~0.34 em/char against the estimate's ~0.48, so without this it wraps far too early. */
-const FONT_WIDTH_SCALE: Record<string, number> = { 'EB Garamond': 0.8 };
+const FONT_WIDTH_SCALE: Record<string, number> = { 'EB Garamond 12': 0.8 };
 /** libass sizes a font by its line height, so EB Garamond renders 0.875x the CSS em at the
  * same number. Scaling by 1/0.875 makes the exported glyphs match the browser preview. */
-const FONT_SIZE_SCALE: Record<string, number> = { 'EB Garamond': 1 / 0.875 };
+const FONT_SIZE_SCALE: Record<string, number> = { 'EB Garamond 12': 1 / 0.875 };
 export const fontSizeScale = (family: string) => FONT_SIZE_SCALE[resolveEditModeFont(family)] ?? 1;
 export const fontWidthScale = (family: string) => FONT_WIDTH_SCALE[resolveEditModeFont(family)] ?? 1;
 /** Minimum average advance (em/char) for families the layout fitter measures in the same
@@ -105,7 +105,7 @@ export const fontWidthScale = (family: string) => FONT_WIDTH_SCALE[resolveEditMo
  * alone under-measures long serif lines by ~5 %, so a hook the fitter sized for two lines
  * was emitted as one line wider than the canvas (ASS WrapStyle 2 never re-wraps it). */
 const FONT_GLYPH_EM: Record<string, number> = {
-  'EB Garamond': AUTOMATIC_2_STREET3_LAYOUT.typography.glyphWidthEm };
+  'EB Garamond 12': AUTOMATIC_2_STREET3_LAYOUT.typography.glyphWidthEm };
 
 export function wrapTokens(tokens: string[], fontSize: number, maxWidth: number,
   options: { widthScale?: number; balance?: boolean; glyphWidthEm?: number } = {}): number[][] {

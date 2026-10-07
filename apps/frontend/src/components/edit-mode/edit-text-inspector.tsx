@@ -1,11 +1,11 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Layers, Scissors, Sparkles } from 'lucide-react';
 import type { ManualEditCommand } from '@/lib/edit-mode-api';
 import type { EditElement } from '@/lib/edit-mode-types';
-import { canHighlightWords, readCaptionWords, readTextStyle, CAPTION_STYLE_PRESETS,
-  EDIT_MODE_FONTS, TEXT_BOUNDS, TEXT_STYLE_PRESETS, type CaptionStylePresetId,
+import { canHighlightWords, readCaptionWords, readTextStyle, recolorBaseRuns, runsFromWordColors, wordColors,
+  CAPTION_STYLE_PRESETS, EDIT_MODE_FONTS, TEXT_BOUNDS, TEXT_STYLE_PRESETS, type CaptionStylePresetId,
   type TextStylePresetId } from '@/lib/edit-mode-text';
 
 /**
@@ -51,12 +51,25 @@ function Slider({ title, value, min, max, step, format, onInput, onCommit }: {
   </label>;
 }
 
+/**
+ * A colour picker that persists the colour it was given. The native picker blurs its input as soon as
+ * it opens, so committing on blur alone sent the OLD colour; this commits the picked value itself,
+ * shortly after the last change (one command per pick, not per drag step) and again on blur.
+ */
 function ColorField({ title, value, onInput, onCommit }: {
-  title: string; value: string; onInput: (value: string) => void; onCommit: () => void;
+  title: string; value: string; onInput: (value: string) => void; onCommit: (value: string) => void;
 }) {
+  const pending = useRef<string | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const commit = useRef(onCommit); commit.current = onCommit;
+  const flush = () => { if (timer.current) clearTimeout(timer.current); timer.current = null;
+    if (pending.current !== null) { const next = pending.current; pending.current = null; commit.current(next); } };
+  useEffect(() => () => flush(), []); // eslint-disable-line react-hooks/exhaustive-deps
   return <label className={label}>{title}
     <input type='color' value={value} aria-label={title}
-      onChange={(event) => onInput(event.target.value)} onBlur={onCommit}
+      onChange={(event) => { const next = event.target.value; onInput(next); pending.current = next;
+        if (timer.current) clearTimeout(timer.current); timer.current = setTimeout(flush, 400); }}
+      onBlur={flush}
       className='mt-1 h-7 w-full rounded bg-transparent' />
   </label>;
 }
@@ -103,14 +116,14 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
     onPreview({ ...selected, properties: { ...properties, ...next } });
   const live = () => readTextStyle({ ...properties });
 
-  const commitStroke = () => { const s = live().stroke;
+  const commitStroke = (next: Partial<ReturnType<typeof readTextStyle>['stroke']> = {}) => { const s = { ...live().stroke, ...next };
     onCommit({ action: 'set-text-stroke', elementId: id, strokeEnabled: s.enabled,
       strokeColor: s.color, strokeWidth: s.width }); };
-  const commitShadow = () => { const s = live().shadow;
+  const commitShadow = (next: Partial<ReturnType<typeof readTextStyle>['shadow']> = {}) => { const s = { ...live().shadow, ...next };
     onCommit({ action: 'set-text-shadow', elementId: id, shadowEnabled: s.enabled,
       shadowColor: s.color, shadowOpacity: s.opacity, shadowBlur: s.blur,
       shadowOffsetX: s.offsetX, shadowOffsetY: s.offsetY }); };
-  const commitBackground = () => { const b = live().background;
+  const commitBackground = (next: Partial<ReturnType<typeof readTextStyle>['background']> = {}) => { const b = { ...live().background, ...next };
     onCommit({ action: 'set-text-background', elementId: id, backgroundEnabled: b.enabled,
       backgroundColor: b.color, backgroundOpacity: b.opacity, backgroundPadding: b.padding,
       backgroundRadius: b.radius }); };
@@ -129,7 +142,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
     opacity: num(selected.properties.opacity, 1) });
   const commitTiming = () => onCommit({ action: 'set-element-timing', elementId: id,
     startTime: selected.startTime, duration: selected.duration, trimStart: selected.trimStart });
-  const commitActiveWord = () => { const a = live().activeWord;
+  const commitActiveWord = (next: Partial<ReturnType<typeof readTextStyle>['activeWord']> = {}) => { const a = { ...live().activeWord, ...next };
     onCommit({ action: 'set-caption-active-word', elementId: id, activeWordEnabled: a.enabled,
       activeWordColor: a.color }); };
 
@@ -207,7 +220,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
       {style.activeWord.enabled && <ColorField title='Active word colour'
         value={style.activeWord.color}
         onInput={(color) => patch({ activeWord: { ...style.activeWord, color } })}
-        onCommit={commitActiveWord} />}
+        onCommit={(color) => commitActiveWord({ color })} />}
       {style.activeWord.enabled && !canHighlightWords(properties) &&
         <p className='text-[10px] leading-4 text-warning-soft/70'>
           {words.length === 0
@@ -252,9 +265,8 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
 
     <Section title='Style'>
       <ColorField title='Text colour' value={style.color}
-        onInput={(color) => patch({ color })}
-        onCommit={() => onCommit({ action: 'set-text-color', elementId: id,
-          color: live().color })} />
+        onInput={(color) => patch({ color, textRuns: recolorBaseRuns(properties, color) })}
+        onCommit={(color) => onCommit({ action: 'set-text-color', elementId: id, color })} />
       <Slider title='Opacity' value={style.opacity} min={0} max={1} step={0.01}
         format={(value) => `${Math.round(value * 100)}%`}
         onInput={(value) => patch({ opacity: value })} onCommit={commitOpacity} />
@@ -268,6 +280,9 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
       </div>
     </Section>
 
+    {!caption && content.trim() && <WordColors key={id} elementId={id} properties={properties} content={content}
+      baseColor={style.color} onPreview={(textRuns) => patch({ textRuns })} onCommit={onCommit} />}
+
     <Section title='Stroke' defaultOpen={false}>
       <Toggle title='Stroke' checked={style.stroke.enabled}
         onChange={(enabled) => { patch({ stroke: { ...style.stroke, enabled } });
@@ -275,10 +290,10 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
             strokeColor: style.stroke.color, strokeWidth: style.stroke.width }); }} />
       <ColorField title='Colour' value={style.stroke.color}
         onInput={(color) => patch({ stroke: { ...style.stroke, color } })}
-        onCommit={commitStroke} />
+        onCommit={(color) => commitStroke({ color })} />
       <Slider title='Width' value={style.stroke.width} min={0} max={TEXT_BOUNDS.maxStrokeWidth}
         step={0.5} onInput={(width) => patch({ stroke: { ...style.stroke, width } })}
-        onCommit={commitStroke} />
+        onCommit={() => commitStroke()} />
       {strokeSuppressed && <p className='text-[10px] leading-4 text-warning-soft/70'>
         A background plate and a stroke cannot both be drawn in the export, so the plate wins.
         The preview shows the same choice.</p>}
@@ -293,14 +308,14 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
             shadowOffsetY: style.shadow.offsetY }); }} />
       <ColorField title='Colour' value={style.shadow.color}
         onInput={(color) => patch({ shadow: { ...style.shadow, color } })}
-        onCommit={commitShadow} />
+        onCommit={(color) => commitShadow({ color })} />
       <Slider title='Opacity' value={style.shadow.opacity} min={0} max={1} step={0.01}
         format={(value) => `${Math.round(value * 100)}%`}
         onInput={(opacity) => patch({ shadow: { ...style.shadow, opacity } })}
-        onCommit={commitShadow} />
+        onCommit={() => commitShadow()} />
       <Slider title='Blur' value={style.shadow.blur} min={0} max={TEXT_BOUNDS.maxShadowBlur}
         step={1} onInput={(blur) => patch({ shadow: { ...style.shadow, blur } })}
-        onCommit={commitShadow} />
+        onCommit={() => commitShadow()} />
       <div className='grid grid-cols-2 gap-2'>
         {(['offsetX', 'offsetY'] as const).map((axis) => <label key={axis} className={label}>
           {axis === 'offsetX' ? 'X offset' : 'Y offset'}
@@ -309,7 +324,7 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
             value={style.shadow[axis]}
             onChange={(event) => patch({ shadow: { ...style.shadow,
               [axis]: num(event.target.value) } })}
-            onBlur={commitShadow} />
+            onBlur={() => commitShadow()} />
         </label>)}
       </div>
       <p className='text-[10px] leading-4 text-faint'>
@@ -327,19 +342,19 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
             backgroundRadius: style.background.radius }); }} />
       <ColorField title='Colour' value={style.background.color}
         onInput={(color) => patch({ background: { ...style.background, color } })}
-        onCommit={commitBackground} />
+        onCommit={(color) => commitBackground({ color })} />
       <Slider title='Opacity' value={style.background.opacity} min={0} max={1} step={0.01}
         format={(value) => `${Math.round(value * 100)}%`}
         onInput={(opacity) => patch({ background: { ...style.background, opacity } })}
-        onCommit={commitBackground} />
+        onCommit={() => commitBackground()} />
       <Slider title='Padding' value={style.background.padding} min={0}
         max={TEXT_BOUNDS.maxBackgroundPadding} step={1}
         onInput={(padding) => patch({ background: { ...style.background, padding } })}
-        onCommit={commitBackground} />
+        onCommit={() => commitBackground()} />
       <Slider title='Corner radius' value={style.background.radius} min={0}
         max={TEXT_BOUNDS.maxBackgroundRadius} step={1}
         onInput={(radius) => patch({ background: { ...style.background, radius } })}
-        onCommit={commitBackground} />
+        onCommit={() => commitBackground()} />
       {style.background.enabled && style.background.radius > 0 &&
         <p className='text-[10px] leading-4 text-warning-soft/70'>
           Rounded plates render square in the export — ASS has no corner radius.</p>}
@@ -413,4 +428,45 @@ export function EditTextInspector({ selected, timelineDurationSec, playheadSec, 
       <p className={label}>zIndex {num(properties.zIndex)}</p>
     </Section>
   </div>;
+}
+
+/**
+ * Per-word colours (e.g. the emphasised word of a StyleOne hook). Pick words, choose a colour, apply:
+ * one canonical SET_TEXT_RUNS command, so the preview and the export draw exactly the same colours.
+ */
+function WordColors({ elementId, properties, content, baseColor, onPreview, onCommit }: {
+  elementId: string; properties: Record<string, unknown>; content: string; baseColor: string;
+  onPreview: (textRuns: Array<{ text: string; color: string }>) => void; onCommit: (command: ManualEditCommand) => void;
+}) {
+  const words = wordColors(properties);
+  const [picked, setPicked] = useState<number[]>([]);
+  const highlighted = words.map((word, index) => word.color !== baseColor.toLowerCase() ? index : -1).filter((index) => index >= 0);
+  const [color, setColor] = useState(highlighted.length ? words[highlighted[0]].color : '#ffd400');
+  const commit = (colors: string[]) => {
+    const textRuns = runsFromWordColors(content, colors, baseColor);
+    if (textRuns.length > 24) return;
+    onPreview(textRuns);
+    onCommit({ action: 'set-text-runs', elementId, textRuns });
+  };
+  const toggle = (index: number) => setPicked((now) => now.includes(index) ? now.filter((i) => i !== index) : [...now, index]);
+  return <Section title='Word colours'>
+    <p className='text-[10px] leading-4 text-faint'>Tap words to select them, then colour them. Other words keep the text colour.</p>
+    <div className='flex flex-wrap gap-1' role='group' aria-label='Words'>
+      {words.map((word, index) => <button key={`${index}-${word.text}`} type='button' aria-pressed={picked.includes(index)}
+        onClick={() => toggle(index)} style={{ color: word.color }}
+        className={`rounded-md border px-1.5 py-0.5 text-[11px] font-semibold ${picked.includes(index) ? 'border-secondary bg-secondary/20' : 'border-border bg-inset'}`}>
+        {word.text}</button>)}
+    </div>
+    <ColorField title='Colour for selected words' value={color} onInput={setColor} onCommit={() => undefined} />
+    <div className='grid grid-cols-2 gap-1'>
+      <button type='button' disabled={!picked.length} onClick={() => { commit(words.map((word, index) => picked.includes(index) ? color : word.color)); setPicked([]); }}
+        className='rounded-md border border-secondary/40 py-1 text-[10px] font-semibold text-secondary-soft disabled:opacity-30'>Colour selected</button>
+      <button type='button' disabled={!highlighted.length} onClick={() => commit(words.map((word, index) => highlighted.includes(index) ? color : word.color))}
+        className='rounded-md border border-border py-1 text-[10px] disabled:opacity-30'>Recolour highlights</button>
+      <button type='button' disabled={!picked.length} onClick={() => { commit(words.map((word, index) => picked.includes(index) ? baseColor : word.color)); setPicked([]); }}
+        className='rounded-md border border-border py-1 text-[10px] disabled:opacity-30'>Reset selected</button>
+      <button type='button' disabled={!highlighted.length} onClick={() => commit(words.map(() => baseColor))}
+        className='rounded-md border border-border py-1 text-[10px] disabled:opacity-30'>One colour for all</button>
+    </div>
+  </Section>;
 }

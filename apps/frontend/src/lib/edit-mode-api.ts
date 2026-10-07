@@ -196,6 +196,8 @@ type ManualEditCommandValue =
   | { action: 'set-text-size'; elementId: string; fontSize: number }
   | { action: 'set-text-weight'; elementId: string; fontWeight: number }
   | { action: 'set-text-color'; elementId: string; color: string }
+  /** Per-word colours; the runs must reproduce the content exactly. An empty list removes them. */
+  | { action: 'set-text-runs'; elementId: string; textRuns: Array<{ text: string; color: string }> }
   | { action: 'set-text-alignment'; elementId: string; textAlign: 'left' | 'center' | 'right' }
   | { action: 'set-text-stroke'; elementId: string; strokeEnabled: boolean; strokeColor: string;
       strokeWidth: number }

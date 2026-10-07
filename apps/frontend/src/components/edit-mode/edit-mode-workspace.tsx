@@ -249,7 +249,10 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
     });
   }, []);
 
-  const applyCommand = useCallback(async (command: ManualEditCommand, baseElements = savedElements.current) => {
+  // Commands run strictly one after another, each on the revision the previous one produced, so a
+  // quick second edit (e.g. a colour picked while a move is saving) never conflicts with the first.
+  const commandQueue = useRef<Promise<void>>(Promise.resolve());
+  const applyCommandNow = useCallback(async (command: ManualEditCommand, baseElements: EditElement[]) => {
     setBusy('saving'); setError('');
     try {
       let current = projectRef.current;
@@ -291,6 +294,12 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
       setError(editFailureMessage('EDIT_COMMAND_FAILED', caught));
     } finally { setBusy(null); }
   }, [acceptServerProject, keepSelection, refreshHistory]);
+  const latestApply = useRef(applyCommandNow); latestApply.current = applyCommandNow;
+  const applyCommand = useCallback((command: ManualEditCommand, base?: EditElement[]) => {
+    const run = commandQueue.current.then(() => latestApply.current(command, base ?? savedElements.current));
+    commandQueue.current = run.catch(() => undefined);
+    return run;
+  }, []);
 
   /** A group action runs as a SEQUENCE of ordinary commands, each with its own
    *  validation and its own undo step. Nothing here batches several elements

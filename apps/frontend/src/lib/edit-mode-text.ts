@@ -185,6 +185,40 @@ export function readTextRuns(properties: unknown): TextRun[] {
   return runs.length && runs.map((run) => run.text).join('') === props.content ? runs : [];
 }
 
+/** Each word of a text with the colour it is drawn in (its run, or the text colour). */
+export function wordColors(properties: unknown): Array<{ text: string; color: string }> {
+  const props = record(properties);
+  const content = typeof props.content === 'string' ? props.content : '';
+  const base = readTextStyle(props).color.toLowerCase();
+  const runs = readTextRuns(props);
+  const ranges: Array<{ start: number; end: number; color: string }> = [];
+  let cursor = 0;
+  for (const run of runs) { ranges.push({ start: cursor, end: cursor + run.text.length, color: run.color }); cursor += run.text.length; }
+  return [...content.matchAll(/\S+/gu)].map((match) => ({ text: match[0],
+    color: ranges.find((range) => (match.index ?? 0) >= range.start && (match.index ?? 0) < range.end)?.color ?? base }));
+}
+/**
+ * Runs that reproduce `content` exactly with one colour per word (spaces take the colour of the word
+ * before them; equal neighbours merge). All words in the text colour means no runs at all.
+ */
+export function runsFromWordColors(content: string, colors: string[], base: string): TextRun[] {
+  if (colors.every((color) => color.toLowerCase() === base.toLowerCase())) return [];
+  const runs: TextRun[] = [];
+  let word = -1;
+  for (const match of content.matchAll(/\S+|\s+/gu)) {
+    if (/\S/u.test(match[0])) word += 1;
+    const color = (colors[Math.max(0, word)] ?? base).toLowerCase();
+    const last = runs[runs.length - 1];
+    if (last && last.color === color) last.text += match[0]; else runs.push({ text: match[0], color });
+  }
+  return runs;
+}
+/** Mirrors the backend's SET_TEXT_COLOR: words in the old text colour follow the new one. */
+export function recolorBaseRuns(properties: unknown, color: string): TextRun[] {
+  const base = readTextStyle(properties).color.toLowerCase();
+  return readTextRuns(properties).map((run) => run.color.toLowerCase() === base ? { ...run, color: color.toLowerCase() } : run);
+}
+
 export function readTextStyle(properties: unknown): TextStyle {
   const props = record(properties);
   const family = typeof props.fontFamily === 'string' &&
@@ -229,6 +263,20 @@ const rgba = (hex: string, opacity: number) => {
  * the other but not both - so the preview shows what will actually export
  * rather than a richer picture the renderer cannot reach.
  */
+/**
+ * Exported glyph size / browser glyph size at the same design size, per editor font. libass sizes a
+ * font by its line height while CSS sizes by the em, so the export draws text smaller than a CSS font
+ * of the same number. Measured through the real ASS builder and libass in the render container against
+ * the browser's cap heights (Inter 108 vs 131 px, EB Garamond 12 110 vs 119, Noto Sans 84 vs 129, Noto
+ * Serif 88 vs 129 at size 100 on a 1080-wide canvas). The preview applies it so it shows the export.
+ */
+const PREVIEW_FONT_SCALE: Record<string, number> = {
+  'Inter, sans-serif': 1 / 1.217, 'Inter ExtraBold, sans-serif': 1 / 1.217, 'EB Garamond, serif': 1 / 1.08,
+  'Noto Sans, sans-serif': 1 / 1.53, 'Arial, sans-serif': 1 / 1.53, 'Noto Serif, serif': 1 / 1.46, 'Georgia, serif': 1 / 1.42,
+  monospace: 1 / 1.45
+};
+export const previewFontScale = (family: string) => PREVIEW_FONT_SCALE[family] ?? 1;
+
 export function textStyleCss(properties: Record<string, unknown>,
   canvasWidth: number): CSSProperties {
   const style = readTextStyle(properties);
@@ -236,7 +284,7 @@ export function textStyleCss(properties: Record<string, unknown>,
   const boxed = style.background.enabled && style.background.opacity > 0;
   const css: CSSProperties = {
     fontFamily: fontCss(style.fontFamily),
-    fontSize: px(style.fontSize),
+    fontSize: px(style.fontSize * previewFontScale(style.fontFamily)),
     fontWeight: style.fontWeight,
     color: style.color,
     textAlign: style.textAlign,
@@ -432,3 +480,84 @@ export const CAPTION_STYLE_PRESETS: Array<StylePresetSummary<CaptionStylePresetI
       letterSpacing: 0, lineSpacing: 1.15, uppercase: false,
       activeWord: { enabled: true, color: '#fde047' } } }
 ];
+
+/** A template text region of a resolved visual layout (StyleOne's hook / supporting line). */
+export type FitRegion = { width: number; height: number; fontSize: number; lineHeight: number; maxLines: number; glyphWidthEm?: number };
+/** Port of the renderer's deterministic auto-fit (`autoFitText`, 600-wide design units, 1080x1920). */
+export function autoFitText(text: string, input: { width: number; height: number; maxLines: number;
+  preferred: number; minimum: number; lineHeight: number; glyphWidthEm?: number }) {
+  const words = text.trim().split(/\s+/u).filter(Boolean);
+  for (let size = input.preferred; size >= input.minimum; size -= 2) {
+    const capacity = Math.max(1, input.width * 600 / (size * (input.glyphWidthEm ?? 0.64)));
+    let lines = 1, used = 0;
+    for (const word of words) {
+      const next = word.length + (used ? 1 : 0);
+      if (used && used + next > capacity) { lines += 1; used = word.length; } else used += next;
+    }
+    if (lines <= input.maxLines && lines * size * input.lineHeight / 1920 * (1080 / 600) <= input.height) return size;
+  }
+  return input.minimum;
+}
+/**
+ * The font size a template text exports at, exactly as the renderer decides it: while the element still
+ * has the template's size it is auto-fitted into its own box; any size the user chose is used as is.
+ */
+export function layoutFittedFontSize(properties: Record<string, unknown>, region: FitRegion | null | undefined): number | null {
+  const size = Number(properties.fontSize ?? region?.fontSize);
+  if (!region || !(Math.abs(size - region.fontSize) < 0.01)) return null;
+  const width = Number.isFinite(Number(properties.width)) ? Math.max(0, Math.min(1, Number(properties.width))) : region.width;
+  const height = Number.isFinite(Number(properties.height)) ? Math.max(0, Math.min(1, Number(properties.height))) : region.height;
+  return autoFitText(String(properties.content ?? ''), { width, height, maxLines: region.maxLines, preferred: region.fontSize,
+    minimum: Math.min(30, region.fontSize), lineHeight: region.lineHeight, ...(region.glyphWidthEm ? { glyphWidthEm: region.glyphWidthEm } : {}) });
+}
+
+// --- Export line breaks ------------------------------------------------------------------------
+// libass never re-wraps (WrapStyle 2): the renderer decides every line break itself from a width
+// estimate. The preview draws the SAME breaks, so a hook or caption has the same lines in both.
+const NARROW = new Set([...'iljtfrI!.,:;\'"|()[]']);
+const WIDE = new Set([...'mwMW@%']);
+/** Port of `editing/text-layout.estimateTextWidth`. */
+function estimateTextWidth(text: string, fontSize: number) {
+  let em = 0;
+  for (const char of text) {
+    if (char === ' ') em += .27; else if (NARROW.has(char)) em += .34; else if (WIDE.has(char)) em += .92;
+    else if (/[A-Z0-9]/u.test(char)) em += .68; else em += .6;
+  }
+  return em * fontSize * .8;
+}
+/** Port of the renderer's per-family wrap options (`wrapOptions` in edit-mode-ass). */
+const wrapOptionsFor = (family: string) => family.startsWith('EB Garamond')
+  ? { widthScale: 0.8, balance: true, glyphWidthEm: 0.4 } : { widthScale: 1, balance: false, glyphWidthEm: 0 };
+/**
+ * The token lines the export draws for a text element (port of `wrapTokens`): tokens are the
+ * space-separated words of the (upper-cased when styled so) content, wrapped to the element width.
+ */
+export function exportLines(properties: Record<string, unknown>, canvasWidth = 1080): { tokens: string[]; lines: number[][] } {
+  const style = readTextStyle(properties);
+  const raw = String(properties.content ?? '').replace(/\r?\n/gu, ' ');
+  const tokens = (style.uppercase ? raw.toLocaleUpperCase() : raw).split(' ').filter(Boolean);
+  if (!tokens.length) return { tokens, lines: [] };
+  const fontSize = Math.max(8, designPx(style.fontSize, canvasWidth));
+  const width = Number(properties.width);
+  const maxWidth = Math.max(1, Math.max(2, Math.round(Math.max(0, Math.min(1, Number.isFinite(width) ? width : 0.8)) * canvasWidth)));
+  const options = wrapOptionsFor(style.fontFamily);
+  const measure = (text: string) => Math.max(estimateTextWidth(text, fontSize) * options.widthScale, options.glyphWidthEm * fontSize * text.length);
+  const lines: number[][] = [];
+  let current: number[] = [], text = '';
+  tokens.forEach((token, index) => {
+    const candidate = text ? `${text} ${token}` : token;
+    if (current.length && measure(candidate) > maxWidth) { lines.push(current); current = [index]; text = token; }
+    else { current.push(index); text = candidate; }
+  });
+  if (current.length) lines.push(current);
+  if (options.balance && lines.length === 2 && tokens.length > 3) {
+    let best = lines, widest = Math.max(...lines.map((line) => measure(line.map((at) => tokens[at]).join(' '))));
+    for (let cut = 1; cut < tokens.length; cut++) {
+      const next = Math.max(measure(tokens.slice(0, cut).join(' ')), measure(tokens.slice(cut).join(' ')));
+      if (next <= maxWidth && next < widest - 1e-6) { widest = next;
+        best = [Array.from({ length: cut }, (_, at) => at), Array.from({ length: tokens.length - cut }, (_, at) => cut + at)]; }
+    }
+    return { tokens, lines: best };
+  }
+  return { tokens, lines };
+}

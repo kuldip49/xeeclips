@@ -35,7 +35,7 @@ import { adjacentCaption, CaptionGenerationError, generateCaptions, mergeCaption
 import { buildTimelineMap } from './render/edit-mode-timeline-map';
 import { wordsFromCache } from './presets/edit-preset-evidence';
 import { captionStylePreset, DEFAULT_CAPTION_BOX, effectiveBackgroundColor,
-  extractStyleProperties, readCaptionWords, readTextStyle, styleProperties, textStylePreset,
+  extractStyleProperties, readCaptionWords, readTextRuns, readTextStyle, styleProperties, textStylePreset,
   TextRangeError, validateActiveWord, validateAlignment, validateBackground, validateColor,
   validateFontFamily, validateFontSize, validateFontWeight, validateShadow, validateSpacing,
   validateStroke, MAX_CAPTION_LENGTH, MAX_TEXT_LENGTH,
@@ -1749,7 +1749,18 @@ export class EditModeService {
             return textStyleCommand({ fontWeight: validateFontWeight(input.fontWeight) });
           }
           if (action === 'SET_TEXT_COLOR') {
-            return textStyleCommand({ color: validateColor(input.color, 'color') });
+            const color = validateColor(input.color, 'color');
+            // Per-word colours (StyleOne's emphasis runs) would otherwise hide the change: words
+            // drawn in the old text colour follow the new one, emphasised words keep their own.
+            return textStyleCommand({ color }).map((candidate) => {
+              const before = elements.find((item) => item.id === candidate.id);
+              if (!before || before === candidate || before.type !== 'TEXT') return candidate;
+              const runs = readTextRuns(before.properties);
+              if (!runs.length) return candidate;
+              const base = readTextStyle(before.properties).color.toLowerCase();
+              return { ...candidate, properties: { ...(candidate.properties as Record<string, unknown>),
+                textRuns: runs.map((run) => run.color.toLowerCase() === base ? { ...run, color } : run) } as Prisma.InputJsonValue };
+            });
           }
           if (action === 'SET_TEXT_ALIGNMENT') {
             return textStyleCommand({ textAlign: validateAlignment(input.textAlign) });
@@ -2318,7 +2329,8 @@ export class EditModeService {
   }
 
   private validTextRuns(value: unknown, content: string) {
-    if (value === undefined) return [] as Array<{ text: string; color: string }>;
+    // An empty list removes per-word colours (the whole text uses its text colour again).
+    if (value === undefined || (Array.isArray(value) && value.length === 0)) return [] as Array<{ text: string; color: string }>;
     if (!Array.isArray(value) || value.length > 24) {
       throw new BadRequestException('textRuns must be an array of at most 24 runs');
     }

@@ -204,7 +204,43 @@ string lists are still read). Sessions from V1 open on the Crop step with their 
 - Regression: canonical editor scripts as before (only the pre-existing phase7 and ai-objects failures);
   generated-clip edit-project, unified generation, Quick Reframe StyleOne scripts pass.
 
+## Editor ↔ export parity (2026-10-07, follow-up)
+
+Reported: the Export step showed only the middle band of a 1080×1920 export, and changing the colour of the
+on-screen hook did nothing. Fixed together with every other manual text control, verified by
+`e2e/quick-reframe-parity.spec.ts` (live: editor screenshot vs a frame of the real MP4, bounding boxes of the
+plate, coloured text, highlighted word, captions and video window must agree within 2.5% and glyph heights
+within 10%):
+
+- **Export preview:** the video fills its box absolutely (a percentage height inside a centred grid did not
+  resolve, so the frame overflowed and was clipped).
+- **Hook colour:** a StyleOne hook stores per-word `textRuns`, which overrode the Text colour. `SET_TEXT_COLOR`
+  now recolours the words drawn in the old text colour (emphasis keeps its own); the preview mirrors it.
+  New **Word colours** section: select words, colour them, recolour highlights, reset, one colour for all
+  (`SET_TEXT_RUNS`; an empty list removes per-word colours).
+- **Colour pickers** commit the picked value (debounced, and on blur): the native picker blurs when it opens,
+  so the old commit-on-blur sent the previous colour.
+- **Editor commands are queued** (each runs on the revision the previous produced) and a click on an element is
+  no longer committed as a move; a colour picked while a move was saving used to be dropped as a conflict.
+- **StyleOne layout no longer overrides manual edits in the export:** text keeps its own position and box; the
+  template auto-fit applies only while the font size is still the template size, and the editor preview applies
+  the same fit (`layoutFittedFontSize`).
+- **No stretching in the editor:** a FIT video inside StyleOne's window is fitted with black bars, as exported
+  (it was stretched to 1080×700). The card canvas no longer claims a blurred backdrop.
+- **Focus view** includes every visible text/caption/image box, so a moved hook never leaves the view.
+- **Same line breaks:** the preview draws the renderer's own breaks (port of `wrapTokens`, incl. two-line
+  balancing for the serif); per-word colours and the active word follow them.
+- **Same glyph size and face:** libass sizes fonts by line height, CSS by the em; the preview scales each font to
+  the measured export size (Inter ×1/1.217, EB Garamond ×1/1.08, Noto Sans ×1/1.53, Noto Serif ×1/1.46), and the
+  export now uses the EB Garamond **12** cut the editor loads (fontconfig had picked the wider 08 cut).
+
+Measured (1080×1920, StyleOne, edited hook): plate x 174–904 vs 174–906, text 196–884 vs 194–884, video window
+192–890 vs 190–888. Manual 4:5: captions 184–896 vs 182–898; the hook plate exports ~18 px wider per side
+(libass box padding).
+
 ## Deployment
+
+Parity follow-up: backend hot-deployed to the laptop stack; frontend Worker version `adb9be67-5516-4387-8dd0-12dde3d32988`. Against production: Quick Reframe journeys, both parity tests and the crop suite 14/14, Create Clips `e2e/workflows.spec.ts` 5 passed (YouTube skipped).
 
 V3 (commit `b97874b` on `main`): backend hot-deployed to the laptop Docker stack (`https://api.xeeclip.me`; no
 migration, existing sessions kept, V2 sessions open on the Crop step with their crop as the draft). Static

@@ -56,6 +56,11 @@ async function exportAndDownload(page: Page, quality: '720p' | '1080p') {
   await page.getByTestId('export-video').click();
   const download = page.getByTestId('download-video');
   await expect(download).toBeVisible({ timeout: 15 * 60 * 1000 });
+  // The whole exported frame is visible: the video fits inside its preview box (it used to overflow
+  // and show only the middle band of a 1080x1920 export).
+  const box = (await page.getByTestId('export-preview').boundingBox())!, shown = (await page.getByLabel('Exported video').boundingBox())!;
+  expect(shown.y).toBeGreaterThanOrEqual(box.y - 1); expect(shown.y + shown.height).toBeLessThanOrEqual(box.y + box.height + 1);
+  expect(shown.x).toBeGreaterThanOrEqual(box.x - 1); expect(shown.x + shown.width).toBeLessThanOrEqual(box.x + box.width + 1);
   const [file] = await Promise.all([page.waitForEvent('download'), download.click()]);
   const path = await file.path(); expect(statSync(path).size).toBeGreaterThan(100_000);
   return path;

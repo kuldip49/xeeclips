@@ -16,6 +16,7 @@ import { sourceCropToViewport, type CropAspectPreset,
 import { clampBox, fitCanvas, resizeBox, snapBox, snapRotation, type ResizeCorner,
   type SnapGuide } from '@/lib/edit-mode-snap';
 import { EditPreviewText } from './edit-preview-text';
+import { layoutFittedFontSize, type FitRegion } from '@/lib/edit-mode-text';
 import { EditCropOverlay } from './edit-crop-overlay';
 
 const clock = (seconds: number) => `${Math.floor(Math.max(0, seconds) / 60)}:${Math.floor(Math.max(0, seconds) % 60).toString().padStart(2, '0')}`;
@@ -97,6 +98,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   fitBackground?: string;
   resolvedVisualLayout?: { editingProfile?: string; videoFrame?: {
     x: number; y: number; width: number; height: number; mode: string };
+    hook?: FitRegion; supportingText?: FitRegion;
     cameraPath?: Array<{ t: number; x: number; y: number; w: number; h: number }> };
   elements: EditElement[]; selectedElementId: string | null; currentPlayheadSec: number;
   onPlayheadChange: (seconds: number) => void; onSelect: (id: string) => void;
@@ -123,8 +125,14 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   // that window fill the stage, "Fit" shows the whole export frame. Same canvas, just larger:
   // text, overlays and drag gestures all scale with it because they are canvas-relative.
   const cardFrame = resolvedVisualLayout?.videoFrame?.mode === 'CARD' ? resolvedVisualLayout.videoFrame : null;
+  // Focus only ever hides EMPTY canvas: the band also covers every visible text, caption and image box
+  // (e.g. a hook the user moved to the top), so nothing that exports is ever out of view.
+  const overlayBands = elements.filter((element) => element.type !== 'VIDEO' && element.type !== 'AUDIO' && element.properties.hidden !== true)
+    .map((element) => ({ y: Number(element.properties.y), h: Number(element.properties.height) }))
+    .filter((band) => Number.isFinite(band.y) && Number.isFinite(band.h));
   const focusRegion = cardFrame && cardFrame.height < 0.7
-    ? { top: Math.max(0, cardFrame.y - 0.09), bottom: Math.min(1, cardFrame.y + cardFrame.height + 0.03) } : null;
+    ? { top: Math.max(0, Math.min(cardFrame.y - 0.09, ...overlayBands.map((band) => band.y - 0.015))),
+      bottom: Math.min(1, Math.max(cardFrame.y + cardFrame.height + 0.03, ...overlayBands.map((band) => band.y + band.h + 0.015))) } : null;
   const [viewMode, setViewMode] = useState<'FIT' | 'FOCUS'>('FOCUS');
   const focusing = !cropEditor && viewMode === 'FOCUS' && !!focusRegion && compositionCanvasSize.height > 0;
   const viewScale = focusing && focusRegion ? Math.max(1, Math.min(
@@ -245,6 +253,8 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     const before = elements.map((item) => ({ ...item, properties: { ...item.properties } }));
     const origin = element.properties as unknown as VisualElementProperties;
     const startX = event.clientX; const startY = event.clientY;
+    // A click (selection) is not an edit: nothing is committed unless the pointer really moved.
+    let moved = false;
     const centreX = bounds.left + (origin.x + origin.width / 2) * bounds.width;
     const centreY = bounds.top + (origin.y + origin.height / 2) * bounds.height;
     const startAngle = Math.atan2(startY - centreY, startX - centreX) * 180 / Math.PI;
@@ -255,6 +265,8 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
       onPreviewElements(elements.map((item) => item.id === element.id ? latest : item));
     };
     const move = (pointer: PointerEvent) => {
+      if (!moved && Math.hypot(pointer.clientX - startX, pointer.clientY - startY) < 3) return;
+      moved = true;
       const dx = (pointer.clientX - startX) / bounds.width;
       const dy = (pointer.clientY - startY) / bounds.height;
       if (kind === 'rotate') {
@@ -284,7 +296,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       setGuides([]);
-      onCommitTransform(kind, latest, before);
+      if (moved) onCommitTransform(kind, latest, before);
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up, { once: true });
@@ -307,6 +319,26 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   const card = resolvedVisualLayout?.videoFrame?.mode === 'CARD'
     ? resolvedVisualLayout.videoFrame : null;
   const cameraPath = resolvedVisualLayout?.cameraPath ?? [];
+  // FIT framing inside a card window (Quick Reframe StyleOne): the whole camera region is fitted inside
+  // the window with black bars, exactly like the renderer's scale+pad. It is never stretched to fill.
+  const cardFit = !!card && mapping?.element.properties.frameLayout === 'FIT';
+  const pictureRect = (region: { w: number; h: number } | null) => {
+    if (!card || !cardFit || !canvasSize.width || !canvasSize.height) return card;
+    const sw = (mediaAsset?.width || source?.width || 16) * (region?.w ?? 1), sh = (mediaAsset?.height || source?.height || 9) * (region?.h ?? 1);
+    const picture = sw / sh, window = card.width * canvasSize.width / (card.height * canvasSize.height);
+    if (picture > window) { const height = card.width * canvasSize.width / picture / canvasSize.height;
+      return { ...card, y: card.y + (card.height - height) / 2, height }; }
+    const width = card.height * canvasSize.height * picture / canvasSize.width;
+    return { ...card, x: card.x + (card.width - width) / 2, width };
+  };
+  /** A template hook/supporting line at the template size is drawn at the size the export auto-fits. */
+  const fittedText = (element: EditElement) => {
+    if (element.type !== 'TEXT' || resolvedVisualLayout?.editingProfile !== 'AUTOMATIC_2') return element;
+    const role = String(element.properties.templateRole ?? element.properties.presetRole ?? '');
+    const region = role === 'HOOK' ? resolvedVisualLayout.hook : role === 'KEY_POINT' ? resolvedVisualLayout.supportingText : null;
+    const size = layoutFittedFontSize(element.properties, region);
+    return size === null ? element : { ...element, properties: { ...element.properties, fontSize: size } };
+  };
   const cameraCrop = (() => {
     if (!cameraPath.length) return null;
     const after = cameraPath.findIndex((key) => key.t >= currentPlayheadSec);
@@ -343,8 +375,12 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   const combinedTransform = [zoomState.scale > 1.0001
     ? `scale(${zoomState.scale.toFixed(5)})` : '', segmentTransform.transform ?? '']
     .filter(Boolean).join(' ') || undefined;
-  const backdrop = fitBackground === 'WHITE' ? '#ffffff' : fitBackground === 'BLACK' ? '#000000' : '#262b36';
-  const blurBackdrop = !manualCropBackground && fitted &&
+  // A card layout (StyleOne) is a black canvas: a fitted picture inside its window has black bars.
+  const backdrop = card || fitBackground === 'BLACK' ? '#000000' : fitBackground === 'WHITE' ? '#ffffff' : '#262b36';
+  // No backdrop is visible when the fitted picture already has the canvas's shape.
+  const fillsCanvas = !!canvasSize.width && !!canvasSize.height && Math.abs(
+    (mediaAsset?.width || source?.width || 0) / Math.max(1, mediaAsset?.height || source?.height || 1) - canvasSize.width / canvasSize.height) < 0.01;
+  const blurBackdrop = !manualCropBackground && fitted && !card && !fillsCanvas &&
     fitBackground !== 'WHITE' && fitBackground !== 'BLACK';
 
   return <section className='flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-black/40 max-md:rounded-none max-md:border-0'>
@@ -378,18 +414,19 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
           ? { left: cropTransform.translateX, top: cropTransform.translateY,
             width: cropTransform.sourceWidth * cropTransform.scale,
             height: cropTransform.sourceHeight * cropTransform.scale, maxWidth: 'none', ...colorStyle }
-          : mapping ? { ...(card && cameraCrop ? {
-            left: `${(card.x - cameraCrop.x / cameraCrop.w * card.width) * 100}%`,
-            top: `${(card.y - cameraCrop.y / cameraCrop.h * card.height) * 100}%`,
-            width: `${card.width / cameraCrop.w * 100}%`,
-            height: `${card.height / cameraCrop.h * 100}%`, objectFit: 'fill' as const,
+          : mapping ? { ...(card && cameraCrop && pictureRect(cameraCrop) ? (({ x, y, width, height }) => ({
+            left: `${(x - cameraCrop.x / cameraCrop.w * width) * 100}%`,
+            top: `${(y - cameraCrop.y / cameraCrop.h * height) * 100}%`,
+            width: `${width / cameraCrop.w * 100}%`,
+            height: `${height / cameraCrop.h * 100}%`, objectFit: 'fill' as const }))(pictureRect(cameraCrop)!) : {}),
+            ...(card && cameraCrop ? {
             // The camera crop makes the element wider than the canvas; without this the base
             // `video { max-width: 100% }` rule squeezes it and the preview stops matching the export.
             maxWidth: 'none', maxHeight: 'none',
             transformOrigin: `${(cameraCrop.x + zoomState.x * cameraCrop.w) * 100}% ` +
               `${(cameraCrop.y + zoomState.y * cameraCrop.h) * 100}%`
           } : card ? { left: `${card.x * 100}%`, top: `${card.y * 100}%`,
-            width: `${card.width * 100}%`, height: `${card.height * 100}%`, objectFit: 'cover' as const }
+            width: `${card.width * 100}%`, height: `${card.height * 100}%`, objectFit: cardFit ? 'contain' as const : 'cover' as const }
             : {}), ...segmentTransform,
             ...(card && cameraCrop ? { transformOrigin:
               `${(cameraCrop.x + zoomState.x * cameraCrop.w) * 100}% ` +
@@ -462,7 +499,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
             ? <img src={asset ? editAssetPlaybackUrl(asset.id) : ''}
               alt={asset?.originalName ?? 'Overlay'} draggable={false}
               className='pointer-events-none h-full w-full object-contain' />
-            : <EditPreviewText element={element} canvasWidth={canvasSize.width}
+            : <EditPreviewText element={fittedText(element)} canvasWidth={canvasSize.width}
               offsetSec={currentPlayheadSec - element.startTime} />}
 
           {selected && <>

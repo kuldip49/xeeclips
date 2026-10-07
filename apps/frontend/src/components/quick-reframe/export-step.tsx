@@ -30,8 +30,10 @@ export function ExportStep({ session, onSession, onBack, onError }: {
   const playing = done ? latest.url : previewCurrent ? session.previewUrl : null;
   return <div className='grid min-w-0 gap-6 md:grid-cols-[minmax(0,1fr)_340px] md:items-start'>
     <div className='grid min-w-0 gap-2'>
+      {/* The video fills the box absolutely: a percentage height inside a centred grid does not resolve,
+          which let a 1080x1920 export overflow and show only its middle band. */}
       <div className='relative mx-auto grid w-full place-items-center overflow-hidden rounded-2xl bg-black' style={{ height: 'min(64vh, 680px)' }} data-testid='export-preview'>
-        {playing && !processing ? <video key={playing} src={mediaUrl(playing)} controls playsInline preload='metadata' className='h-full w-full object-contain' aria-label={done ? 'Exported video' : 'Final preview'} />
+        {playing && !processing ? <video key={playing} src={mediaUrl(playing)} controls playsInline preload='metadata' className='absolute inset-0 h-full w-full object-contain' aria-label={done ? 'Exported video' : 'Final preview'} />
           : <div className='grid justify-items-center gap-3 p-6 text-center text-sm text-muted-foreground'>
             {processing ? <><Loader2 className='animate-spin text-primary-soft' />{session.message}<progress className='w-48 accent-primary' max={100} value={session.progress} /></>
               : <><p>Render a final preview to check your edit before exporting.</p><Button type='button' variant='secondary' disabled={busy} onClick={() => void run('preview')}><Play size={15} />Render preview</Button></>}
