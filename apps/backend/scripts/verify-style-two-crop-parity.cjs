@@ -8,7 +8,7 @@ const before=process.argv.includes('--before');fs.mkdirSync(out,{recursive:true}
 const {buildRenderPlan}=require('../dist/modules/edit-mode/render/edit-mode-render-plan');
 const {buildEditModeAss}=require('../dist/modules/edit-mode/render/edit-mode-ass');
 const {buildFfmpegArgs}=require('../dist/modules/edit-mode/render/edit-mode-filtergraph');
-const {styleTwoCropTransform}=require('@ai-content-platform/shared/style-two-crop.cjs');
+const {styleTwoCropTransform,styleTwoBakedCropTransform}=require('@ai-content-platform/shared/style-two-crop.cjs');
 const bin=path.join(root,'.cache/ffmpeg-benchmark/ffmpeg-9.0.2-essentials_build/bin');
 const ffmpeg=path.join(bin,'ffmpeg.exe');
 const copy=o=>JSON.parse(JSON.stringify(o)),original=JSON.parse(fs.readFileSync(projectFile));
@@ -42,7 +42,7 @@ for(const [name,crop] of Object.entries(cases)) {
 }
 const loader=path.join(out,'loader.cjs'),entry=path.join(out,'entry.tsx');
 const previewFile=path.join(root,'apps/frontend/src/components/edit-mode/edit-preview.tsx');
-if(before)fs.writeFileSync(path.join(out,'before-preview.tsx'),execFileSync('git',['show','64998bf:apps/frontend/src/components/edit-mode/edit-preview.tsx']));
+if(before)fs.writeFileSync(path.join(out,'before-preview.tsx'),execFileSync('git',['show',`${process.argv.includes('--tiny')?'6f4a927':'64998bf'}:apps/frontend/src/components/edit-mode/edit-preview.tsx`]));
 fs.writeFileSync(loader,`module.exports=function(s){${before?`if(this.resourcePath.replaceAll('\\\\','/').endsWith('/edit-mode/edit-preview.tsx'))s=require('node:fs').readFileSync(${JSON.stringify(path.join(out,'before-preview.tsx'))},'utf8');`:''}return require(${JSON.stringify(require.resolve('typescript'))}).transpileModule(s,{compilerOptions:{jsx:4,module:99,target:9,esModuleInterop:true}}).outputText;};`);
 fs.writeFileSync(entry,`import React from 'react';import{createRoot}from'react-dom/client';import{EditPreview}from ${JSON.stringify(previewFile.replaceAll('\\','/'))};
 const q=new URL(location.href).searchParams;fetch('/project.json?case='+q.get('case')).then(r=>r.json()).then(p=>{window.project=p;createRoot(document.getElementById('app')).render(<EditPreview source={p.assets.find(a=>a.role==='SOURCE')} assets={p.assets} aspectRatio='9:16' reframePolicy={p.settings.reframePolicy} resolvedVisualLayout={p.settings.resolvedVisualLayout} elements={p.elements} selectedElementId={null} currentPlayheadSec={Number(q.get('t'))} onPlayheadChange={()=>{}} onSelect={()=>{}} onPreviewElements={()=>{}} onCommitTransform={()=>{}}/>);});`);
@@ -65,10 +65,13 @@ async function main(){
  await new Promise((resolve,reject)=>webpack({mode:'development',devtool:false,entry,output:{path:out,filename:'bundle.js'},resolve:{extensions:['.tsx','.ts','.js','.cjs','.json'],alias:{'@':path.join(root,'apps/frontend/src')}},module:{rules:[{test:/\.tsx?$/,exclude:/node_modules/,use:loader}]},plugins:[new webpack.DefinePlugin({'process.env.NEXT_PUBLIC_API_URL':JSON.stringify(url)})]},(e,s)=>e||s.hasErrors()?reject(e||new Error(s.toString({all:false,errors:true}))):resolve()));
  const {chromium}=require('@playwright/test'),browser=await chromium.launch({executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',headless:true});
  const evidence=[];
- try{for(const name of before?['exact']:process.argv.includes('--exact-only')?['exact']:Object.keys(cases))for(const [view,w,h,dpr] of before?[['desktop',1106,2050,1]]:[['desktop',1106,2050,1],['mobile375',375,844,3],['mobile390',390,844,3]]){
+ const views=process.argv.includes('--tiny')?[['mobile375',375,844,3],['mobile390',390,844,3]]:before?[['desktop',1106,2050,1]]:[['desktop',1106,2050,1],['mobile375',375,844,3],['mobile390',390,844,3]];
+ try{for(const name of before?['exact']:process.argv.includes('--exact-only')?['exact']:Object.keys(cases))for(const [view,w,h,dpr] of views){
   const page=await browser.newPage({viewport:{width:w,height:h},deviceScaleFactor:dpr});const errors=[];page.on('pageerror',e=>errors.push(e.message));
   for(const t of name==='exact'?[.5,3,12,25,34]:name==='zoom'?[5.5]:[3]){
    await page.goto(`${url}/?case=${name}&t=${t}`);
+   if(process.argv.includes('--tiny'))await page.evaluate(()=>Object.assign(document.getElementById('app').style,
+     {position:'absolute',left:'92.5px',top:'102.15625px',width:'190px',height:'376px'}));
    await page.waitForFunction(t=>{const v=document.querySelector('video');return v&&v.readyState>=2&&Math.abs(v.currentTime-t)<.04;},t);
    await page.evaluate(()=>document.fonts.ready);await page.waitForTimeout(150);
    const canvas=page.getByTestId('edit-preview-canvas');const bounds=await canvas.boundingBox();
@@ -76,10 +79,11 @@ async function main(){
    // measurement would inflate a screenshot edge rounding error threefold.
    await page.screenshot({path:path.join(out,`${name}-${view}-t${t}.png`),
      clip:{x:bounds.x,y:bounds.y,width:bounds.width,height:bounds.height},scale:'device'});
+   await page.screenshot({path:path.join(out,`${name}-${view}-t${t}-viewport.png`),scale:'device'});
    const surface=page.getByTestId('style-two-crop-surface');
    const g=await surface.count()?await surface.getAttribute('data-crop-transform'):null;
    const asset=fixtures[name].assets.find(a=>a.role==='SOURCE');
-   const expected=styleTwoCropTransform(asset.width,asset.height,fixtures[name].elements.find(e=>e.type==='VIDEO').properties);
+   const expected=(asset.metadata?.quickReframeBaked===true?styleTwoBakedCropTransform:styleTwoCropTransform)(asset.width,asset.height,fixtures[name].elements.find(e=>e.type==='VIDEO').properties);
    if(!before&&expected)assert.deepEqual(JSON.parse(g),expected);
    evidence.push({name,view,t,bounds,dpr,geometry:g?JSON.parse(g):null,errors});assert.deepEqual(errors,[]);
   }await page.close();

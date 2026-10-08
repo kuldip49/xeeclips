@@ -29,7 +29,7 @@ async function main(){
   let project=await h.service.get(id);
   const source=project.assets.find(a=>a.role==='SOURCE'),duration=source.duration;
   // The user's saved manual crop is baked into SOURCE (906x1152, the source19 crop). Compose from those pixels.
-  const baked={...source,width:906,height:1152};
+  const baked={...source,width:906,height:1152,metadata:{...source.metadata,quickReframeBaked:true}};
   const assets=project.assets.map(a=>a.id===source.id?baked:a);
 
   // ---- StyleTwo as ONE canonical revision over the confirmed crop.
@@ -72,7 +72,11 @@ async function main(){
   assert.deepEqual(styled.plan.canvas.visualLayout.videoFrame,preview.plan.canvas.visualLayout.videoFrame,'preview and export share the geometry');
   const graph=filterGraph(styled);
   assert.match(graph,/color=c=#FFFFFF:s=1080x1920/u,'white canvas');
-  assert.match(graph,/scale=1080:860:force_original_aspect_ratio=decrease/u,'whole crop fitted inside the 1080x860 window');
+  assert.equal(styled.plan.canvas.bakedSourceCrop,true,'real baked-source path');
+  assert.match(graph,/\[vfitb\]scale=676:860,setsar=1/u,'canonical whole-source FIT picture in the 1080x860 window');
+  assert.match(graph,/overlay=202:0\[vfit\]/u,'canonical chroma-aligned centering');
+  assert.match(filterGraph(preview),/\[vfitb\]scale=338:430,setsar=1/u,'reduced preview projects the same whole source into its own target');
+  assert.match(filterGraph(preview),/overlay=100:0\[vfit\]/u,'reduced preview preserves existing 4:2:0 alignment');
   assert.match(graph,/overlay=0:630/u,'window at y=630');
   // The visible picture is the fitted foreground (scale ... decrease, no crop filter) for the whole duration;
   // the only crop in the graph trims a backdrop that is immediately painted over with the canvas colour.

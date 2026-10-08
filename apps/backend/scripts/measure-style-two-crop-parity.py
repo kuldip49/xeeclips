@@ -15,7 +15,16 @@ for row in json.loads((preview/'preview-results.json').read_text()):
     file=export/f'{name}.mp4'
     if not file.exists(): file=export/'source19-editor-final.mp4'
     data=subprocess.run([str(ffmpeg),'-v','error','-ss',str(t),'-i',str(file),'-frames:v','1','-f','image2pipe','-vcodec','png','-'],capture_output=True,check=True).stdout
-    a=Image.open(preview/f'{name}-{view}-t{t}.png').convert('RGB').resize((1080,1920),Image.Resampling.LANCZOS)
+    viewport=preview/f'{name}-{view}-t{t}-viewport.png'
+    if viewport.exists():
+        # Browser clip screenshots integer-round fractional CSS clip origins.
+        # Sample the full native viewport at the measured continuous canvas
+        # box instead: one device pixel can be >2 production pixels here.
+        box=row['bounds'];dpr=row['dpr']
+        extent=(box['x']*dpr,box['y']*dpr,(box['x']+box['width'])*dpr,(box['y']+box['height'])*dpr)
+        a=Image.open(viewport).convert('RGB').resize((1080,1920),Image.Resampling.LANCZOS,box=extent)
+    else:
+        a=Image.open(preview/f'{name}-{view}-t{t}.png').convert('RGB').resize((1080,1920),Image.Resampling.LANCZOS)
     b=Image.open(io.BytesIO(data)).convert('RGB')
     # Match image gradients; grading and codecs can differ in luminance without
     # moving edges. Blur also suppresses mobile resampling antialiasing noise.
@@ -36,7 +45,7 @@ for row in json.loads((preview/'preview-results.json').read_text()):
     # an offset: report them separately, use textured quadrants for alignment.
     textured=[s for s,(x0,x1,y0,y1) in zip(shifts,[(40,520,690,900),(560,1040,690,900),(40,520,920,1180),(560,1040,920,1180)]) if float(np.var(A[y0:y1,x0:x1]))>.1]
     delta=max([max(abs(s['dx']),abs(s['dy'])) for s in textured],default=0)
-    r={**row,'quadrants':shifts,'texturedQuadrants':len(textured),'maxPositionDelta1080Px':delta,'pass':bool(textured) and delta<=2}
+    r={**row,'sampling':'native viewport at exact canvas bounds' if viewport.exists() else 'legacy clipped screenshot','quadrants':shifts,'texturedQuadrants':len(textured),'maxPositionDelta1080Px':delta,'pass':bool(textured) and delta<=2}
     results.append(r)
     if view=='desktop':
         pair=Image.new('RGB',(2160,1920),'white');pair.paste(a,(0,0));pair.paste(b,(1080,0));pair.save(preview/f'{name}-t{t}-pair.png')

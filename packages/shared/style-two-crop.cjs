@@ -68,4 +68,22 @@ function styleTwoCropCameraFilter(filter) {
   return filter.replace(/:([xy])='([^']+)'/g, (_,axis,expression)=>`:${axis}='round(${expression})'`);
 }
 
-module.exports = { styleTwoCropTransform, styleTwoCropFilter, styleTwoCropCamera, styleTwoCropCameraFilter };
+/** The whole already-baked Quick Reframe source is fitted, never recropped.
+ * Default overlay on a 4:2:0 frame aligns its offsets to the chroma grid. */
+function styleTwoFitBox(width, height, chroma = 2, target = STYLE_TWO.media) {
+  const t=target, scale=Math.min(t.width/width,t.height/height);
+  const w=Math.round(width*scale),h=Math.round(height*scale);
+  return {x:t.x+Math.floor((t.width-w)/2/chroma)*chroma,
+    y:t.y+Math.floor((t.height-h)/2/chroma)*chroma,width:w,height:h};
+}
+
+function styleTwoBakedCropTransform(width, height, properties = {}) {
+  const manual=styleTwoCropTransform(width,height,properties);
+  const full={x:0,y:0,width,height};
+  return {...(manual || {source:{width,height},rect:{...full},fitted:{...full},scaled:{...full},
+    rotation:0,flipH:false,flipV:false,target:{...STYLE_TWO.media},sourceScale:{x:1,y:1}}),
+    picture:styleTwoFitBox(width,height,manual?1:2)};
+}
+
+module.exports = { styleTwoCropTransform, styleTwoCropFilter, styleTwoCropCamera, styleTwoCropCameraFilter,
+  styleTwoFitBox,styleTwoBakedCropTransform };

@@ -19,8 +19,12 @@ Last updated: 2026-10-08
   introduces a confirmed preview/export subject-position offset. Previous backend/static frontend restored, maintenance off,
   QA accounts/content removed, original data/session/credit fingerprints preserved. See `docs/style-two-production-release-64998bf.md`.
   Follow-up: StyleTwo-only manual crop now shares integer source geometry and camera rounding between React and FFmpeg;
-  exact failing crop and seven crop shapes pass at ≤1 production pixel on desktop/375/390, including crop + zoom/rotation.
-  Deterministic StyleZero/StyleOne and StyleTwo no-crop video/audio baselines unchanged. Production redeployment pending idle gates.
+  first fix `6f4a927` passed live manual crop but was rolled back for 4 px Quick Reframe tiny-mobile FIT drift.
+  Native FIT follow-up shares the whole baked source's integer picture box and projects the video/window together;
+  exact 177×315 production mobile reproduction now passes at 1 px; manual crop cases and round-trips remain ≤2 px.
+  StyleZero/StyleOne, StyleTwo no-crop and baked Quick Reframe deterministic video/audio remain unchanged.
+  Original Docker runtime recovered from stale socket startup errors without changing volume data; fresh backup restored.
+  Production redeployment pending strict idle gates and live acceptance.
 
 - Quick Reframe social copy (2026-10-07): public Instagram/X post context retained; Caption & Hashtags
   in StyleOne, Manual and Export; five grounded caption styles, original rewrite, three editable

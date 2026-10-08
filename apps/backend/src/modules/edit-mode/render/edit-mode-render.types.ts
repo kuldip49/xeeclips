@@ -57,6 +57,8 @@ export type RenderCanvas = {
   fitBackground?: 'BLUR' | 'BLACK' | 'WHITE';
   /** Exact geometry resolved before the canonical style mutation. */
   visualLayout?: ResolvedVisualLayout | null;
+  /** SOURCE already contains the user's confirmed Quick Reframe crop. */
+  bakedSourceCrop?: true;
 };
 
 /** One kept source range and where it lands on the exported timeline. Splits,

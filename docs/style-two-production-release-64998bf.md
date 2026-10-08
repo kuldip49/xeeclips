@@ -113,7 +113,42 @@ Evidence under `storage/style-two-crop-parity/`: `before-deltas.json`, `final-de
 
 ### Follow-up production status
 
-The first preflight found one real active clip-render job, confirmed both in BullMQ and the database. Production was not restarted or modified to clear it. Commit/push and release preparation proceed after local acceptance; deployment must still obtain a fresh restorable backup, two strict idle checks, maintenance gating and live production parity ≤2 px. This section will be updated with the actual release result and versions.
+Commit `6f4a92765186c65ddc02382ff7b95350e8c6e04e` passed the live manual-crop comparison (desktop 1 px, mobile 375 2 px, mobile 390 1 px) and both real editor round-trips. However, the canonical Quick Reframe editor's much smaller 177×315 mobile canvas measured **4 production pixels**, exceeding the strict gate. This attempt was rolled back: previous backend image `sha256:0f3da03e71ea55d1883945ab2f3f93eb63da3f1d550ffb141ad47de4b293b288` and frontend `63426d28-d505-4d4a-be29-c3f896af8192` restored; maintenance removed; two disposable accounts and their media removed; all original record/session/credit fingerprints preserved. Live cache replays and credit/Ask AI acceptance were interrupted by that failure and are not claimed as completed for `6f4a927`.
+
+### Native FIT layout follow-up
+
+The remaining bug was independent FIT picture/window layout in responsive CSS. At the actual tiny mobile canvas, fractional CSS rounding moved the whole source relative to the fixed window. Quick Reframe now uses the shared `styleTwoBakedCropTransform` and `styleTwoFitBox`: the entire 906×1152 baked source is retained, fitted to **676×860 at (202,630)**. The 4:2:0 overlay center is explicitly aligned down to its two-pixel chroma grid; manual 4:4:4 crops retain integer offsets without that restriction. Reduced server previews pass their actual target window to the same helper, so a 540×960 preview fits 338×430 at its existing chroma-aligned offset. There is no second source crop.
+
+React draws video, black window matte and white bands on one native 1080×1920 coordinate plane and projects it once into the measured preview canvas. Source crop, manual scale/position, existing camera and zoom remain separate stages. StyleZero, StyleOne and uncropped non-Quick-Reframe StyleTwo retain their existing paths. The approved StyleTwo media window, typography, colors and text renderer are unchanged.
+
+The exact retained production Quick Reframe project, baked source, **177×315 canvas at (99,108.15625)**, DPR 3 and five sample times were reproduced locally at both 375/390 viewport widths. The preceding bundle fails at 3 px with continuous native-viewport sampling (its original live clipped screenshots measured 4 px); the corrected bundle measures **1 px at every sample**. Native screenshots are also sampled at the continuous measured canvas bounds to avoid introducing integer CSS clip-origin rounding. The gate remains 2 production pixels and was not relaxed.
+
+Final local manual-crop measurements are below. Values are maximum measured X/Y displacement in 1080×1920 production pixels. Shared serialized source rectangles, scale, translation and target boxes compare exactly. The remaining 2 px mobile image-alignment residual is reported explicitly; it is native video/screenshot rasterization, not a saved-coordinate change or a claim of exact pixel identity.
+
+| Crop | Desktop | 375 | 390 |
+|---|---:|---:|---:|
+| Centered | 1 | 0 | 2 |
+| Left-heavy | 0 | 1 | 1 |
+| Right-heavy | 0 | 1 | 1 |
+| Top-heavy | 1 | 0 | 1 |
+| Bottom-heavy | 0 | 0 | 2 |
+| Narrow | 0 | 1 | 1 |
+| Wide | 1 | 0 | 1 |
+| Exact failed production crop, five times | 0 | 1 | 2 |
+| Crop + accepted zoom | 1 | 1 | 1 |
+| Manual scale/position | 1 | 0 | 1 |
+| Rotation/flip | 1 | 0 | 2 |
+| Quick Reframe whole FIT, five times | 1 | 1 | 2 |
+| Quick Reframe exact tiny production canvas | — | 1 | 1 |
+| Service save/reload/Undo/Redo → export → React reopen | 0 | 1 | 2 |
+
+All comparisons remain within the strict 2 px gate. Source19 still yields zero rendered emphasis zooms and zero recorded in-shot speaker switches; the zoom test is an accepted canonical local fixture. The source has burned-in text/padding and remains functional acceptance, not clean-source certification.
+
+Fresh deterministic rerenders again match all **1,762 video / 2,744 audio frames** for each of StyleZero, StyleOne and StyleTwo no-crop. The new explicit Quick Reframe FIT filter matches its preceding filter in all **1,173 decoded video / 1,829 audio frames**. Canonical save/reload/Undo/Redo, caption correction persistence, 142 transform assertions, full StyleTwo suite, baked Quick Reframe full/reduced-preview regression, backend build, frontend types and static Cloudflare build pass.
+
+Additional application files: `edit-mode-render-plan.ts` and `edit-mode-render.types.ts` carry a StyleTwo-only baked-source flag; `edit-mode-filtergraph.ts`, `edit-preview.tsx` and shared crop geometry consume the native FIT box. Additional evidence: `storage/style-two-crop-parity/{final-fit-deltas,tiny-before-deltas,tiny-fixed-deltas,fit-quick-deltas,fit-roundtrip-deltas,fit-regressions}.json`; actual MP4s, shared geometry, compiler arguments, preview/export pairs and differences remain in that directory.
+
+The original production runtime independently stopped during the continuation. Docker startup failed on inaccessible stale UNIX socket entries. Only two verified socket-only runtime directories were quarantined intact; no configuration, secrets, database or volume storage was moved. The existing containers and public API recovered (200). A new 27,687,508-byte backup restored successfully into isolated PostgreSQL; SHA-256 `9bf91f243ea6ead69d1be773a0bde96dcd23a4db594baa04dd5de039c361579a`. Original counts: 3 users, 175 clips, 100 edit projects, 4 Quick Reframes, 26 total credits. Follow-up deployment still requires two strict idle checks and live production acceptance; final versions/results will be recorded after those checks.
 
 ## Evidence
 
@@ -138,4 +173,4 @@ Local files under `C:/projects/ai-content-platform/storage/style-two-release-649
 
 Full clean-source visual certification and in-shot two-speaker switching certification remain pending. Legacy ONLINE edited-clip face-lock rejection and the missed close-up→wide shot cut are separate issues; neither validator nor shared shot detection was changed during this deployment. Production XeePro smoke exercised ONLINE analysis + No Edit, not the known failing edited-candidate case. This source produced no rendered StyleTwo emphasis zoom, and its transcript has three zero-duration ASR entries. The new manual-crop preview mismatch above blocks releasing this exact commit.
 
-Git HEAD remains `64998bfc8fa9284af8f0527ec52e7a77b383cc7e`. No follow-up application commit, force push, destructive Git command, production DB repair, or volume deletion was performed. This deployment report is an uncommitted documentation artifact.
+The original `64998bf` and first crop fix `6f4a927` were both rolled back after their respective production parity failures. The native FIT follow-up above is the current release candidate. No force push, destructive Git command, production DB repair, or volume deletion was performed.

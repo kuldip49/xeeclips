@@ -2,7 +2,7 @@
 
 import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { styleTwoCropTransform, styleTwoCropCamera, type StyleTwoCropTransform } from '@ai-content-platform/shared/style-two-crop.cjs';
+import { styleTwoCropTransform, styleTwoBakedCropTransform, styleTwoCropCamera, type StyleTwoCropTransform } from '@ai-content-platform/shared/style-two-crop.cjs';
 import { Pause, Play, RotateCw } from 'lucide-react';
 import type { EditAspectRatio, EditAsset, EditElement,
   VisualElementProperties } from '@/lib/edit-mode-types';
@@ -359,7 +359,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   const resolvedCard = resolvedVisualLayout?.videoFrame?.mode === 'CARD'
     ? resolvedVisualLayout.videoFrame : null;
   const cropGeometry = styleTwo && !cropEditor && mapping && resolvedCard
-    ? styleTwoCropTransform(mediaAsset?.width || source.width || 1080,
+    ? (mediaAsset?.metadata?.quickReframeBaked === true ? styleTwoBakedCropTransform : styleTwoCropTransform)(mediaAsset?.width || source.width || 1080,
       mediaAsset?.height || source.height || 1920, mapping.element.properties) : null;
   const card = cropGeometry && resolvedCard ? { ...resolvedCard,
     x: cropGeometry.target.x / 1080, y: cropGeometry.target.y / 1920,
@@ -431,10 +431,12 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     .filter(Boolean).join(' ') || undefined;
   const canonicalCrop = cameraCrop ? cropGeometry : null;
   const canonicalFrameStyle: CSSProperties = card && cameraCrop ? (() => {
-    const { x, y, width, height } = pictureRect(cameraCrop)!;
-    return { left: `${(x - cameraCrop.x / cameraCrop.w * width) * 100}%`,
-      top: `${(y - cameraCrop.y / cameraCrop.h * height) * 100}%`,
-      width: `${width / cameraCrop.w * 100}%`, height: `${height / cameraCrop.h * 100}%`,
+    const picture = canonicalCrop?.picture && cardFit ? canonicalCrop.picture : null;
+    const { x, y, width, height } = picture ? { x: picture.x / 1080, y: picture.y / 1920,
+      width: picture.width / 1080, height: picture.height / 1920 } : pictureRect(cameraCrop)!;
+    return { left: (x - cameraCrop.x / cameraCrop.w * width) * 1080,
+      top: (y - cameraCrop.y / cameraCrop.h * height) * 1920,
+      width: width / cameraCrop.w * 1080, height: height / cameraCrop.h * 1920,
       transform: zoomState.scale > 1.0001 ? `scale(${zoomState.scale})` : undefined,
       transformOrigin: `${(cameraCrop.x + zoomState.x * cameraCrop.w) * 100}% ` +
         `${(cameraCrop.y + zoomState.y * cameraCrop.h) * 100}%` };
@@ -477,7 +479,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
       {/* The transform of the segment under the playhead. Crop, flip, rotation,
           scale and position are drawn here in the same order the renderer
           applies them, so what is framed is what is exported. */}
-      {styleTwo && card && <span aria-hidden className='pointer-events-none absolute bg-black'
+      {styleTwo && card && !canonicalCrop && <span aria-hidden className='pointer-events-none absolute bg-black'
         style={{ left: `${card.x * 100}%`, top: `${card.y * 100}%`, width: `${card.width * 100}%`, height: `${card.height * 100}%` }} />}
       {(() => { const surface = <video key={`${mediaAsset?.id}-${mediaAttempt}`} ref={video}
         src={mediaAsset ? `${editAssetPlaybackUrl(mediaAsset.id)}${mediaAttempt ? `?retry=${mediaAttempt}` : ''}` : undefined}
@@ -524,11 +526,17 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
         onTimeUpdate={(event) => timeUpdate(event.currentTarget)} />;
         return canonicalCrop ? <div className='absolute left-0 top-0' style={{ width: 1080, height: 1920,
           transformOrigin: '0 0', transform: `scale(${canvasSize.width / 1080}, ${canvasSize.height / 1920})` }}>
+          <span aria-hidden className='pointer-events-none absolute bg-black' style={{ left: canonicalCrop.target.x,
+            top: canonicalCrop.target.y, width: canonicalCrop.target.width, height: canonicalCrop.target.height }} />
           <StyleTwoCropSurface geometry={canonicalCrop} frameStyle={canonicalFrameStyle}>
             {surface}</StyleTwoCropSurface>
+          <span aria-hidden className='pointer-events-none absolute left-0 top-0 w-full'
+            style={{ height: canonicalCrop.target.y, background: cardColor }} />
+          <span aria-hidden className='pointer-events-none absolute bottom-0 left-0 w-full'
+            style={{ height: 1920 - canonicalCrop.target.y - canonicalCrop.target.height, background: cardColor }} />
         </div> : surface;
       })()}
-      {card && <>
+      {card && !canonicalCrop && <>
         <span aria-hidden className='pointer-events-none absolute left-0 top-0 w-full bg-black'
           style={{ height: `${card.y * 100}%`, background: cardColor }} />
         <span aria-hidden className='pointer-events-none absolute bottom-0 left-0 w-full bg-black'

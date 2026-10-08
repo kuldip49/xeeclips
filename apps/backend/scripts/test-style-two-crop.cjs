@@ -1,5 +1,5 @@
 const assert=require('node:assert/strict');
-const {styleTwoCropTransform,styleTwoCropFilter}=require('@ai-content-platform/shared/style-two-crop.cjs');
+const {styleTwoCropTransform,styleTwoCropFilter,styleTwoBakedCropTransform,styleTwoFitBox}=require('@ai-content-platform/shared/style-two-crop.cjs');
 const {createHarness}=require('./test-edit-mode-isolation.cjs');
 const fs=require('node:fs');
 const crop={top:.028301,left:.028301,right:.028303,bottom:.028303};
@@ -11,6 +11,10 @@ assert(styleTwoCropFilter(geometry).includes('crop=1019:1811:31:54:exact=1'));
 assert.equal(styleTwoCropTransform(906,1152,{confirmed:{crop:{x:.08,y:.24,w:.84,h:.60}}}),null,
  'Quick Reframe confirmed crop is already baked; never read it as another crop');
 assert.equal(styleTwoCropTransform(1080,1920,{}),null,'No-crop path stays byte-identical');
+const baked=styleTwoBakedCropTransform(906,1152,{confirmed:{crop:{x:.08,y:.24,w:.84,h:.60}}});
+assert.deepEqual(baked.rect,{x:0,y:0,width:906,height:1152},'Already baked pixels are retained exactly once');
+assert.deepEqual(baked.picture,{x:202,y:630,width:676,height:860},'Preview uses the same 4:2:0 aligned FIT picture as export');
+assert.deepEqual(styleTwoFitBox(906,1152,1),{x:202,y:630,width:676,height:860});
 for(const [w,h] of [[1080,1920],[906,1152],[1920,1080]])for(const c of [crop,
  {left:.32,right:.32,top:.03,bottom:.03},{left:.03,right:.03,top:.32,bottom:.32}]) {
  const g=styleTwoCropTransform(w,h,{crop:c,scale:.7,offsetX:.012,offsetY:-.01});

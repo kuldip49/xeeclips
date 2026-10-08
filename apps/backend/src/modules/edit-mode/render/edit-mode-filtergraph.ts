@@ -15,7 +15,7 @@ import { colorAdjustmentFilter } from './edit-mode-color-filter';
 import { atempoChain, overlayTransformFilter,
   segmentTransformFilter } from './edit-mode-segment-filter';
 import { zoomAnchorExpression, zoomEnvelopeExpression } from './edit-mode-zoom';
-import { styleTwoCropTransform, styleTwoCropFilter, styleTwoCropCameraFilter } from '@ai-content-platform/shared/style-two-crop.cjs';
+import { styleTwoCropTransform, styleTwoCropFilter, styleTwoCropCameraFilter, styleTwoFitBox } from '@ai-content-platform/shared/style-two-crop.cjs';
 
 export type GraphInput = {
   /** Trusted, validated source-local preparation (Quick Reframe masks). Absent for existing editors. */
@@ -47,7 +47,7 @@ const seconds = (value: number) => value.toFixed(3);
  * wide canvas is never destructively cropped to fill it. */
 function fittedLayer(graph: string[], source: string, out: string, width: number, height: number,
   crop?: string, background: 'BLUR' | 'BLACK' | 'WHITE' = 'BLUR',
-  manualCropExpression = '') {
+  manualCropExpression = '', picture?: { x: number; y: number; width: number; height: number }) {
   const pre = crop ? `crop=${crop},` : '';
   graph.push(`[${source}]${pre}split=2[${out}a][${out}b]`);
   // Step 10: a solid backdrop is the same full-canvas layer painted over, so the
@@ -63,9 +63,10 @@ function fittedLayer(graph: string[], source: string, out: string, width: number
     : '';
   graph.push(`[${out}a]scale=${width}:${height}:force_original_aspect_ratio=increase,` +
     `crop=${width}:${height},${backdrop}${cropBackdrop}[${out}bg]`);
-  graph.push(`[${out}b]scale=${width}:${height}:force_original_aspect_ratio=decrease,` +
+  graph.push(`[${out}b]${picture ? `scale=${picture.width}:${picture.height}`
+    : `scale=${width}:${height}:force_original_aspect_ratio=decrease`},` +
     `setsar=1[${out}fg]`);
-  graph.push(`[${out}bg][${out}fg]overlay=(W-w)/2:(H-h)/2[${out}]`);
+  graph.push(`[${out}bg][${out}fg]overlay=${picture ? `${picture.x}:${picture.y}` : '(W-w)/2:(H-h)/2'}[${out}]`);
 }
 
 export function buildFfmpegArgs(input: GraphInput): string[] {
@@ -235,7 +236,11 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
     // Information-safe shots: the whole frame (or its readable region) is fitted
     // inside the card on black, never face-cropped or filled.
     if (cardFit) {
-      fittedLayer(graph, 'vfitsrc', 'vfit', frameWidth, frameHeight, undefined, 'BLACK');
+      const fitted = plan.canvas.bakedSourceCrop ? styleTwoFitBox(plan.canvas.sourceWidth,
+        plan.canvas.sourceHeight, manualStyleTwo ? 1 : 2,
+        { x: frameX, y: frameY, width: frameWidth, height: frameHeight }) : null;
+      fittedLayer(graph, 'vfitsrc', 'vfit', frameWidth, frameHeight, undefined, 'BLACK', '',
+        fitted ? { ...fitted, x: fitted.x - frameX, y: fitted.y - frameY } : undefined);
       graph.push(`[${composited}][vfit]overlay=${frameX}:${frameY}:enable='${input.fitExpression}'[vcardfit]`);
       composited = 'vcardfit';
     }

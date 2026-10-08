@@ -330,6 +330,8 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
     presetId: style.selectedPreset,
     canvas: { ...canvas, fps, aspectRatio: style.aspectRatio, sourceWidth, sourceHeight,
       visualLayout,
+      ...(visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO' && record(source.metadata).quickReframeBaked === true
+        ? { bakedSourceCrop: true as const } : {}),
       fitBackground: ['BLACK', 'WHITE'].includes(String(record(input.project.settings).fitBackground))
         ? record(input.project.settings).fitBackground as 'BLACK' | 'WHITE' : 'BLUR' },
     durationSec: map.durationSec,
