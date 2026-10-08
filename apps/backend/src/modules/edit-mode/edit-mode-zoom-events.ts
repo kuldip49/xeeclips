@@ -38,6 +38,13 @@ export const DEFAULT_ZOOM_SCALE = 1.1;
 export const MIN_ZOOM_DURATION_SEC = 1.1;
 /** A zoom with no stated length holds for about one spoken beat. */
 export const DEFAULT_ZOOM_DURATION_SEC = 1.6;
+/**
+ * The canonical automatic emphasis zoom (`zoom.add_semantic` with `phraseTimed`, i.e. the
+ * AUTOMATIC_2 / StyleOne policy that StyleTwo shares): one move covers the whole scored phrase and
+ * lasts 2.5-5 s. Automatic emphasis is never a 1-2 s punch.
+ */
+export const PHRASE_ZOOM_MIN_DURATION_SEC = 2.5;
+export const PHRASE_ZOOM_MAX_DURATION_SEC = 5;
 
 export type ZoomEffect = {
   effect: typeof ZOOM_EFFECT;

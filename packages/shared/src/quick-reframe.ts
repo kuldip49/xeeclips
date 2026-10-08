@@ -35,7 +35,7 @@ export type ReframePreparation = Pick<ReframePlan, 'aspect' | 'crop' | 'framing'
 export type ReframeHookCategory = 'BOLD' | 'CURIOSITY' | 'QUESTION' | 'CONTRARIAN' | 'EMOTIONAL' | 'PROFESSIONAL' | 'SARCASTIC' | 'HUMOROUS' | 'AUTHORITY' | 'STORY' | 'WARNING';
 export type ReframeHook = { text: string; category: ReframeHookCategory; score: number; recommended: boolean;
   source: 'OPENAI' | 'LOCAL' };
-export type ReframeEditPath = 'STYLEONE' | 'MANUAL';
+export type ReframeEditPath = 'STYLEONE' | 'STYLETWO' | 'MANUAL';
 /** Social post copy is metadata, never a timeline element or burned-in subtitle. */
 export type ReframeSocialSource = { sourcePostText: string; sourceHashtags: string[];
   sourcePlatform: 'instagram' | 'x'; sourcePostUrl: string; sourceAuthor?: string; sourcePostTitle?: string };
@@ -60,6 +60,7 @@ export type ReframeSession = { id: string; editProjectId: string; revision: numb
   /** True when SOURCE matches the current plan's crop and cleanup. */
   cropConfirmed: boolean; confirmed: ReframePreparation | null; editPath: ReframeEditPath | null;
   styleOneApplied: boolean;
+  styleTwoApplied: boolean;
   previewUrl: string | null; exportUrl: string | null; previewRevision: number | null; exportRevision: number | null;
   exports: ReframeExport[];
   status: string; progress: number; message: string; error: string | null;

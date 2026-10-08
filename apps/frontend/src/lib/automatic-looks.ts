@@ -3,7 +3,7 @@
  * its editorial street3 style, and Raw the same edit (selection, start/end, speaker framing,
  * zoom) with nothing drawn or mixed on top: no captions, hook, text, music or grade.
  */
-export const AUTOMATIC_LOOKS = ['AUTOMATIC_1', 'AUTOMATIC_2', 'AUTOMATIC_RAW'] as const;
+export const AUTOMATIC_LOOKS = ['AUTOMATIC_1', 'AUTOMATIC_2', 'AUTOMATIC_3_STYLE_TWO', 'AUTOMATIC_RAW'] as const;
 export type AutomaticLook = typeof AUTOMATIC_LOOKS[number];
 
 export const isAutomaticLook = (value: unknown): value is AutomaticLook =>

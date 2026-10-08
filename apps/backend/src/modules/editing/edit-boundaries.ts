@@ -1,5 +1,7 @@
 import type { TimedWord } from './edit-plan';
 import type { Cut } from './timeline-remap';
+// One definition of "this opening only continues the sentence before it", shared with the boundary QA.
+import { opensAsContinuation } from '../content-intelligence/clip-boundary.service';
 
 // Deterministic editorial boundaries for EDITED_CLIPS.
 //
@@ -314,7 +316,7 @@ function scoreOpening(words: TimedWord[], index: number, context: {
   const attentionHits = lead.filter((token) => ATTENTION_WORDS.has(token)).length +
     (sentence.slice(0, 8).some((word) => hasNumber(word.text)) ? 1 : 0);
   const naturalStart = sentenceStartAt(words, index) || sentenceStartAt(words, context.anchorIndex);
-  const unresolved = opensOnUnresolvedPronoun(sentence);
+  const unresolved = opensOnUnresolvedPronoun(sentence) || opensAsContinuation(words, index);
   const housekeeping = isHousekeepingOpening(sentence);
   // Luna said the viewer needs context from here on; starting later loses it.
   const cutsRequiredContext = context.contextRequiredIndex != null &&
@@ -519,6 +521,7 @@ export function optimizeEditBoundaries(input: {
   // opening leans on a pronoun with no antecedent, or Luna marked the required
   // context as starting earlier, the preceding sentences become candidates too.
   const needsEarlierContext = opensOnUnresolvedPronoun(baseSentence) ||
+    opensAsContinuation(words, baseStartIndex) ||
     (contextRequiredIndex != null && contextRequiredIndex < baseStartIndex);
   if (needsEarlierContext) {
     let index = baseStartIndex;
@@ -528,7 +531,8 @@ export function optimizeEditBoundaries(input: {
       rawOpenings.push({ index, origin: 'CONTEXT_EXTENDED' });
       // One sentence past the required context is enough; nothing earlier helps.
       if (contextRequiredIndex != null && index <= contextRequiredIndex) break;
-      if (!opensOnUnresolvedPronoun(sentenceFrom(words, index)) && contextRequiredIndex == null) break;
+      if (!opensOnUnresolvedPronoun(sentenceFrom(words, index)) && !opensAsContinuation(words, index) &&
+        contextRequiredIndex == null) break;
     }
   }
   // A deterministic attention opening, but only when the selected one is itself

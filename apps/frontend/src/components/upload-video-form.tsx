@@ -116,6 +116,7 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
     { value: 'AUTOMATIC_1', title: 'StyleZero', description: 'Clean framing, captions and subtle zooms.' },
     { value: 'AUTOMATIC_2', title: 'StyleOne',
       description: 'Editorial black canvas, serif headline and red highlights.' },
+    { value: 'AUTOMATIC_3_STYLE_TWO', title: 'StyleTwo', description: 'White canvas, condensed headline and red boxed captions.' },
     RAW_LOOK
   ];
 

@@ -69,10 +69,14 @@ export class GeneratedClipEditProjectMaterializerService {
         idFactory: () => randomUUID() })
       : null;
     const reconstructed = automatic?.mode === 'CANONICAL';
+    if (clip.templateId === 'AUTOMATIC_3_STYLE_TWO' && !reconstructed && !normalOriginalSource) {
+      throw new ConflictException({ code: 'STYLE_TWO_CANONICAL_SOURCE_REQUIRED',
+        message: 'StyleTwo requires the original source and a reconstructable edit plan; its temporary preview cannot be cropped again.' });
+    }
     const telemetry = clip.editTelemetry && typeof clip.editTelemetry === 'object' &&
       !Array.isArray(clip.editTelemetry) ? clip.editTelemetry as Record<string, unknown> : {};
     const cachedVisual = telemetry.visualAnalysis;
-    const sourceAnalysis = reconstructed && clip.templateId === 'AUTOMATIC_2' &&
+    const sourceAnalysis = reconstructed && (clip.templateId === 'AUTOMATIC_2' || clip.templateId === 'AUTOMATIC_3_STYLE_TWO') &&
       cachedVisual && typeof cachedVisual === 'object' &&
       Array.isArray((cachedVisual as Record<string, unknown>).frames)
       ? jsonSafe(cachedVisual) as Prisma.InputJsonValue : undefined;
@@ -119,6 +123,7 @@ export class GeneratedClipEditProjectMaterializerService {
         // Compatibility aliases retained for already-shipped Step 2 readers.
         fullVideoSourceStart: clip.startTime, fullVideoSourceEnd: clip.endTime,
         generatedDuration: duration, processingType: clip.processingType,
+        ...(clip.templateId === 'AUTOMATIC_3_STYLE_TWO' ? { templateId: clip.templateId } : {}),
         aspectRatio: clip.aspectRatio, targetPlatform: clip.targetPlatform,
         variantKey: clip.variantKey, editPlan: clip.editPlan,
         editTelemetry: clip.editTelemetry, contentPackaging: clip.contentPackaging

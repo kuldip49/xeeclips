@@ -14,6 +14,7 @@ import { EMPTY_CHAT_THREAD } from '../edit-mode/chat/edit-chat.types';
 import { buildPresetEvidence } from '../edit-mode/presets/edit-preset-evidence';
 import { readEditProjectStyle, type EditAspectRatio } from '../edit-mode/presets/edit-preset-policy';
 import { resolveCanvas } from '../edit-mode/render/edit-mode-camera';
+import { STYLE_TWO_ID } from '@ai-content-platform/shared/style-two.cjs';
 
 /** V3: the confirmed crop/cleanup is baked into SOURCE once; StyleOne and Manual both compose from it. */
 export const QUICK_REFRAME_PIPELINE = 'CROP_FIRST_V3';
@@ -29,12 +30,25 @@ export function preparationFingerprint(p: ReframePreparation) {
 }
 export function cleanFingerprint(p: ReframePlan) { return preparationFingerprint(preparationOf(p)); }
 
+/** The automatic looks Quick Reframe can apply to a confirmed crop (Manual editing has no template). */
+export type QuickStyle = 'STYLEONE' | 'STYLETWO';
+const QUICK_TEMPLATE: Record<QuickStyle, { templateId: string; profile: string; name: string }> = {
+  STYLEONE: { templateId: 'AUTOMATIC_2', profile: 'AUTOMATIC_2', name: 'StyleOne' },
+  STYLETWO: { templateId: STYLE_TWO_ID, profile: STYLE_TWO_ID, name: 'StyleTwo' } };
+export const quickStyleOf = (style: boolean | QuickStyle | null | undefined): QuickStyle | null =>
+  style === true ? 'STYLEONE' : style || null;
+
 /**
- * Compile the actual StyleOne template through the same editor commands as Create Clips.
- * The confirmed crop is already baked into SOURCE, so StyleOne shows that whole frame inside its
- * fixed media window (canonical FIT framing) instead of cropping a second time.
+ * Compile the actual StyleOne / StyleTwo template through the same editor commands as Create Clips.
+ * The confirmed crop is already baked into SOURCE, so the style shows that whole frame inside its
+ * fixed media window (canonical FIT framing) instead of cropping a second time. Quick Reframe never adds
+ * camera moves or zooms: the user's crop is the canonical input.
  */
 export function quickStyleOneCommands(input: PlanInput, options: { hookText: string; captions: boolean; replaceHook?: boolean }) {
+  return quickStyleCommands(input, options, 'STYLEONE');
+}
+export function quickStyleCommands(input: PlanInput, options: { hookText: string; captions: boolean; replaceHook?: boolean }, style: QuickStyle) {
+  const template=QUICK_TEMPLATE[style];
   const source=input.assets.find(a=>a.role==='SOURCE')!;
   const hook=options.hookText.trim();
   // StyleOne keeps an existing hook's wording. A hook the user wrote or picked replaces it: the content is
@@ -47,19 +61,22 @@ export function quickStyleOneCommands(input: PlanInput, options: { hookText: str
     elements:elements.map(e=>({...e,type:e.type as EditElementType,properties:e.properties as Record<string,unknown>})),
     assets:input.assets.map(a=>({...a,originalName:'Quick Reframe source'})),
     evidence:buildPresetEvidence({durationSec:source.duration!,width:source.width,height:source.height,metadata:source.metadata,transcript:source.transcript,analysis:source.analysis,aspectRatio:'SOURCE',preserveInformation:true}),
-    thread:EMPTY_CHAT_THREAD,selection:{},message:'Apply StyleOne to the complete confirmed source'});
-  const resolved=resolveCreativeStyle({templateId:'AUTOMATIC_2',components:{ZOOM:'ZOOM_NONE',
+    thread:EMPTY_CHAT_THREAD,selection:{},message:`Apply ${template.name} to the complete confirmed source`});
+  const resolved=resolveCreativeStyle({templateId:template.templateId,components:{ZOOM:'ZOOM_NONE',
     ...(hook?{}:{HOOK:'HOOK_NONE'}),...(options.captions?{}:{CAPTIONS:'CAP_NONE'})}});
   const compiled=compileCreativeStyle(resolved,context,{hookOptions:hook?[{text:hook}]:[],hasWordTimings:context.project.hasWordTimings});
   for(const command of compiled.commands) if(command.kind==='SETTINGS' && command.payload.resolvedVisualLayout) {
-    const layout=command.payload.resolvedVisualLayout as {cameraPath:unknown[]};
+    const layout=command.payload.resolvedVisualLayout as {cameraPath:unknown[];frameSegments?:unknown[];informationCrop?:unknown};
     layout.cameraPath=[{t:0,x:0,y:0,w:1,h:1},{t:source.duration!,x:0,y:0,w:1,h:1}];
+    // StyleTwo also persists its shot decisions: the baked crop is one fitted whole-frame shot.
+    if(style==='STYLETWO'){layout.frameSegments=[{startSec:0,endSec:source.duration!,layout:'FIT'}];layout.informationCrop=null;}
   }
   for(const command of compiled.commands) if(command.action==='SET_REFRAME_POLICY')command.payload.policy='SOURCE';
   for(const command of compiled.commands) if(command.action==='SET_ELEMENT_TIMING'&&Number(command.payload.duration)>source.duration!)command.payload.duration=source.duration!;
   if(replace)compiled.commands.unshift({kind:'ELEMENT',action:'SET_TEXT_CONTENT',payload:{elementId:existing!.id,content:hook}});
   compiled.commands.push({kind:'ELEMENT',action:'SET_VIDEO_FRAMING',payload:{mode:'FIT',scope:'ALL_VIDEO_SEGMENTS'}});
-  compiled.commands.push({kind:'SETTINGS',action:'QUICK_REFRAME_STYLEONE',payload:{aspectRatio:'9:16',reframePolicy:'SOURCE',zoomPolicy:'OFF',subtitlePolicy:'OFF',gradingPolicy:'NONE',quickReframeStyleOne:true}});
+  compiled.commands.push({kind:'SETTINGS',action:style==='STYLETWO'?'QUICK_REFRAME_STYLETWO':'QUICK_REFRAME_STYLEONE',payload:{aspectRatio:'9:16',reframePolicy:'SOURCE',zoomPolicy:'OFF',subtitlePolicy:'OFF',gradingPolicy:'NONE',
+    ...(style==='STYLETWO'?{quickReframeStyleTwo:true}:{quickReframeStyleOne:true})}});
   return compiled;
 }
 
@@ -120,21 +137,25 @@ export function quickOutputCanvas(settings: unknown, sourceWidth: number, source
 }
 
 /**
- * One composition path for both editing modes: the canonical render plan, ASS text and FFmpeg
- * graph over the confirmed SOURCE, with the project's own images and audio. StyleOne additionally
- * requires its resolved AUTOMATIC_2 layout, so a project that lost it is never rendered as StyleOne.
+ * One composition path for every editing mode: the canonical render plan, ASS text and FFmpeg
+ * graph over the confirmed SOURCE, with the project's own images and audio. StyleOne / StyleTwo additionally
+ * require their resolved layout, so a project that lost it is never rendered as that style.
+ * `style` is `true`/'STYLEONE', 'STYLETWO' or falsy (Manual).
  */
 export function quickComposeRender(input: PlanInput & { canvasOverride: { width: number; height: number } }, sourcePath: string, outputPath: string,
-  media: { overlayPaths: Record<string, string>; audioPaths: Record<string, string> }, styleOne: boolean) {
+  media: { overlayPaths: Record<string, string>; audioPaths: Record<string, string> }, style: boolean | QuickStyle | null, options: { fontsDir?: string } = {}) {
+  const quick=quickStyleOf(style);const template=quick?QUICK_TEMPLATE[quick]:null;
   const built=buildRenderPlan(input);
   const plan=built.plan;
-  if(styleOne&&plan.canvas.visualLayout?.editingProfile!=='AUTOMATIC_2')throw new Error('StyleOne layout must be resolved before composition');
+  if(template&&plan.canvas.visualLayout?.editingProfile!==template.profile)throw new Error(`${template.name} layout must be resolved before composition`);
   validateRenderPlan(plan,{assets:input.assets});
   const captionLines=plan.canvas.visualLayout?.captions.maxLines;
-  if(styleOne&&captionLines&&plan.subtitles.some(c=>wrapToWidth(c.content,c.fontSizePx,c.width).length>captionLines))throw new BadRequestException('Shorten the edited caption to fit StyleOne’s two-line caption area.');
+  // StyleTwo measures with its own glyph outlines (the ASS builder reports overflow); StyleOne with the shared wrapper.
+  if(quick==='STYLEONE'&&captionLines&&plan.subtitles.some(c=>wrapToWidth(c.content,c.fontSizePx,c.width).length>captionLines))throw new BadRequestException('Shorten the edited caption to fit StyleOne’s two-line caption area.');
   const ass=buildEditModeAss(plan.canvas,[...plan.textOverlays,...plan.subtitles]);
+  if(quick==='STYLETWO'&&plan.subtitles.some(c=>ass.overflowed.includes(c.elementId)))throw new BadRequestException('Shorten the edited caption to fit StyleTwo’s two-line caption area.');
   const assName=plan.textOverlays.length||plan.subtitles.length?'captions.ass':null;
-  const args=buildFfmpegArgs({plan,sourcePath,outputPath,overlayPaths:media.overlayPaths,audioPaths:media.audioPaths,assFileName:assName,
+  const args=buildFfmpegArgs({plan,sourcePath,outputPath,overlayPaths:media.overlayPaths,audioPaths:media.audioPaths,assFileName:assName,fontsDir:options.fontsDir,
     informationCrop:built.evidence.informationCrop,fitExpression:built.evidence.fitExpression,informationFitExpression:built.evidence.informationFitExpression,cameraFilter:built.evidence.cameraFilter});
   args.splice(args.indexOf('-i'),0,'-protocol_whitelist','file,pipe','-format_whitelist','mov,matroska,webm');
   return {args,ass:assName?ass.content:null,plan,evidence:built.evidence};

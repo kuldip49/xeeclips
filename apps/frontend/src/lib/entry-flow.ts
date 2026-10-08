@@ -37,7 +37,7 @@ export const DEFAULT_ENTRY_SETTINGS: EntrySettings = {
 };
 
 export const ENTRY_TEMPLATE_LABELS: Record<EntryTemplate, string> = {
-  AUTOMATIC_1: 'StyleZero', AUTOMATIC_2: 'StyleOne', AUTOMATIC_RAW: 'No Edit'
+  AUTOMATIC_1: 'StyleZero', AUTOMATIC_2: 'StyleOne', AUTOMATIC_3_STYLE_TWO: 'StyleTwo', AUTOMATIC_RAW: 'No Edit'
 };
 
 /** Built with the same helpers as the "Create clips" button, so both send identical requests. */

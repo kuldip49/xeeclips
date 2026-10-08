@@ -94,6 +94,11 @@ export function zoomAnchorExpression(events: RenderZoomEvent[], axis: 'focusX' |
     `${event[axis].toFixed(4)}\\,${next})`, '0.5');
 }
 
+/** Spacing and budget of the shared phrase-timed emphasis policy (StyleOne and StyleTwo). One definition, used by
+ *  the renderer and by the style compiler's renderability check. */
+export const phraseZoomLimits = (durationSec: number) => ({ minGapSec: 5,
+  maxEvents: durationSec <= 15 ? 1 : durationSec <= 45 ? 3 : 4 });
+
 export type ZoomPlanInput = {
   policy: ZoomPolicy;
   moments: PlannedZoomMoment[];

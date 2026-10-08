@@ -777,7 +777,7 @@ export class ClipExportService {
     // and repair pass) replaces it. So it is encoded cheaply and Automatic 1's pixel QA
     // (hook, subtitle, background, camera-transition checks of a layout Automatic 2
     // discards) neither runs nor rejects the candidate. Automatic 1 is unchanged.
-    const temporaryPreview = templateId === 'AUTOMATIC_2';
+    const temporaryPreview = templateId === 'AUTOMATIC_2' || templateId === 'AUTOMATIC_3_STYLE_TWO';
     const render = (input: PreparedEdit) => this.executor.execute(windowPath, outputPath,
       input.plan, windowWords, [], [], speakerChangeTimes, { inputOffsetSec: windowStart,
         timeline: input.timeline, analysis, boundary: input.boundary, loop: input.loop,
@@ -1125,9 +1125,9 @@ export class ClipExportService {
       candidateSkippedBeforeRender: quality.candidateSkippedBeforeRender,
       editingFallbackReason: fallbackReason,
       editingPlanLlmCalls: editMetrics.llmRequestCountByRole.editingPlan ?? 0,
-      ...(temporaryPreview ? { baseRenderRole: 'AUTOMATIC_2_TEMPORARY_PREVIEW',
+      ...(temporaryPreview ? { baseRenderRole: `${templateId}_TEMPORARY_PREVIEW`,
         baseRenderEncode: 'ultrafast/crf26', baseRenderQa: 'DEFERRED_TO_CANONICAL_EXPORT' } : {}),
-      ...(templateId === 'AUTOMATIC_2' ? { visualAnalysis: {
+      ...(temporaryPreview ? { visualAnalysis: {
         source: analysis.source, frames: analysis.frames,
         shotBoundaries: analysis.shotBoundaries, ocrText: analysis.ocrText } } : {}),
       validatorWarnings: result.warnings };

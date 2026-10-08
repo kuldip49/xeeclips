@@ -2,11 +2,12 @@ import type { ChatContext } from '../chat/edit-chat-context';
 import type { BackgroundSpec, CaptionSpec, FramingSpec, HookSpec } from './creative-style-library';
 import type { ResolvedCreativeStyle } from './creative-style-resolver';
 import { AUTOMATIC_2_STREET3_LAYOUT as STREET3 } from './automatic-2-street3-layout';
+import { STYLE_TWO as TWO, STYLE_TWO_ID, normalized } from '@ai-content-platform/shared/style-two.cjs';
 
 export type NormalizedRect = { x: number; y: number; width: number; height: number };
 export type ResolvedVisualLayout = {
   version: 1;
-  editingProfile?: 'AUTOMATIC_2';
+  editingProfile?: 'AUTOMATIC_2' | 'AUTOMATIC_3_STYLE_TWO';
   canvas: { width: 1080; height: 1920; aspect: '9:16' };
   videoFrame: NormalizedRect & { mode: 'FILL' | 'FIT' | 'CARD'; cropPolicy: string };
   hook: NormalizedRect & { enabled: boolean; maxWidth: number; maxLines: 2 | 3;
@@ -21,6 +22,8 @@ export type ResolvedVisualLayout = {
   /** Canonical crop samples used by browser preview; export recomputes the same
    * pure camera from the same analysis and validates it before rendering. */
   cameraPath?: Array<{ t: number; x: number; y: number; w: number; h: number }>;
+  frameSegments?: Array<{ startSec: number; endSec: number; layout: 'FILL' | 'FIT' | 'INFORMATION_FIT' }>;
+  informationCrop?: { x: number; y: number; w: number; h: number } | null;
   overlays: { logo: NormalizedRect };
 };
 
@@ -62,6 +65,20 @@ export function resolveVisualLayout(resolved: ResolvedCreativeStyle, evidence?: 
   const framing = spec<FramingSpec>(resolved, 'FRAMING');
   const hookStyle = spec<HookSpec>(resolved, 'HOOK');
   const captionStyle = spec<CaptionSpec>(resolved, 'CAPTIONS');
+  if (resolved.templateId === STYLE_TWO_ID) {
+    const hook = normalized(TWO.hook), captions = normalized(TWO.captions);
+    return { version: 1, editingProfile: STYLE_TWO_ID,
+      canvas: { width: 1080, height: 1920, aspect: '9:16' },
+      videoFrame: { ...normalized(TWO.media), mode: 'CARD', cropPolicy: framing?.reframePolicy ?? 'AUTO' },
+      hook: { ...hook, enabled: hookStyle?.none !== true, maxWidth: hook.width, maxLines: 3,
+        fontSize: TWO.hookSize, lineHeight: TWO.hookLineHeight, safeRegion: 'TOP' },
+      captions: { ...captions, maxWidth: captions.width, maxLines: 2, fontSize: TWO.captionSize,
+        lineHeight: TWO.captionLineHeight, baseline: captions.y + captions.height / 2,
+        activeWordScale: 1, safeRegion: 'LOWER_THIRD' },
+      background: { type: 'SOLID', color: TWO.background, blur: 0 },
+      safeAreas: { top: 0.035, bottom: 0.055, left: 36 / 1080, right: 36 / 1080 },
+      overlays: { logo: { x: .78, y: .055, width: .16, height: .09 } } };
+  }
   const sourceLandscape = (evidence?.sourceWidth ?? 16) / Math.max(1, evidence?.sourceHeight ?? 9) > 1.15;
   const backgroundKind = background?.fitBackground ?? 'BLUR';
   const street = background?.composition === 'STREET_EDITORIAL';

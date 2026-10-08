@@ -1,6 +1,6 @@
 'use client';
 
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from 'react';
 import { Pause, Play, RotateCw } from 'lucide-react';
 import type { EditAspectRatio, EditAsset, EditElement,
   VisualElementProperties } from '@/lib/edit-mode-types';
@@ -99,7 +99,10 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   resolvedVisualLayout?: { editingProfile?: string; videoFrame?: {
     x: number; y: number; width: number; height: number; mode: string };
     hook?: FitRegion; supportingText?: FitRegion;
-    cameraPath?: Array<{ t: number; x: number; y: number; w: number; h: number }> };
+    background?: { color: string };
+    cameraPath?: Array<{ t: number; x: number; y: number; w: number; h: number }>;
+    frameSegments?: Array<{ startSec: number; endSec: number; layout: 'FILL' | 'FIT' | 'INFORMATION_FIT' }>;
+    informationCrop?: { x: number; y: number; w: number; h: number } | null };
   elements: EditElement[]; selectedElementId: string | null; currentPlayheadSec: number;
   onPlayheadChange: (seconds: number) => void; onSelect: (id: string) => void;
   onPreviewElements: (elements: EditElement[]) => void;
@@ -133,7 +136,10 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   const focusRegion = cardFrame && cardFrame.height < 0.7
     ? { top: Math.max(0, Math.min(cardFrame.y - 0.09, ...overlayBands.map((band) => band.y - 0.015))),
       bottom: Math.min(1, Math.max(cardFrame.y + cardFrame.height + 0.03, ...overlayBands.map((band) => band.y + band.h + 0.015))) } : null;
-  const [viewMode, setViewMode] = useState<'FIT' | 'FOCUS'>('FOCUS');
+  const [viewMode, setViewMode] = useState<'FIT' | 'FOCUS'>(resolvedVisualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO' ? 'FIT' : 'FOCUS');
+  useEffect(() => {
+    if (resolvedVisualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO') setViewMode('FIT');
+  }, [resolvedVisualLayout?.editingProfile]);
   const focusing = !cropEditor && viewMode === 'FOCUS' && !!focusRegion && compositionCanvasSize.height > 0;
   const viewScale = focusing && focusRegion ? Math.max(1, Math.min(
     frameSize.height / ((focusRegion.bottom - focusRegion.top) * compositionCanvasSize.height),
@@ -163,7 +169,8 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   // for normal playback, but crop must expose the canonical source pixels.
   const cropSourceAsset = cropEditor?.sourceAssetId
     ? assets.find((asset) => asset.id === cropEditor.sourceAssetId) : source;
-  const automatic2 = resolvedVisualLayout?.editingProfile === 'AUTOMATIC_2';
+  const styleTwo = resolvedVisualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO';
+  const automatic2 = resolvedVisualLayout?.editingProfile === 'AUTOMATIC_2' || styleTwo;
   // Automatic 2's persisted camera path addresses original-source pixels. A
   // flattened generated proxy already contains another crop and cannot be used
   // without double-framing it.
@@ -223,7 +230,15 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   // is not washed out by a grade that in the export is applied to the footage
   // before anything is composited onto it.
   const segmentColor = readColorAdjustments(mapping?.element.properties ?? {});
-  const colorStyle = colorPreviewStyle(segmentColor);
+  const colorCastId = `styletwo-color-${useId().replace(/:/g, '')}`;
+  const styleTwoCast = styleTwo && (segmentColor.temperature !== 0 || segmentColor.tint !== 0);
+  // The inherited preview hue rotation changes every source hue, while export
+  // uses per-channel gains. Match that cast only for StyleTwo; legacy previews
+  // retain their existing color behavior.
+  const baseColorStyle = colorPreviewStyle(styleTwoCast
+    ? { ...segmentColor, temperature: 0, tint: 0 } : segmentColor);
+  const colorStyle = styleTwoCast ? { ...baseColorStyle,
+    filter: `${baseColorStyle.filter ?? ''} url(#${colorCastId})`.trim() } : baseColorStyle;
   const colorLayers = colorOverlayLayers(segmentColor);
   if (!source) return <section className='grid min-h-[360px] place-items-center rounded-2xl border border-dashed border-border bg-black/20 text-center'><div><p className='text-sm font-semibold text-soft'>No source attached</p><p className='mt-2 text-xs text-faint'>Choose one exact video from the media panel.</p></div></section>;
   const timeUpdate = (media: HTMLVideoElement) => {
@@ -321,7 +336,10 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   const cameraPath = resolvedVisualLayout?.cameraPath ?? [];
   // FIT framing inside a card window (Quick Reframe StyleOne): the whole camera region is fitted inside
   // the window with black bars, exactly like the renderer's scale+pad. It is never stretched to fill.
-  const cardFit = !!card && mapping?.element.properties.frameLayout === 'FIT';
+  const styleTwoFrame = styleTwo ? resolvedVisualLayout?.frameSegments?.find(segment =>
+    currentPlayheadSec >= segment.startSec && currentPlayheadSec < segment.endSec)?.layout : undefined;
+  const cardFit = !!card && (mapping?.element.properties.frameLayout === 'FIT' || (styleTwo &&
+    (styleTwoFrame === 'FIT' || styleTwoFrame === 'INFORMATION_FIT' || reframePolicy === 'SOURCE')));
   const pictureRect = (region: { w: number; h: number } | null) => {
     if (!card || !cardFit || !canvasSize.width || !canvasSize.height) return card;
     const sw = (mediaAsset?.width || source?.width || 16) * (region?.w ?? 1), sh = (mediaAsset?.height || source?.height || 9) * (region?.h ?? 1);
@@ -340,6 +358,8 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     return size === null ? element : { ...element, properties: { ...element.properties, fontSize: size } };
   };
   const cameraCrop = (() => {
+    if (styleTwo && cardFit) return styleTwoFrame === 'INFORMATION_FIT' && resolvedVisualLayout?.informationCrop
+      ? resolvedVisualLayout.informationCrop : { x: 0, y: 0, w: 1, h: 1 };
     if (!cameraPath.length) return null;
     const after = cameraPath.findIndex((key) => key.t >= currentPlayheadSec);
     if (after <= 0) return cameraPath[Math.max(0, after)];
@@ -356,6 +376,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     currentPlayheadSec >= element.startTime &&
     currentPlayheadSec <= element.startTime + element.duration);
   const zoomState = (() => {
+    if (styleTwo && cardFit) return { scale: 1, x: .5, y: .5 };
     if (!zoom) return { scale: 1, x: .5, y: .5 };
     const local = currentPlayheadSec - zoom.startTime;
     const duration = zoom.duration;
@@ -376,7 +397,8 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     ? `scale(${zoomState.scale.toFixed(5)})` : '', segmentTransform.transform ?? '']
     .filter(Boolean).join(' ') || undefined;
   // A card layout (StyleOne) is a black canvas: a fitted picture inside its window has black bars.
-  const backdrop = card || fitBackground === 'BLACK' ? '#000000' : fitBackground === 'WHITE' ? '#ffffff' : '#262b36';
+  const cardColor = styleTwo ? resolvedVisualLayout?.background?.color ?? '#FFFFFF' : '#000000';
+  const backdrop = card ? cardColor : fitBackground === 'BLACK' ? '#000000' : fitBackground === 'WHITE' ? '#ffffff' : '#262b36';
   // No backdrop is visible when the fitted picture already has the canvas's shape.
   const fillsCanvas = !!canvasSize.width && !!canvasSize.height && Math.abs(
     (mediaAsset?.width || source?.width || 0) / Math.max(1, mediaAsset?.height || source?.height || 1) - canvasSize.width / canvasSize.height) < 0.01;
@@ -384,6 +406,15 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     fitBackground !== 'WHITE' && fitBackground !== 'BLACK';
 
   return <section className='flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-black/40 max-md:rounded-none max-md:border-0'>
+    {styleTwoCast && <svg aria-hidden width='0' height='0' className='absolute pointer-events-none'>
+      <defs><filter id={colorCastId} colorInterpolationFilters='sRGB'>
+        <feComponentTransfer>
+          <feFuncR type='linear' slope={Math.max(0, 1 + segmentColor.temperature * .3 + segmentColor.tint * .15)} />
+          <feFuncG type='linear' slope={Math.max(0, 1 - segmentColor.tint * .3)} />
+          <feFuncB type='linear' slope={Math.max(0, 1 - segmentColor.temperature * .3 + segmentColor.tint * .15)} />
+        </feComponentTransfer>
+      </filter></defs>
+    </svg>}
     <div className='flex min-h-0 w-full flex-1 bg-[radial-gradient(ellipse_at_center,#1a2030_0%,#0d1018_70%)] p-3 max-md:p-1.5'
       data-testid='edit-preview-stage'>
     <div ref={frame} className='relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden'>
@@ -394,7 +425,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
         approximation of it. */}
     <div ref={canvas} style={{ width: `${canvasSize.width}px`, height: `${canvasSize.height}px`, flexShrink: 0,
       ...(focusShiftY ? { transform: `translateY(${focusShiftY}px)` } : {}),
-      background: manualCropBackground ? '#000000' : fitted ? backdrop : '#000000' }}
+      background: styleTwo && !cropEditor ? cardColor : manualCropBackground ? '#000000' : fitted ? backdrop : '#000000' }}
     className={`relative overflow-hidden ${cropEditor ? '' : 'rounded-[3px] shadow-[0_0_0_1px_rgba(255,255,255,.16),0_18px_48px_rgba(0,0,0,.55)]'}`}
     data-testid='edit-preview-canvas' data-canvas-width={canvasSize.width} data-view-mode={focusing ? 'FOCUS' : 'FIT'}
     data-fit-background={manualCropBackground ? 'BLACK' : fitted ? (fitBackground ?? 'BLUR') : 'NONE'}>
@@ -403,6 +434,8 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
       {/* The transform of the segment under the playhead. Crop, flip, rotation,
           scale and position are drawn here in the same order the renderer
           applies them, so what is framed is what is exported. */}
+      {styleTwo && card && <span aria-hidden className='pointer-events-none absolute bg-black'
+        style={{ left: `${card.x * 100}%`, top: `${card.y * 100}%`, width: `${card.width * 100}%`, height: `${card.height * 100}%` }} />}
       <video key={`${mediaAsset?.id}-${mediaAttempt}`} ref={video}
         src={mediaAsset ? `${editAssetPlaybackUrl(mediaAsset.id)}${mediaAttempt ? `?retry=${mediaAttempt}` : ''}` : undefined}
         poster={source.sourceVideoId ? editSourcePosterUrl(source.sourceVideoId) : undefined}
@@ -442,9 +475,9 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
         onTimeUpdate={(event) => timeUpdate(event.currentTarget)} />
       {card && <>
         <span aria-hidden className='pointer-events-none absolute left-0 top-0 w-full bg-black'
-          style={{ height: `${card.y * 100}%` }} />
+          style={{ height: `${card.y * 100}%`, background: cardColor }} />
         <span aria-hidden className='pointer-events-none absolute bottom-0 left-0 w-full bg-black'
-          style={{ height: `${(1 - card.y - card.height) * 100}%` }} />
+          style={{ height: `${(1 - card.y - card.height) * 100}%`, background: cardColor }} />
         {card.x > 0 && <span aria-hidden className='pointer-events-none absolute bg-black'
           style={{ left: 0, top: `${card.y * 100}%`, width: `${card.x * 100}%`,
             height: `${card.height * 100}%` }} />}
@@ -499,7 +532,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
             ? <img src={asset ? editAssetPlaybackUrl(asset.id) : ''}
               alt={asset?.originalName ?? 'Overlay'} draggable={false}
               className='pointer-events-none h-full w-full object-contain' />
-            : <EditPreviewText element={fittedText(element)} canvasWidth={canvasSize.width}
+            : <EditPreviewText element={fittedText(element)} canvasWidth={canvasSize.width} styleTwo={styleTwo}
               offsetSec={currentPlayheadSec - element.startTime} />}
 
           {selected && <>

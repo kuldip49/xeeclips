@@ -209,7 +209,7 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
     const frameX = Math.round(layoutFrame.x * width);
     const frameY = Math.round(layoutFrame.y * height);
     const background = plan.canvas.visualLayout?.background.color ?? '#000000';
-    const cropBackdrop = manualCropExpression
+    const cropBackdrop = manualCropExpression && plan.canvas.visualLayout?.editingProfile !== 'AUTOMATIC_3_STYLE_TWO'
       ? `,drawbox=x=0:y=0:w=iw:h=ih:color=black@1:t=fill:enable='${manualCropExpression}'`
       : '';
     graph.push(`color=c=${background}:s=${width}x${height}:r=${fps}` +

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { applyStyleOne, chooseManual, confirmCrop, defaultStep, editorUrl, isProcessing, mediaUrl, preparePlayback, quickReframeUrl, reframeRequest, revertCrop, savePlan,
+import { applyQuickStyle, chooseManual, confirmCrop, defaultStep, editorUrl, isProcessing, mediaUrl, preparePlayback, quickReframeUrl, quickStyleOf, reframeRequest, revertCrop, savePlan,
   uploadReframe, type ReframePlan, type ReframeSession, type ReframeStep } from '@/lib/quick-reframe-api';
 import { cropIssue } from '@/lib/quick-reframe-crop';
 import { StepIndicator } from './step-indicator';
@@ -138,8 +138,8 @@ export function QuickReframeWorkspace() {
   });
   const choose = (choice: ChooseAction) => action(async () => {
     if (!session) return;
-    if (choice.kind === 'STYLEONE') { const next = await applyStyleOne(session); accept(next);
-      // The first StyleOne checks speech and captions first; the step opens when that job hands over.
+    if (choice.kind === 'STYLEONE' || choice.kind === 'STYLETWO') { const next = await applyQuickStyle(session, choice.kind); accept(next);
+      // The first style checks speech and captions first; the step opens when that job hands over.
       if (next.status === 'ANALYZE') afterJob.current = 'edit'; else setStep('edit', next.id); return; }
     const next = await chooseManual(session, choice.removeStyleOne); accept(next); router.push(editorUrl(next, 'hooks'));
   });
@@ -158,7 +158,7 @@ export function QuickReframeWorkspace() {
     <header className='flex flex-wrap items-start justify-between gap-4'>
       <div><p className='eyebrow'>Crop first. Then style.</p>
         <h1 className='mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl'>Quick Reframe AI</h1>
-        {!hasSource && <p className='mt-3 max-w-xl text-sm text-muted-foreground'>Crop your video, then let StyleOne finish it or edit it yourself. One video, full length, original sound. Up to 3 minutes.</p>}</div>
+        {!hasSource && <p className='mt-3 max-w-xl text-sm text-muted-foreground'>Crop your video, then let StyleOne or StyleTwo finish it, or edit it yourself. One video, full length, original sound. Up to 3 minutes.</p>}</div>
       {session && <Button type='button' variant='secondary' disabled={busy || processing} onClick={reset}>New video</Button>}
     </header>
     {hasSource && <StepIndicator active={step} reachable={reachable} onSelect={goTo} />}
@@ -180,7 +180,7 @@ export function QuickReframeWorkspace() {
     </section>}
     {uploading && <div role='status' className='grid gap-3 rounded-xl border border-border p-4'><span className='text-sm'>Uploading video · {uploadPercent}%</span>
       <progress className='w-full accent-primary' max={100} value={uploadPercent} /><Button type='button' variant='secondary' className='justify-self-start' onClick={() => abort.current?.abort()}>Cancel upload</Button></div>}
-    {processing && session && !(step === 'edit' && session.editPath === 'STYLEONE') && !(step === 'export' && ['PREVIEW', 'EXPORT'].includes(session.status)) &&
+    {processing && session && !(step === 'edit' && !!quickStyleOf(session)) && !(step === 'export' && ['PREVIEW', 'EXPORT'].includes(session.status)) &&
       <div role='status' aria-live='polite' className='grid gap-3 rounded-xl border border-border bg-surface p-4'>
         <p className='flex items-center gap-2 text-sm'><Loader2 size={18} className='animate-spin text-primary-soft' />{session.message}</p>
         <progress className='w-full accent-primary' value={session.progress || 0} max={100} />
@@ -193,7 +193,7 @@ export function QuickReframeWorkspace() {
       : <div className='grid gap-3 rounded-xl border border-border bg-surface p-4'><p className='text-sm text-muted-foreground'>Your video needs to be prepared for cropping.</p>
         <Button type='button' className='justify-self-start' disabled={busy} onClick={() => void action(() => playback(session))}>Prepare video</Button></div>)}
     {session && step === 'choose' && session.cropConfirmed && !processing && <ChooseStep session={session} busy={busy} onChoose={(c) => void choose(c)} onBack={() => goTo('crop')} />}
-    {session && step === 'edit' && session.editPath === 'STYLEONE' && <StyleOneStep session={session} onSession={accept} onError={setError} onStep={(s) => goTo(s)} />}
+    {session && step === 'edit' && !!quickStyleOf(session) && <StyleOneStep session={session} onSession={accept} onError={setError} onStep={(s) => goTo(s)} />}
     {session && step === 'export' && session.editPath && <ExportStep session={session} onSession={accept} onError={setError}
       onBack={() => session.editPath === 'MANUAL' ? router.push(editorUrl(session)) : goTo('edit')} />}
   </div>;

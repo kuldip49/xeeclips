@@ -10,9 +10,42 @@ export type BoundaryOptions = { preRoll?: number; extension?: number; minDuratio
   maxDuration?: number; sourceDuration?: number };
 const terminal = (s: string) => /[.!?।॥]["'’”\])]*$/u.test(s.trim()) && !/\.{3}$/u.test(s.trim());
 const dangling = (s: string) => /(?:\b(?:and|but|because|which|that|if|when|to|the|a|an|such as|for example|first|second|third)|और|लेकिन|क्योंकि|अगर|तो)[,;:]?\s*$/iu.test(s.replace(/[.!?।]+$/u, ''));
-const dependent = (s: string) => /^(?:(?:and|but|because|so|then|that|this|it|they|he|she|which|that's why)\b|(?:और|लेकिन|क्योंकि|इसलिए|वह|ये|तो)(?:\s|[,।]))/iu.test(s.trim());
+// "So imagine you got...", "So let's look..." open a NEW thought; only a "so" that draws a consequence depends on
+// what was said before it.
+const topicOpener = (s: string) => /^so,?\s+(?:imagine|picture|suppose|consider|let['’]?s|let us|look|listen|think about|say)\b/iu.test(s.trim());
+const dependent = (s: string) => !topicOpener(s) && /^(?:(?:and|but|because|so|then|that|this|it|they|he|she|which|that's why)\b|(?:और|लेकिन|क्योंकि|इसलिए|वह|ये|तो)(?:\s|[,।]))/iu.test(s.trim());
 const continuation = (s: string) => /^(?:and|but|then|so|because|therefore|which means|in other words|as a result|second|third|finally|the answer|the punchline|that's why|और|लेकिन|क्योंकि|इसलिए|मतलब|आखिर)[\s,:]/iu.test(s.trim());
 const unresolved = (s: string) => /(?:here(?:'s| is) (?:why|how)|let me explain|for (?:two|three|four) reasons|the punchline is|asked (?:me )?(?:why|how)|there are \w+ (?:steps|reasons)|पहला कारण)[.!?।]?$/iu.test(s.trim());
+
+// A verbless noun/prepositional fragment ("A year through their labor, right?") is an appositive of the sentence
+// spoken just before it. Closed-class heads and the common verb forms are enough to recognise one; no tagger needed.
+const FRAGMENT_HEAD = /^(?:a|an|the|one|two|three|four|five|six|seven|eight|nine|ten|each|every|another|per|of|in|on|at|for|with|through|by|from|over|under|about|around|across|during|within|without|into|onto|upon|including|plus|as)$/iu;
+const CLAUSE_WORD = /^(?:is|are|was|were|am|be|been|being|has|have|had|do|does|did|will|would|can|could|should|shall|may|might|must|get|gets|got|go|goes|went|say|says|said|think|thinks|know|knows|mean|means|want|wants|need|needs|make|makes|made|take|takes|took|see|sees|saw|let|lets|let's|i|you|we|he|she|they|it)$|['’](?:s|re|m|ve|ll|d)$|n['’]t$/iu;
+const TAG = new Set(['right', 'okay', 'ok', 'yeah', 'huh', 'correct', 'no']);
+const bare = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}'’]/gu, '');
+
+/**
+ * Does the sentence opening at `index` only make sense as the tail of the sentence just before it?
+ * Evidence (all from the transcript): the same voice (or no speaker labels), a breath-length gap to the previous
+ * sentence (<0.5 s; <1.2 s after a question), and an opening that is a short verbless fragment. Without the earlier
+ * words a cold viewer hears a dangling phrase. Shared by the boundary repair and the editorial opening planner.
+ */
+export function opensAsContinuation(words: Array<{ start: number; end: number; text: string; speaker?: string | null }>, index: number): boolean {
+  if (index <= 0 || index >= words.length) return false;
+  const previous = words[index - 1], open = words[index];
+  if (previous.speaker && open.speaker && previous.speaker !== open.speaker) return false;
+  const gap = open.start - previous.end;
+  const afterQuestion = /\?["'’”\])]*$/u.test(previous.text.trim());
+  if (gap < 0 || gap >= (afterQuestion ? 1.2 : .5)) return false;
+  const sentence: string[] = [];
+  for (let i = index; i < words.length && sentence.length < 12; i++) {
+    sentence.push(bare(words[i].text));
+    if (terminal(words[i].text)) break;
+  }
+  while (sentence.length && TAG.has(sentence[sentence.length - 1])) sentence.pop();
+  if (!sentence.length || sentence.length > 6) return false;
+  return FRAGMENT_HEAD.test(sentence[0]) && !sentence.some(token => CLAUSE_WORD.test(token));
+}
 
 /** Preserve actual word timing and speaker turns. Segment punctuation may close an otherwise unpunctuated final word. */
 export function transcriptBoundaryWords(segments: Array<{ start?: number; end?: number; text?: string; speaker?: string | null; words?: unknown }>): BoundaryWord[] {
@@ -72,7 +105,23 @@ export class ClipBoundaryService {
       const previous = [...starts].reverse().find(i => i < startIndex && candidate.startTime - words[i].start <= before);
       if (previous !== undefined) startIndex = previous;
     }
-    const startTime = Math.max(0, words[startIndex].start - .08);
+    // A fragment that continues the preceding sentence needs that sentence: use the same bounded pre-roll, one
+    // sentence at a time and only as far as needed. Each hop reaches back at most `before` seconds from the opening
+    // it repairs (the dependent-start step above may already have moved the opening off the raw candidate start),
+    // and the whole repair never reaches back more than two pre-rolls. When the setup is out of reach, the
+    // fragment is dropped instead.
+    for (let hops = 0; hops < 2 && opensAsContinuation(words, startIndex); hops++) {
+      const previous = [...starts].reverse().find(i => i < startIndex &&
+        words[startIndex].start - words[i].start <= before && candidate.startTime - words[i].start <= before * 2);
+      if (previous !== undefined) { startIndex = previous; reasons.push('CONTEXT_PREROLL_CONTINUATION'); continue; }
+      const forward = starts.find(i => i > startIndex && words[i].start < candidate.endTime - min);
+      if (forward !== undefined) { startIndex = forward; reasons.push('CONTINUATION_FRAGMENT_DROPPED'); }
+      break;
+    }
+    // 80 ms of room before the first word, but never inside the previous word: back-to-back words would
+    // otherwise make the previous sentence's last word the first thing the editor and QA see.
+    const previousEnd = startIndex > 0 ? words[startIndex - 1].end : 0;
+    const startTime = Math.max(0, Math.min(words[startIndex].start, Math.max(previousEnd, words[startIndex].start - .08)));
     const endLimit = Math.min(sourceEnd, candidate.endTime + after, startTime + max);
     const textTo = (i: number) => words.slice(startIndex, i + 1).map(w => w.text.trim()).join(' ');
     const questionResolved = (i:number) => {
@@ -111,7 +160,7 @@ export class ClipBoundaryService {
     const text = textTo(endIndex);
     const startComplete = starts.includes(startIndex);
     const endComplete = naturalAfter(endIndex) && last.end <= endLimit + .001;
-    const context = startComplete && !dependent(text);
+    const context = startComplete && !dependent(text) && !opensAsContinuation(words, startIndex);
     const thought = endComplete && thoughtResolved(endIndex);
     if (!startComplete || !context) reasons.push('UNRESOLVED_START_CONTEXT');
     if (!endComplete) reasons.push('UNFINISHED_SENTENCE');
@@ -129,7 +178,10 @@ export class ClipBoundaryService {
     const sameStart = !first || repaired.startTime >= range.startTime - .15 && repaired.startTime <= first.start + .001;
     const sameEnd = !last || repaired.endTime <= range.endTime + .001 && repaired.endTime >= last.end - .001;
     return { ...repaired, valid: repaired.valid && sameStart && sameEnd,
+      // Context is only sufficient for the range actually being validated: when the repair had to start earlier
+      // than this range does, this range lacks the setup the repair found.
       qa: { ...repaired.qa, START_COMPLETE: repaired.qa.START_COMPLETE && sameStart,
+        CONTEXT_SUFFICIENT: repaired.qa.CONTEXT_SUFFICIENT && sameStart,
         END_COMPLETE: repaired.qa.END_COMPLETE && sameEnd } };
   }
 }

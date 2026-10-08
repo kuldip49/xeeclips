@@ -14,7 +14,8 @@
 
 import type { AssistantBundleCommand } from '../edit-mode.service';
 import type { ChatContext, ChatElementView } from '../chat/edit-chat-context';
-import { MAX_ZOOM_SCALE, MIN_ZOOM_SCALE } from '../edit-mode-zoom-events';
+import { MAX_ZOOM_SCALE, MIN_ZOOM_SCALE, PHRASE_ZOOM_MAX_DURATION_SEC,
+  PHRASE_ZOOM_MIN_DURATION_SEC } from '../edit-mode-zoom-events';
 import { BOUNDARY_ANCHORS, resolveSemanticBoundary, type BoundaryAnchor } from './edit-agent-boundary';
 
 /** Automatic 2 zooms only on clearly emphasised moments (semantic+energy score). */
@@ -758,7 +759,7 @@ const TOOLS: AgentTool[] = [
         // Phrase-timed moves occupy 2.5-5s themselves. Spacing is measured
         // between envelopes, not merely between trigger words.
         if (chosen.every((other) => Math.abs(other.at - item.at) >=
-          spacing + (phraseTimed ? 2.5 : 0))) chosen.push(item);
+          spacing + (phraseTimed ? PHRASE_ZOOM_MIN_DURATION_SEC : 0))) chosen.push(item);
       }
       chosen.sort((left, right) => left.at - right.at);
       const clear = automatic2 && ctx.elements.some((view) => view.type === 'EFFECT')
@@ -770,7 +771,8 @@ const TOOLS: AgentTool[] = [
       }
       return { commands: [...clear, ...chosen.map((item) => {
         const moveDuration = phraseTimed
-          ? clamp(Math.max(0, item.endAt - item.at) + .7, 2.5, 5) : 1.4;
+          ? clamp(Math.max(0, item.endAt - item.at) + .7, PHRASE_ZOOM_MIN_DURATION_SEC,
+            PHRASE_ZOOM_MAX_DURATION_SEC) : 1.4;
         const startTime = phraseTimed
           ? clamp(item.at - .25, 0, Math.max(0, duration - moveDuration)) : item.at;
         return el('ELEMENT', 'ADD_ZOOM', { startTime: round(startTime),

@@ -37,8 +37,15 @@ export const analyzeReframe=(id:string)=>reframeRequest(`/${id}/analyze`,'POST')
 export const savePlan=(s:ReframeSession,plan:ReframePlan)=>reframeRequest(`/${s.id}/plan`,'PUT',{revision:s.revision,plan});
 export const confirmCrop=(s:ReframeSession)=>reframeRequest(`/${s.id}/confirm-crop`,'POST',{revision:s.revision});
 export const revertCrop=(s:ReframeSession)=>reframeRequest(`/${s.id}/revert-crop`,'POST');
-export const applyStyleOne=(s:ReframeSession,options:{hookText?:string;captions?:'GENERATE'|'KEEP'|'OFF'}={})=>reframeRequest(`/${s.id}/styleone`,'POST',{revision:s.revision,...options});
-export const chooseManual=(s:ReframeSession,removeStyleOne=false)=>reframeRequest(`/${s.id}/path`,'POST',{revision:s.revision,path:'MANUAL',removeStyleOne});
+/** The automatic looks Quick Reframe can apply to a confirmed crop; Manual is the full editor. */
+export type QuickStyleKey='STYLEONE'|'STYLETWO';
+export const QUICK_STYLE_LABEL:Record<QuickStyleKey|'MANUAL',string>={STYLEONE:'StyleOne',STYLETWO:'StyleTwo',MANUAL:'Manual'};
+export const quickStyleOf=(s:Pick<ReframeSession,'editPath'>|null|undefined):QuickStyleKey|null=>s?.editPath==='STYLEONE'||s?.editPath==='STYLETWO'?s.editPath:null;
+type StyleOptions={hookText?:string;captions?:'GENERATE'|'KEEP'|'OFF'};
+export const applyQuickStyle=(s:ReframeSession,style:QuickStyleKey,options:StyleOptions={})=>reframeRequest(`/${s.id}/${style==='STYLETWO'?'styletwo':'styleone'}`,'POST',{revision:s.revision,...options});
+export const applyStyleOne=(s:ReframeSession,options:StyleOptions={})=>applyQuickStyle(s,'STYLEONE',options);
+export const applyStyleTwo=(s:ReframeSession,options:StyleOptions={})=>applyQuickStyle(s,'STYLETWO',options);
+export const chooseManual=(s:ReframeSession,removeStyle=false)=>reframeRequest(`/${s.id}/path`,'POST',{revision:s.revision,path:'MANUAL',removeStyle,removeStyleOne:removeStyle});
 /** `exclude` (Regenerate): hooks already shown, which are never suggested again. */
 export const requestHooks=(id:string,externalAiAuthorized:boolean,exclude:string[]=[],options:{direction?:string;category?:ReframeHookCategory}={})=>reframeRequest<{session:ReframeSession;warnings:string[]}>(`/${id}/hooks`,'POST',{externalAiAuthorized,exclude,...options});
 export const generatePostCopy=(s:ReframeSession,options:{externalAiAuthorized:boolean;rewrite?:string;editingDirection?:string;purpose?:string;hashtagsOnly?:boolean})=>reframeRequest<{session:ReframeSession;warnings:string[]}>(`/${s.id}/post-copy`,'POST',{revision:s.revision,version:s.postCopy?.version??0,...options});

@@ -20,6 +20,8 @@ function installBridgeHarness() {
   const originalCreate = prisma.editProject.create;
   const originalFindUnique = prisma.editProject.findUnique;
   const objects = new Map();
+  // Materialization resolves the original project's owner inside its transaction.
+  prisma.project = { findUniqueOrThrow: async () => ({ userId: 'test-user' }) };
 
   prisma.editProject.create = async ({ data }) => {
     if (!data.generatedClipId) return originalCreate({ data });
@@ -163,8 +165,18 @@ async function main() {
     endTime: 112, duration: 12, transcriptSegments: reconstructed.video.transcript.segments,
     editPlan: reconstructed.editPlan,
     editTelemetry: { ...reconstructed.editTelemetry, visualAnalysis } });
+  const styleTwo = h.seedClip({ id: 'styletwo-clip', processingType: 'EDITED_CLIPS',
+    templateId: 'AUTOMATIC_3_STYLE_TWO', variantKey: 'EDITED_CLIPS:AUTOMATIC_3_STYLE_TWO', startTime: 100,
+    endTime: 112, duration: 12, transcriptSegments: reconstructed.video.transcript.segments,
+    editPlan: reconstructed.editPlan,
+    editTelemetry: { ...reconstructed.editTelemetry, visualAnalysis } });
+  const styleTwoFallback = h.seedClip({ id: 'styletwo-fallback', processingType: 'EDITED_CLIPS',
+    templateId: 'AUTOMATIC_3_STYLE_TWO', variantKey: 'EDITED_CLIPS:AUTOMATIC_3_STYLE_TWO' });
   const frozenCounts = { jobs: h.rows.processingJobs.size,
     candidates: h.rows.clipCandidates.size, clips: h.rows.generatedClips.size };
+  await assert.rejects(h.materializer.materialize(styleTwoFallback.id), error =>
+    error.getResponse().code === 'STYLE_TWO_CANONICAL_SOURCE_REQUIRED',
+    'StyleTwo must not double-crop a flattened temporary preview');
 
   const normalResult = await h.materializer.materialize(normal.id);
   const repeated = await h.materializer.materialize(normal.id);
@@ -199,6 +211,13 @@ async function main() {
     JSON.stringify(automatic2Project.settings.origin.reconstructionFallback));
   assert.deepEqual(automatic2Project.assets.find((asset) => asset.role === 'SOURCE').analysis,
     visualAnalysis, 'Automatic 2 must retain source face tracks for the final camera');
+  const styleTwoResult = await h.materializer.materialize(styleTwo.id);
+  const styleTwoProject = await h.service.get(styleTwoResult.editProjectId);
+  assert.equal(styleTwoProject.settings.origin.templateId, 'AUTOMATIC_3_STYLE_TWO');
+  assert.deepEqual(styleTwoProject.assets.find(asset => asset.role === 'SOURCE').analysis,
+    visualAnalysis, 'StyleTwo must retain source face tracks for the shared camera');
+  assert.equal((await h.materializer.materialize(styleTwo.id)).editProjectId, styleTwoProject.id,
+    'StyleTwo reopens the same canonical project');
   await assert.rejects(() => h.service.adjustSourceRange(reconstructedProject.id, {
     revision: reconstructedProject.revision, startDelta: -1
   }), (error) => error?.response?.code === 'COMPLEX_SOURCE_RANGE_UNSUPPORTED',

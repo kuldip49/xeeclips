@@ -301,7 +301,7 @@ export function stylePreviewModel(resolved: ResolvedCreativeStyle | null,
   const audioSpec = spec(resolved, 'AUDIO');
   const badges: string[] = [];
   if (resolved) {
-    badges.push(zoomCount > 0 ? `Zoom: up to ${zoomCount} × ${Math.round(((numeric(zoomSpec.scale) ?? 1) - 1) * 100)}%`
+    badges.push(resolved.templateId === 'AUTOMATIC_3_STYLE_TWO' ? 'Automatic zoom timing preserved' : zoomCount > 0 ? `Zoom: up to ${zoomCount} × ${Math.round(((numeric(zoomSpec.scale) ?? 1) - 1) * 100)}%`
       : 'Zoom: none');
     badges.push(`Framing: ${resolved.components.FRAMING?.name ?? 'Auto'}`);
     if (audioSpec.muteMusic === true) badges.push('Audio: voice only');
@@ -315,7 +315,7 @@ export function stylePreviewModel(resolved: ResolvedCreativeStyle | null,
 
   return {
     layout: exact ? (exact.videoFrame.mode === 'FIT' ? 'FIT' : 'FILL') : layout,
-    fitBackground: exact?.background.color === '#ffffff' ? 'WHITE'
+    fitBackground: exact?.background.color.toLowerCase() === '#ffffff' ? 'WHITE'
       : exact?.background.type === 'SOLID' ? 'BLACK' : fit === 'WHITE' ? 'WHITE' : fit === 'BLACK' ? 'BLACK' : 'BLUR',
     videoScale: exact?.videoFrame.width ?? (layout === 'FIT' ? Math.min(1, numeric(background.videoScale) ?? 1) : 1),
     // A still cannot show a tracked camera; face/information policies are

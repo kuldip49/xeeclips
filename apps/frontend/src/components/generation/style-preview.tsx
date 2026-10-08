@@ -5,6 +5,8 @@ import { ImageOff } from 'lucide-react';
 import { hookEmphasisRuns, stylePreviewModel, type PreviewText, type ResolvedCreativeStyle,
   type ResolvedVisualLayout } from '@/lib/creative-generation';
 import { textStyleCss } from '@/lib/edit-mode-text';
+import { StyleTwoPreviewText } from '@/components/edit-mode/style-two-preview-text';
+import { STYLE_TWO_ID } from '@ai-content-platform/shared/style-two.cjs';
 
 /** Largest preview width; design units (600-wide canvas) scale from the width actually drawn. */
 const MAX_WIDTH = 270;
@@ -15,13 +17,13 @@ const CORNERS: Record<string, string> = {
   BOTTOM_RIGHT: 'right-2 bottom-2', BOTTOM_LEFT: 'left-2 bottom-2'
 };
 
-function PreviewLine({ item, testId, width }: { item: PreviewText; testId: string; width: number }) {
+function PreviewLine({ item, testId, width, styleTwo }: { item: PreviewText; testId: string; width: number; styleTwo?: boolean }) {
   const css = textStyleCss(item.style as Record<string, unknown>, width);
   const words = item.text.split(' ');
   return <div data-testid={testId} className='absolute flex justify-center'
     style={{ left: `${item.box.x * 100}%`, top: `${item.box.y * 100}%`,
       width: `${item.box.width * 100}%`, height: `${item.box.height * 100}%`, overflow: 'hidden' }}>
-    <span style={{ ...css, display: '-webkit-box', WebkitBoxOrient: 'vertical',
+    {styleTwo ? <StyleTwoPreviewText element={{ properties: { ...item.box, ...item.style, content: item.text } }} /> : <span style={{ ...css, display: '-webkit-box', WebkitBoxOrient: 'vertical',
       WebkitLineClamp: item.maxLines, overflow: 'hidden' }}>
       {item.semanticColor?.length
         // Same rule as the backend's semanticHookRuns, so the preview lights the same words.
@@ -31,7 +33,7 @@ function PreviewLine({ item, testId, width }: { item: PreviewText; testId: strin
         ? words.map((word, index) => <span key={index}
           style={index === 1 ? { color: item.activeWordColor! } : undefined}>{word}{index < words.length - 1 ? ' ' : ''}</span>)
         : item.text}
-    </span>
+    </span>}
   </div>;
 }
 
@@ -97,8 +99,8 @@ export function StylePreview({ posterUrl, sourceUrl, resolved, layout, loading }
           {model.overlayLayers.map((layer) => <div key={layer.key} className='pointer-events-none absolute inset-0' style={layer.style} />)}
         </div>
       </div>
-      {model.hook ? <PreviewLine item={model.hook} testId='style-preview-hook' width={width} /> : null}
-      {model.captions ? <PreviewLine item={model.captions} testId='style-preview-captions' width={width} /> : null}
+      {model.hook ? <PreviewLine item={model.hook} testId='style-preview-hook' width={width} styleTwo={resolved?.templateId === STYLE_TWO_ID} /> : null}
+      {model.captions ? <PreviewLine item={model.captions} testId='style-preview-captions' width={width} styleTwo={resolved?.templateId === STYLE_TWO_ID} /> : null}
       {model.supportingText ? <PreviewLine item={model.supportingText} testId='style-preview-supporting' width={width} /> : null}
       {model.logoCorner && CORNERS[model.logoCorner]
         ? <span className={`absolute ${CORNERS[model.logoCorner]} rounded bg-white/80 px-1.5 py-0.5 text-[9px] font-bold text-slate-900`}>LOGO</span>

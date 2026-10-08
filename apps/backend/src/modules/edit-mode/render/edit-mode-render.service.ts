@@ -32,6 +32,7 @@ import { probeMedia } from '../../processing/media-probe';
 import { normalizeProbedSourceTrims } from './edit-mode-source-trim';
 import { StorageService } from '../../storage/storage.service';
 import { buildEditModeAss } from './edit-mode-ass';
+import { prepareStyleTwoFonts } from './style-two-fonts';
 import { buildFfmpegArgs } from './edit-mode-filtergraph';
 import { runEditModeQa } from './edit-mode-qa';
 import { buildRenderPlan, EditExportError, type PlanAsset,
@@ -334,8 +335,12 @@ export class EditModeRenderService {
       }
 
       outputPath = join(directory, `export-${attempt}.mp4`);
+      // Explicit manual emphasis/weight edits use native text rendering. Keep
+      // StyleTwo's licensed font fallback available on hosts without system fonts.
+      const fontsDir = plan.canvas.visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO'
+        ? await prepareStyleTwoFonts(directory) : undefined;
       const args = buildFfmpegArgs({ plan, sourcePath, overlayPaths, audioPaths, assFileName,
-        outputPath, informationCrop: built.evidence.informationCrop,
+        outputPath, fontsDir, informationCrop: built.evidence.informationCrop,
         fitExpression: built.evidence.fitExpression,
         informationFitExpression: built.evidence.informationFitExpression,
         cameraFilter: built.evidence.cameraFilter });

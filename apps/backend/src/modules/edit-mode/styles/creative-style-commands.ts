@@ -15,7 +15,10 @@ import type { AudioSpec, BackgroundSpec, CaptionSpec, ColorSpec, FramingSpec, Ho
 import type { ResolvedCreativeStyle } from './creative-style-resolver';
 import { layoutEvidenceFromContext, resolveVisualLayout } from './resolved-visual-layout';
 import { planCamera } from '../render/edit-mode-camera';
+import { phraseZoomLimits, planEditModeZoom } from '../render/edit-mode-zoom';
+import type { AnalysisFrame } from '../../editing/edit-analysis';
 import { remapAnalysisFrames, timelineShotBoundaries } from '../render/edit-mode-timeline-map';
+import { STYLE_TWO_ID } from '@ai-content-platform/shared/style-two.cjs';
 
 export type HookOption = { text: string; style?: string | null };
 export type CompiledStyle = { commands: AssistantBundleCommand[]; lines: string[]; skipped: string[] };
@@ -123,16 +126,26 @@ export function compileCreativeStyle(resolved: ResolvedCreativeStyle, ctx: ChatC
   const layoutHook = hookSpecForLayout
     ? chooseHook(info.hookOptions, hookSpecForLayout.spec.writing) : null;
   const visualLayout = resolveVisualLayout(resolved, layoutEvidenceFromContext(ctx, layoutHook));
-  if (visualLayout.editingProfile === 'AUTOMATIC_2') {
+  const styleTwo = resolved.templateId === STYLE_TWO_ID;
+  const persistentDuration = styleTwo ? ctx.runtime.map.durationSec : Math.max(1, ctx.project.timelineDurationSec);
+  // The card camera the renderer will recompute; kept so emphasis zooms can be checked against it.
+  let cardCamera: ReturnType<typeof planCamera> | null = null;
+  let cardFrames: AnalysisFrame[] = [];
+  if (visualLayout.editingProfile === 'AUTOMATIC_2' || styleTwo) {
     const frames = remapAnalysisFrames(ctx.runtime.analysisFrames, ctx.runtime.map);
     const boundaries = timelineShotBoundaries(ctx.runtime.shotBoundaries, ctx.runtime.map);
     const frame = visualLayout.videoFrame;
-    const camera = planCamera({ policy: 'FACE_FOCUSED', preserveInformation: true,
+    const camera = planCamera({ policy: styleTwo ? ctx.project.style.reframePolicy : 'FACE_FOCUSED',
+      preserveInformation: styleTwo ? ctx.project.style.informationRegionPolicy !== 'IGNORE' : true,
       aspectRatio: '9:16', canvas: { width: 1080, height: 1920, fps: 30 },
       source: { width: ctx.runtime.sourceWidth, height: ctx.runtime.sourceHeight },
-      frames, boundaries, map: ctx.runtime.map, speakerSafe: true, words: ctx.runtime.words,
+      // StyleOne's speakerSafe option also enables its special sentence punches.
+      // StyleTwo keeps the base EditMode camera decisions; its emphasis zooms come from the
+      // shared phrase-timed ZOOM component below, exactly like StyleOne's.
+      frames, boundaries, map: ctx.runtime.map, speakerSafe: !styleTwo, words: ctx.runtime.words,
       viewport: { x: 0, y: 0, width: 1080,
         height: Math.max(2, Math.round(frame.height * 1920 / 2) * 2) } });
+    cardCamera = camera; cardFrames = frames;
     const times = new Set<number>();
     for (let t = 0; t <= ctx.project.timelineDurationSec + 1e-6; t += .1) {
       times.add(Number(Math.min(t, ctx.project.timelineDurationSec).toFixed(3)));
@@ -142,11 +155,17 @@ export function compileCreativeStyle(resolved: ResolvedCreativeStyle, ctx: ChatC
       const crop = camera.cropAt(t);
       return { t, x: crop.x, y: crop.y, w: crop.w, h: crop.h };
     });
+    if (styleTwo) {
+      visualLayout.frameSegments = camera.frameSegments.map(({ startSec, endSec, layout }) => ({ startSec, endSec, layout }));
+      const crop = camera.informationCrop;
+      visualLayout.informationCrop = crop ? { x: crop.x / ctx.runtime.sourceWidth, y: crop.y / ctx.runtime.sourceHeight,
+        w: crop.width / ctx.runtime.sourceWidth, h: crop.height / ctx.runtime.sourceHeight } : null;
+    }
   }
   // One backend-resolved geometry object is persisted with the same revision as
   // the elements. Browser preview and FFmpeg consume these exact values.
   out.commands.push({ kind: 'SETTINGS', action: 'SET_RESOLVED_VISUAL_LAYOUT',
-    payload: { resolvedVisualLayout: visualLayout } });
+    payload: { resolvedVisualLayout: visualLayout, ...(styleTwo ? { aspectRatio: '9:16' } : {}) } });
   out.lines.push('Resolved professional visual layout');
 
   // --- FRAMING, then BACKGROUND (a background layout overrides the framing layout)
@@ -158,7 +177,7 @@ export function compileCreativeStyle(resolved: ResolvedCreativeStyle, ctx: ChatC
   const background = component<BackgroundSpec>('BACKGROUND');
   if (background) {
     if (!background.supported) out.skipped.push(`Background: ${background.note ?? 'not supported'}`);
-    else if (background.spec.composition !== 'STREET_EDITORIAL') {
+    else if (background.spec.composition !== 'STREET_EDITORIAL' && !styleTwo) {
       toolCommands('video.frame', { mode: background.spec.layout, scope: 'WHOLE_CLIP' }, ctx, out, 'Background');
       if (background.spec.layout === 'FIT') {
         out.commands.push(el('SET_FIT_BACKGROUND', { background: background.spec.fitBackground ?? 'BLUR' }));
@@ -205,6 +224,8 @@ export function compileCreativeStyle(resolved: ResolvedCreativeStyle, ctx: ChatC
       out.commands.push(el('RESIZE_ELEMENT', { ...track, width: visualLayout.captions.width,
         height: visualLayout.captions.height }));
       out.commands.push(el('SET_TEXT_SIZE', { ...track, fontSize: visualLayout.captions.fontSize }));
+      if (styleTwo) out.commands.push(el('SET_TEXT_SPACING', { ...track,
+        letterSpacing: 0, lineSpacing: visualLayout.captions.lineHeight }));
       out.lines.push(`Captions -> lower safe region (${visualLayout.captions.maxLines} lines max)`);
     }
   }
@@ -237,7 +258,7 @@ export function compileCreativeStyle(resolved: ResolvedCreativeStyle, ctx: ChatC
           presetRole: 'HOOK', textRuns: semanticHookRuns(wording, spec.color ?? '#FFFFFF',
             spec.semanticHighlightColor) }, 'style-hook'));
         out.commands.push(el('SET_ELEMENT_TIMING', { ref: 'style-hook', startTime: 0,
-          duration: spec.persistent ? Math.max(1, ctx.project.timelineDurationSec)
+          duration: spec.persistent ? persistentDuration
             : Math.min(spec.durationSec ?? 3.5, Math.max(1, ctx.project.timelineDurationSec * 0.5)) }));
         out.lines.push(`Hook "${wording}"`);
         target = { ref: 'style-hook' };
@@ -251,13 +272,14 @@ export function compileCreativeStyle(resolved: ResolvedCreativeStyle, ctx: ChatC
           fontWeight: spec.fontWeight, ...(spec.noStroke ? { strokeWidth: 0, shadow: false } : {}),
           backgroundColor: spec.plate }, target, null, 'Hook');
         out.commands.push(...refined.commands); out.lines.push(...refined.lines);
+        if (styleTwo) out.commands.push(el('SET_TEXT_SIZE', { ...target, fontSize: visualLayout.hook.fontSize }));
         if (spec.noStroke) {
           out.commands.push(el('SET_TEXT_SPACING', { ...target, letterSpacing: 0,
             lineSpacing: visualLayout.hook.lineHeight }));
         }
         if (spec.persistent && existing) {
           out.commands.push(el('SET_ELEMENT_TIMING', { elementId: existing.id, startTime: 0,
-            duration: Math.max(1, ctx.project.timelineDurationSec) }));
+            duration: persistentDuration }));
         }
         out.commands.push(el('MOVE_ELEMENT', { ...target, x: visualLayout.hook.x,
           y: visualLayout.hook.y }));
@@ -307,7 +329,7 @@ export function compileCreativeStyle(resolved: ResolvedCreativeStyle, ctx: ChatC
       toolCommands('zoom.add_semantic', { maxCount: zoom.spec.maxCount, scale: zoom.spec.scale,
         minSpacingSec: zoom.spec.minSpacingSec, phraseTimed: zoom.spec.phraseTimed === true,
         profile: zoom.spec.phraseTimed ? 'AUTOMATIC_2' : undefined }, ctx, out, 'Zoom');
-      if (visualLayout.editingProfile === 'AUTOMATIC_2' && visualLayout.cameraPath) {
+      if ((visualLayout.editingProfile === 'AUTOMATIC_2' || styleTwo) && visualLayout.cameraPath) {
         for (const command of out.commands.slice(commandStart)) {
           if (command.action !== 'ADD_ZOOM') continue;
           const mid = Number(command.payload.startTime) + Number(command.payload.duration) / 2;
@@ -326,6 +348,34 @@ export function compileCreativeStyle(resolved: ResolvedCreativeStyle, ctx: ChatC
             if (face.trackId) command.payload.focusTrackId = face.trackId;
           }
         }
+      }
+      // The canonical timeline must not carry an emphasis zoom the renderer will drop (it would play in the
+      // editor preview and vanish from the export). Ask the renderer's own planner, with the same camera,
+      // shots and spacing it will use, and keep only what it accepts. Rendered output is unchanged: a rejected
+      // zoom was never rendered.
+      if (zoom.spec.phraseTimed && cardCamera) {
+        const pending = out.commands.slice(commandStart).filter((command) => command.action === 'ADD_ZOOM');
+        const limits = phraseZoomLimits(ctx.runtime.map.durationSec);
+        const verdict = planEditModeZoom({ policy: 'OFF', moments: [], map: ctx.runtime.map, shots: cardCamera.shots,
+          frameSegments: cardCamera.frameSegments, frames: cardFrames, cropAt: cardCamera.cropAt,
+          focalAt: cardCamera.focalAt, fps: 30, durationSec: ctx.runtime.map.durationSec, ...limits,
+          switchTimes: cardCamera.speakerSegments.slice(1).map((segment) => segment.startSec),
+          manual: pending.map((command, index) => ({ elementId: `pending-${index}`,
+            startSec: Number(command.payload.startTime),
+            endSec: Number(command.payload.startTime) + Number(command.payload.duration),
+            scale: Number(command.payload.scale), enabled: true, claimsMoment: null,
+            triggerText: String(command.payload.triggerText ?? ''),
+            focusX: command.payload.focusX as number | undefined, focusY: command.payload.focusY as number | undefined,
+            focusTrackId: command.payload.focusTrackId as string | undefined })) }).events;
+        const accepted = new Set(verdict.map((event) => event.id));
+        pending.forEach((command, index) => {
+          if (accepted.has(`ze-pending-${index}`)) return;
+          out.commands.splice(out.commands.indexOf(command), 1);
+          out.skipped.push(`Zoom at ${Number(command.payload.startTime).toFixed(1)}s dropped: the renderer cannot settle it inside one shot`);
+          const line = out.lines.findIndex((text) => text.startsWith('Zoom at ') &&
+            text.includes(`("${String(command.payload.triggerText ?? '').slice(0, 40)}")`));
+          if (line >= 0) out.lines.splice(line, 1);
+        });
       }
     }
   }

@@ -4,6 +4,8 @@ import { Fragment, memo } from 'react';
 import { activeWordIndex, canHighlightWords, exportLines, readCaptionWords, readTextStyle,
   textStyleCss, wordColors } from '@/lib/edit-mode-text';
 import type { EditElement } from '@/lib/edit-mode-types';
+import { StyleTwoPreviewText } from './style-two-preview-text';
+import { usesStyleTwoVectors } from '@ai-content-platform/shared/style-two.cjs';
 
 /**
  * One TEXT or SUBTITLE element, drawn the way it will export.
@@ -19,13 +21,14 @@ import type { EditElement } from '@/lib/edit-mode-types';
  * `assSpans` applies on the renderer. Word-level animation is never faked.
  */
 export const EditPreviewText = memo(function EditPreviewText({ element, offsetSec,
-  canvasWidth }: {
+  canvasWidth, styleTwo }: {
   element: EditElement;
   /** Seconds into this element at the current playhead. */
   offsetSec: number;
   /** The measured canvas width in pixels - the same number the renderer calls
    * `canvas.width`, so type is sized by the renderer's own formula. */
   canvasWidth: number;
+  styleTwo?: boolean;
 }) {
   const properties = element.properties;
   const style = readTextStyle(properties);
@@ -38,6 +41,7 @@ export const EditPreviewText = memo(function EditPreviewText({ element, offsetSe
   // The export's own line breaks and per-word colours (runs), so both show identical lines.
   const { tokens, lines } = exportLines(properties);
   const colors = wordColors(properties).map((word) => word.color);
+  if (styleTwo && usesStyleTwoVectors({ ...style, textRuns: wordColors(properties) })) return <StyleTwoPreviewText element={element} />;
 
   return <div className='flex h-full w-full items-center'>
     {/* The block's own strut must match the text, or an inherited 24px line box inflates the

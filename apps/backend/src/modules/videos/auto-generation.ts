@@ -2,7 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { ClipCreationRequest, parseClipCreationRequest } from './clip-selection.service';
 import { MAX_REQUESTABLE_CLIPS, validateRequestedClipCount } from '../processing/clip-selection-policy';
 
-const ENTRY_TEMPLATES = new Set(['AUTOMATIC_1', 'AUTOMATIC_2', 'AUTOMATIC_RAW']);
+const ENTRY_TEMPLATES = new Set(['AUTOMATIC_1', 'AUTOMATIC_2', 'AUTOMATIC_3_STYLE_TWO', 'AUTOMATIC_RAW']);
 
 /**
  * One-step entry (upload or YouTube link): the clip request the user chose before the source
@@ -25,7 +25,7 @@ export function parseAutoGeneration(value: unknown): ClipCreationRequest | null 
     MAX_REQUESTABLE_CLIPS);
   const templateId = request.generation?.templateId ?? null;
   if (!templateId || !ENTRY_TEMPLATES.has(templateId))
-    throw new BadRequestException('Choose Automatic 1, Automatic 2 or Raw');
+    throw new BadRequestException('Choose StyleZero, StyleOne, StyleTwo or No Edit');
   if (request.generation?.referenceId)
     throw new BadRequestException('A reference video can be added after the source is ready');
   return { requestedClipCount, outputStyle: request.outputStyle ?? 'AI_EDITED',

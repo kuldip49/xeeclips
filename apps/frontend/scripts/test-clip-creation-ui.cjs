@@ -67,9 +67,10 @@ for (const forbidden of ['recommendedClipCount', 'recommendedCount', 'PRIMARY', 
 // --- B. One look: automatic edit, clean cuts, or a full template ---------------
 // 918fe9e renamed the public looks: StyleZero (AUTOMATIC_1), StyleOne (AUTOMATIC_2), No Edit (RAW).
 ok(setup.includes("value: 'AUTOMATIC_1', title: 'StyleZero'") &&
-  setup.includes("filter((template) => template.id === 'AUTOMATIC_2')") && setup.includes("title: 'StyleOne'") &&
+  setup.includes("filter((template) => template.id === 'AUTOMATIC_2' || template.id === 'AUTOMATIC_3_STYLE_TWO')") &&
+  setup.includes("'StyleOne'") && setup.includes("'StyleTwo'") &&
   setup.includes('{ value: RAW_LOOK.value as string, title: RAW_LOOK.title'),
-  'the public template picker allowlists exactly StyleZero, StyleOne and No Edit');
+  'the public template picker allowlists exactly StyleZero, StyleOne, StyleTwo and No Edit');
 ok(state.restoreLook(null) === 'AUTOMATIC_1', 'no previous request -> Automatic 1');
 ok(state.restoreLook({ outputStyle: 'AI_EDITED' }) === 'AUTOMATIC_1', 'a legacy base look is canonicalized');
 ok(state.restoreLook({ outputStyle: 'AI_EDITED', generation: { templateId: 'AUTOMATIC_2' } }) === 'AUTOMATIC_2',

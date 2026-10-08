@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Download, Pencil, Share2, Trash2 } from 'lucide-react';
-import { editorUrl, mediaUrl, quickReframeUrl, reframeRequest, type ReframeSession } from '@/lib/quick-reframe-api';
+import { editorUrl, mediaUrl, QUICK_STYLE_LABEL, quickReframeUrl, reframeRequest, type ReframeSession } from '@/lib/quick-reframe-api';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { PostCopyButtons } from './post-copy-panel';
 
@@ -22,7 +22,7 @@ export function QuickReframeHistory(){
       <video aria-label={`Quick Reframe preview ${s.name}`} playsInline controls preload='none' src={mediaUrl(latest?.url??s.exportUrl)} className='mx-auto max-h-80 w-full rounded-xl bg-black object-contain'/>
       <div className='grid min-w-0 content-start gap-3'>
         <div className='flex flex-wrap gap-1.5 text-[11px] font-semibold'><span className='rounded-md bg-primary/15 px-2 py-0.5 text-primary-soft'>Quick Reframe</span>
-          {s.editPath&&<span className='rounded-md bg-tint-strong px-2 py-0.5 text-soft'>{s.editPath==='STYLEONE'?'StyleOne':'Manual'}</span>}
+          {s.editPath&&<span className='rounded-md bg-tint-strong px-2 py-0.5 text-soft'>{QUICK_STYLE_LABEL[s.editPath]}</span>}
           {latest&&!latest.current&&<span className='rounded-md bg-warning/15 px-2 py-0.5 text-warning-soft'>Edited since export</span>}</div>
         <h3 className='break-all text-sm font-semibold'>{s.name}</h3>
         <p className='text-xs text-muted-foreground'>{s.duration.toFixed(1)}s{latest?.width?` · ${latest.width} × ${latest.height}`:''} · {new Date(latest?.createdAt??s.createdAt).toLocaleString()}</p>

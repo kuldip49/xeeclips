@@ -22,7 +22,7 @@ import { applyUppercase, readCaptionWords, readTextRuns, readTextStyle,
 import { fontSizePx } from './edit-mode-ass';
 import { autoFitText, type ResolvedVisualLayout } from '../styles/resolved-visual-layout';
 import { planCamera, resolveCanvas } from './edit-mode-camera';
-import { planEditModeZoom } from './edit-mode-zoom';
+import { phraseZoomLimits, planEditModeZoom } from './edit-mode-zoom';
 import { buildTimelineMap, remapAnalysisFrames,
   timelineShotBoundaries } from './edit-mode-timeline-map';
 import type { EditExportErrorCode, RenderAudioTrack, RenderEvidence, RenderPlan,
@@ -128,7 +128,11 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
   const frames = remapAnalysisFrames(cached.frames, map);
   const boundaries = timelineShotBoundaries(cached.shotBoundaries, map);
   const automatic2 = visualLayout?.editingProfile === 'AUTOMATIC_2';
-  const card = automatic2 && visualLayout?.videoFrame.mode === 'CARD'
+  const fixedCamera = automatic2 || visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO';
+  // StyleOne and StyleTwo share ONE emphasis-zoom policy (ZOOM_AUTOMATIC_2): phrase-timed events,
+  // spaced apart, budgeted by clip length and never started on a camera change.
+  const phraseZoom = fixedCamera;
+  const card = fixedCamera && visualLayout?.videoFrame.mode === 'CARD'
     ? { x: 0, y: 0, width: canvas.width,
       height: Math.max(2, Math.round(visualLayout.videoFrame.height * canvas.height / 2) * 2) }
     : undefined;
@@ -147,9 +151,9 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
     shots: camera.shots, frameSegments: camera.frameSegments, frames,
     cropAt: camera.cropAt, focalAt: camera.focalAt, fps, durationSec: map.durationSec,
     suppressed: input.suppressedZoomIds, scaleCeilings: input.zoomScaleCeilings,
-    minGapSec: automatic2 ? 5 : undefined,
-    maxEvents: automatic2 ? (map.durationSec <= 15 ? 1 : map.durationSec <= 45 ? 3 : 4) : undefined,
-    switchTimes: automatic2 ? camera.speakerSegments.slice(1).map((segment) => segment.startSec) : undefined,
+    minGapSec: phraseZoom ? phraseZoomLimits(map.durationSec).minGapSec : undefined,
+    maxEvents: phraseZoom ? phraseZoomLimits(map.durationSec).maxEvents : undefined,
+    switchTimes: phraseZoom ? camera.speakerSegments.slice(1).map((segment) => segment.startSec) : undefined,
     manual: input.elements.flatMap((element) => {
       const zoom = element.type === 'EFFECT' ? readZoomEffect(element.properties) : null;
       return zoom ? [{ elementId: element.id, startSec: element.startTime,
@@ -209,7 +213,10 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
       // "Hide captions" is canonical element state, so a hidden caption is
       // absent from the export exactly as it is absent from the preview.
       if (properties.hidden === true) continue;
-      let overlay = textOverlay(element, properties, canvas, startSec, endSec);
+      // The resolved layout rides with the canvas so StyleTwo sizes its text from the unrounded design size
+      // (94.5 px, not 95): the editor preview fits the same string at the unrounded size, and a rounded one
+      // wraps a caption that is within half a pixel of its box onto a second line only in the export.
+      let overlay = textOverlay(element, properties, { ...canvas, visualLayout }, startSec, endSec);
       const role = String(properties.templateRole ?? properties.presetRole ?? '');
       const region = element.type === 'SUBTITLE' ? visualLayout?.captions
         : role === 'HOOK' ? visualLayout?.hook
@@ -218,7 +225,7 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
       // caption the user moved, resized or re-sized renders exactly there. The template only applies
       // its deterministic auto-fit while a hook still has the template's font size (the editor
       // preview applies the same fit, `layoutFittedText` on the frontend).
-      if (region && element.type !== 'SUBTITLE' && Math.abs(number(properties.fontSize, region.fontSize) - region.fontSize) < 0.01) {
+      if (region && visualLayout?.editingProfile !== 'AUTOMATIC_3_STYLE_TWO' && element.type !== 'SUBTITLE' && Math.abs(number(properties.fontSize, region.fontSize) - region.fontSize) < 0.01) {
         const fitted = autoFitText(overlay.content, { width: clamp01(number(properties.width, region.width)),
           height: clamp01(number(properties.height, region.height)), maxLines: region.maxLines, preferred: region.fontSize,
           minimum: Math.min(30, region.fontSize), lineHeight: region.lineHeight,
@@ -350,14 +357,14 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
     informationCrop: camera.informationCrop,
     frames, cropAt: camera.cropAt, fitExpression: camera.fitExpression,
     informationFitExpression: camera.informationFitExpression, cameraFilter: camera.filter,
-    renderHeight: automatic2 && card ? card.height : canvas.height,
+    renderHeight: fixedCamera && card ? card.height : canvas.height,
     speakerSegments: camera.speakerSegments, speakerSwitchCount: camera.speakerSwitchCount,
     faceSafetyViolations: camera.faceSafetyViolations, cameraMoves: camera.cameraMoves,
     punches: camera.punches } };
 }
 
 function textOverlay(element: PlanElement, properties: Record<string, unknown>,
-  canvas: { width: number; height: number }, startSec: number,
+  canvas: { width: number; height: number; visualLayout?: ResolvedVisualLayout | null }, startSec: number,
   endSec: number): RenderTextOverlay {
   // Style is read through the canonical reader, so the renderer and the editor
   // resolve defaults, legacy `backgroundColor` plates and out-of-range stored
@@ -381,7 +388,8 @@ function textOverlay(element: PlanElement, properties: Record<string, unknown>,
     y: Math.round(clamp01(number(properties.y, 0.4)) * canvas.height),
     width: Math.max(2, Math.round(clamp01(number(properties.width, 0.8)) * canvas.width)),
     height: Math.max(2, Math.round(clamp01(number(properties.height, 0.15)) * canvas.height)),
-    fontSizePx: fontSizePx(style.fontSize, canvas.width),
+    fontSizePx: canvas.visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO'
+      ? style.fontSize * canvas.width / 600 : fontSizePx(style.fontSize, canvas.width),
     fontWeight: style.fontWeight,
     fontFamily: style.fontFamily,
     textAlign: style.textAlign,

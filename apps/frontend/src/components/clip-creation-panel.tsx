@@ -38,6 +38,7 @@ import {
 } from '@/lib/creative-generation';
 import { materializeGeneratedClipForEditing } from '@/lib/edit-mode-api';
 import { analysisProgressLabel, ENTRY_TEMPLATE_LABELS, type EntryTemplate } from '@/lib/entry-flow';
+import { STYLE_TWO, STYLE_TWO_ID, styleTwoText, svgPath } from '@ai-content-platform/shared/style-two.cjs';
 
 function CopyButton({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
@@ -127,6 +128,23 @@ function Automatic2Pending({ clip }: { clip: ClipCard }) {
   </div>;
 }
 
+function StyleTwoPending({ clip }: { clip: ClipCard }) {
+  const hook = styleTwoText({ ...STYLE_TWO.hook, content: clip.hook,
+    fontFamily: STYLE_TWO.hookFont, fontSize: STYLE_TWO.hookSize * 1.8,
+    lineHeight: STYLE_TWO.hookLineHeight, scale: 1.8 });
+  return <div data-testid='style-two-pending' role='status' aria-label='Applying StyleTwo'
+    className='relative mx-auto aspect-[9/16] w-full max-w-[315px] overflow-hidden rounded-xl'
+    style={{ background: STYLE_TWO.background }}>
+    <svg viewBox='0 0 1080 1920' className='absolute inset-0 h-full w-full' aria-hidden>
+      <path d={hook?.paths.map(svgPath).join(' ')} fill='#000000' />
+    </svg>
+    <div className='absolute left-0 grid w-full place-items-center bg-tint text-soft'
+      style={{ top: `${STYLE_TWO.media.y / 1920 * 100}%`, height: `${STYLE_TWO.media.height / 1920 * 100}%` }}>
+      <span className='flex items-center gap-2 text-xs'><Loader2 className='animate-spin' size={20} />Applying StyleTwo…</span>
+    </div>
+  </div>;
+}
+
 function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<void> }) {
   const router = useRouter();
   const [opening, setOpening] = useState<'EDIT' | 'AI' | null>(null);
@@ -138,7 +156,7 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
   const [detailsOpen, setDetailsOpen] = useState(false);
   const styled = STYLE_READY_STATUSES.has(clip.style?.status ?? '') &&
     clip.style?.playbackUrl ? clip.style.playbackUrl : null;
-  const requiresCanonicalStyle = clip.templateId === 'AUTOMATIC_2';
+  const requiresCanonicalStyle = clip.templateId === 'AUTOMATIC_2' || clip.templateId === STYLE_TWO_ID;
   const styleBlocked = requiresCanonicalStyle && !styled;
   const styleFailed = styleBlocked && ['FAILED', 'STYLE_FAILED'].includes(clip.style?.status ?? '');
   const src = `${getPublicApiBaseUrl()}${styled ?? clip.playbackUrl}`;
@@ -170,9 +188,9 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
     <div className='bg-background p-2'>
       {styleFailed
         ? <div className='mx-auto grid aspect-[9/16] max-h-[72svh] w-full max-w-[calc(72svh*9/16)] place-items-center rounded-xl bg-black px-6 text-center text-sm text-muted-foreground md:max-h-[560px] md:max-w-[315px]'>
-          StyleOne could not be applied. Try again when the clip is ready.
+          {clip.templateId === STYLE_TWO_ID ? 'StyleTwo' : 'StyleOne'} could not be applied. Try again when the clip is ready.
         </div>
-        : styleBlocked ? <Automatic2Pending clip={clip} />
+        : styleBlocked ? clip.templateId === STYLE_TWO_ID ? <StyleTwoPending clip={clip} /> : <Automatic2Pending clip={clip} />
           : <LazyVideo src={src} poster={poster} vertical={vertical} label={`Preview clip ${clip.position}`} />}
     </div>
     <div className='flex flex-1 flex-col gap-4 p-4'>
@@ -278,7 +296,7 @@ export function ClipCreationPanel({ video }: { video: Video }) {
   // Styled clips keep changing after delivery (style -> render), so keep polling.
   const styling = results?.clips.some((clip) => {
     const status = clip.style?.status ?? '';
-    if (clip.templateId === 'AUTOMATIC_2') return !(['STYLE_FAILED', 'FAILED'].includes(status) ||
+    if (clip.templateId === 'AUTOMATIC_2' || clip.templateId === STYLE_TWO_ID) return !(['STYLE_FAILED', 'FAILED'].includes(status) ||
       (STYLE_READY_STATUSES.has(status) && !!clip.style?.playbackUrl));
     return ['BASE_READY', 'STYLE_APPLYING', 'STYLE_READY', 'STYLING', 'RENDERING']
       .includes(status);
@@ -383,7 +401,7 @@ export function ClipCreationPanel({ video }: { video: Video }) {
     return <div className='grid gap-3 rounded-2xl border border-secondary/15 bg-sunken p-4 sm:p-5' data-testid='entry-progress'>
       <p role='status' className='flex items-center gap-2 text-sm font-semibold'>
         <Loader2 className='animate-spin text-secondary' size={16} aria-hidden />{label}</p>
-      <StageSteps stage={stageFromAnalysisLabel(label)} styleName={autoTemplate === 'AUTOMATIC_2' ? 'StyleOne' : null} />
+      <StageSteps stage={stageFromAnalysisLabel(label)} styleName={autoTemplate === STYLE_TWO_ID ? 'StyleTwo' : autoTemplate === 'AUTOMATIC_2' ? 'StyleOne' : null} />
       <div className='h-1.5 w-full overflow-hidden rounded-full bg-tint-strong'><div className='h-full rounded-full bg-brand-progress transition-all duration-500'
         style={{ width: `${Math.max(3, Math.min(100, job.progress ?? 0))}%` }} /></div>
       <p className='text-xs leading-5 text-muted-foreground'>Then {requested} clip{requested === 1 ? '' : 's'}{autoTemplateLabel ? ` with ${autoTemplateLabel}` : ''} will be created automatically. You can leave this page — progress is saved.</p>
@@ -417,7 +435,7 @@ export function ClipCreationPanel({ video }: { video: Video }) {
   // Auto-started videos show one continuous flow; the setup stays available, folded away.
   const autoFlow = !!autoRequest && autoStatus !== 'FAILED';
   const requestedTotal = request?.requestedClipCount ?? Number(autoRequest?.requestedClipCount ?? count);
-  const styleName = request?.generation?.templateId === 'AUTOMATIC_2' ? 'StyleOne'
+  const styleName = request?.generation?.templateId === STYLE_TWO_ID ? 'StyleTwo' : request?.generation?.templateId === 'AUTOMATIC_2' ? 'StyleOne'
     : request?.generation?.templateId === 'AUTOMATIC_RAW' ? 'No Edit'
     : autoTemplateLabel ?? 'the template';
   const flowLabel = !autoFlow ? null
@@ -460,7 +478,7 @@ export function ClipCreationPanel({ video }: { video: Video }) {
       <p role='status' data-testid='entry-flow-status' className='flex items-center gap-2 text-sm font-semibold'>
         {flowLabel === 'Ready' ? <Sparkles className='text-success' size={16} aria-hidden />
           : <Loader2 className='animate-spin text-secondary' size={16} aria-hidden />}{flowLabel}</p>
-      {flowLabel !== 'Ready' ? <StageSteps styleName={request?.generation?.templateId === 'AUTOMATIC_2' || autoTemplate === 'AUTOMATIC_2' ? 'StyleOne' : null}
+      {flowLabel !== 'Ready' ? <StageSteps styleName={request?.generation?.templateId === STYLE_TWO_ID || autoTemplate === STYLE_TWO_ID ? 'StyleTwo' : request?.generation?.templateId === 'AUTOMATIC_2' || autoTemplate === 'AUTOMATIC_2' ? 'StyleOne' : null}
         stage={flowLabel.startsWith('Finding') ? 'FINDING' : flowLabel.startsWith('Applying') ? 'STYLING' : 'CREATING'} /> : null}
     </div> : null}
     {autoRequest?.adjustedFrom ? <p role='status' className='rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning-soft'>

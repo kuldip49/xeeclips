@@ -22,8 +22,9 @@ import { LlmRouterService } from '../processing/llm-router.service';
 import { sampleImageStats, type ImageStats } from '../editing/color-grade';
 import { analyzeRegions, defaultPlan, isIdentityPreparation, preparationOf, record, subtitleStateFor, validatePlan, contains, overlap,
   type ReframeAnalysis, type ReframeBox, type ReframePlan } from './quick-reframe-plan';
-import { preparationFingerprint, quickCleanRender, quickComposeRender, quickOutputCanvas, quickStyleOneCommands,
-  QUICK_REFRAME_PIPELINE } from './quick-reframe-render';
+import { preparationFingerprint, quickCleanRender, quickComposeRender, quickOutputCanvas, quickStyleCommands,
+  QUICK_REFRAME_PIPELINE, type QuickStyle } from './quick-reframe-render';
+import { prepareStyleTwoFonts } from '../edit-mode/render/style-two-fonts';
 import { publicCreativePackage } from '../content-intelligence/creative-package.service';
 import { INTELLIGENCE_VERSION } from '../content-intelligence/content-understanding.service';
 import { suggestHooks, HOOK_CATEGORIES } from './quick-reframe-hooks';
@@ -32,13 +33,17 @@ import { CAPTION_STYLES, emptyPostCopy, generatePostCopy, normalizeHashtags, REW
 const exec=promisify(execFile);
 const json=(v:unknown):Prisma.InputJsonValue=>JSON.parse(JSON.stringify(v));
 const include={editProject:{include:{assets:true,elements:true}}};
-type StyleOneOptions={hookText?:string;captions?:string};
+type StyleOptions={hookText?:string;captions?:string};
+/** Display name and canonical project layout of each automatic look Quick Reframe offers. */
+const STYLES:Record<QuickStyle,{name:string;profile:string;template:string}>={
+  STYLEONE:{name:'StyleOne',profile:'AUTOMATIC_2',template:'STYLEONE'},
+  STYLETWO:{name:'StyleTwo',profile:'AUTOMATIC_3_STYLE_TWO',template:'STYLETWO'}};
 /**
  * PLAYBACK readies the upload for the manual crop step (deterministic: probe/transcode only). ANALYZE is
  * the local AI pass (faces, OCR, Whisper); it only runs after the crop is confirmed and an editing mode chosen.
  */
 type Task={id:string;operationId:string;kind:'PLAYBACK'|'ANALYZE'|'PREPARE'|'PREVIEW'|'EXPORT'|'IMPORT';url?:string;resolution?:720|1080;
-  next?:'STYLEONE';styleOne?:StyleOneOptions};
+  next?:QuickStyle;style?:StyleOptions};
 type Loaded=Prisma.QuickReframeGetPayload<{include:typeof include}>;
 type Asset=Loaded['editProject']['assets'][number];
 const activeStatuses=['PLAYBACK','ANALYZE','PREPARE','PREVIEW','EXPORT','IMPORT'];
@@ -100,8 +105,9 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       width:original?.width||0,height:original?.height||0,originalUrl:url(this.latest(q,'SOURCE_PLAYBACK')||original),
       sourceUrl:url(source),sourceWidth:source?.width||0,sourceHeight:source?.height||0,
       cropConfirmed:this.cropConfirmed(q),confirmed:(q.confirmed??null) as ReframeSession['confirmed'],editPath:(q.editPath??null) as ReframeEditPath|null,
-      // In a Quick Reframe project the AUTOMATIC_2 layout only ever comes from StyleOne (V1 sessions included).
-      styleOneApplied:record(settings.resolvedVisualLayout).editingProfile==='AUTOMATIC_2',
+      // In a Quick Reframe project a card layout only ever comes from the style the user chose (V1 sessions included).
+      styleOneApplied:record(settings.resolvedVisualLayout).editingProfile===STYLES.STYLEONE.profile,
+      styleTwoApplied:record(settings.resolvedVisualLayout).editingProfile===STYLES.STYLETWO.profile,
       previewUrl:url(preview),exportUrl:exports[0]?.url??null,previewRevision:current(preview),exportRevision:exports[0]?.revision??null,exports,
       status:q.status,progress:q.progress,message:q.message,error:q.error,analysis:this.analysisOf(q),plan:q.plan as ReframeSession['plan'],hooks,
       sourceContext:q.sourceContext as ReframeSocialSource|null,postCopy:this.publicPostCopy(q),
@@ -149,7 +155,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       return this.get(id);
     }catch(error){await this.storage.removeObject(stored.bucket,stored.objectKey);throw error;}
   }
-  async start(id:string,kind:Task['kind'],body:Record<string,unknown>={},chain:Pick<Task,'next'|'styleOne'>={}){
+  async start(id:string,kind:Task['kind'],body:Record<string,unknown>={},chain:Pick<Task,'next'|'style'>={}){
     const q=await this.load(id);if(activeStatuses.includes(q.status))throw new ConflictException('Processing is already in progress.');
     if(kind!=='IMPORT' && !this.sourceOf(q))throw new BadRequestException('Upload a source video first.');
     if(kind==='PREPARE'){
@@ -159,11 +165,11 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     // No AI runs while cropping: the analysis starts only after Done Cropping and an editing mode.
     if(kind==='ANALYZE'){
       if(!this.cropConfirmed(q))throw new BadRequestException('Confirm the crop first.');
-      if(!q.editPath&&!chain.next)throw new BadRequestException('Choose StyleOne or Manual editing first.');
+      if(!q.editPath&&!chain.next)throw new BadRequestException('Choose StyleOne, StyleTwo or Manual editing first.');
     }
     if(kind==='EXPORT'||kind==='PREVIEW'){
       if(!this.cropConfirmed(q))throw new BadRequestException('Confirm the crop first.');
-      if(!q.editPath)throw new BadRequestException('Choose StyleOne or Manual editing first.');
+      if(!q.editPath)throw new BadRequestException('Choose StyleOne, StyleTwo or Manual editing first.');
       if(body.revision!==q.editProject.revision)throw new ConflictException('Your edits changed. Refresh and try again.');
     }
     const resolution=body.resolution===720?720:1080;
@@ -172,7 +178,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       if(q.editProject.assets.length)throw new ConflictException('Start a new Quick Reframe to import another video.');
       if(process.env.QUICK_REFRAME_SOCIAL_IMPORT_APPROVED!=='true')throw new BadRequestException('Automatic social import is unavailable. Upload your authorized video file instead.');}
     const operationId=randomUUID();
-    const message={PLAYBACK:'Preparing your video for cropping',ANALYZE:chain.next==='STYLEONE'?'Checking speech and captions for StyleOne':'Checking speech and on-screen captions',IMPORT:'Checking video',PREPARE:'Applying your crop',PREVIEW:'Rendering preview',EXPORT:`Exporting ${resolution}p video`}[kind];
+    const message={PLAYBACK:'Preparing your video for cropping',ANALYZE:chain.next?`Checking speech and captions for ${STYLES[chain.next].name}`:'Checking speech and on-screen captions',IMPORT:'Checking video',PREPARE:'Applying your crop',PREVIEW:'Rendering preview',EXPORT:`Exporting ${resolution}p video`}[kind];
     const claimed=await this.prisma.$transaction(async tx=>{
       const result=await tx.quickReframe.updateMany({where:{id,status:q.status,operationId:q.operationId},data:{status:kind,operationId,message,progress:5,error:null}});
       if(result.count&&kind==='EXPORT')await new UsageService(this.prisma).reserve(tx,q.editProject.userId,`reframe:${operationId}`,'QUICK_REFRAME',id);
@@ -199,7 +205,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       const q=await this.load(task.id);if(q.operationId!==task.operationId)return;
       if(task.kind==='IMPORT'){const path=join(dir,'import.mp4');const context=await downloadSocial(task.url,path,controller.signal);await this.ingest(task.id,path,'Imported video.mp4',task.operationId,context);return;}
       if(task.kind==='PLAYBACK'){await this.playback(task,q,dir,controller.signal,(v)=>{uploaded=v;});return;}
-      if(task.kind==='ANALYZE'){await this.analyze(task,q,controller.signal);if(task.next==='STYLEONE')await this.continueStyleOne(task);return;}
+      if(task.kind==='ANALYZE'){await this.analyze(task,q,controller.signal);if(task.next)await this.continueStyle(task);return;}
       if(task.kind==='PREPARE'){await this.prepare(task,q,dir,controller.signal,(v)=>{uploaded=v;});return;}
       await this.compose(task,q,dir,controller.signal,(v)=>{uploaded=v;});
       if(task.kind==='EXPORT')await new UsageService(this.prisma).settle(`reframe:${task.operationId}`,true);
@@ -242,16 +248,17 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     await this.prisma.editAsset.update({where:{id:original.id},data:{analysis:json(raw),transcript:transcript?json(transcript):undefined}});
     // A baked SOURCE keeps the original's timing, so it shares the transcript (captions, ducking).
     if(source.id!==original.id&&transcript&&!source.transcript)await this.prisma.editAsset.update({where:{id:source.id},data:{transcript:json(transcript)}});
-    // Chained into StyleOne, the operation stays claimed so the browser never sees an idle gap.
-    if(task.next==='STYLEONE')await this.stage(task,'Applying StyleOne',90,{analysis:json(analysis)});
+    // Chained into a style, the operation stays claimed so the browser never sees an idle gap.
+    if(task.next)await this.stage(task,`Applying ${STYLES[task.next].name}`,90,{analysis:json(analysis)});
     else await this.stage(task,'Video checked',100,{analysis:json(analysis),status:q.editPath==='MANUAL'?'EDITING':'ANALYZED',operationId:null});
   }
-  /** StyleOne chosen before the analysis existed: apply it now. A failure is reported like any job failure. */
-  private async continueStyleOne(task:Task){
+  /** A style chosen before the analysis existed: apply it now. A failure is reported like any job failure. */
+  private async continueStyle(task:Task){
+    const name=STYLES[task.next!].name;
     try{const q=await this.load(task.id);if(q.operationId!==task.operationId)return;
-      await this.applyStyleOne(task.id,{...task.styleOne,revision:q.editProject.revision},true);}
-    catch(error){this.logger.warn(`Quick Reframe StyleOne failed: ${error instanceof Error?error.message:String(error)}`);
-      const message=error instanceof BadRequestException?error.message:'StyleOne could not be applied. Choose it again to retry.';
+      await this.applyStyle(task.id,{...task.style,revision:q.editProject.revision},task.next!,true);}
+    catch(error){this.logger.warn(`Quick Reframe ${name} failed: ${error instanceof Error?error.message:String(error)}`);
+      const message=error instanceof BadRequestException?error.message:`${name} could not be applied. Choose it again to retry.`;
       await this.prisma.quickReframe.updateMany({where:{id:task.id,operationId:task.operationId},data:{status:'FAILED',error:message,message,operationId:null}});}
   }
   /**
@@ -317,7 +324,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
   private async compose(task:Task,q:Loaded,dir:string,signal:AbortSignal,track:(v:{bucket:string;objectKey:string}|null)=>void){
     const source=this.sourceOf(q)!;const project=q.editProject;
     if(!this.cropConfirmed(q))throw new BadRequestException('Confirm the crop first.');
-    const styleOne=q.editPath==='STYLEONE';const preview=task.kind==='PREVIEW';const resolution=task.resolution??1080;
+    const style:QuickStyle|null=q.editPath==='STYLEONE'||q.editPath==='STYLETWO'?q.editPath:null;const preview=task.kind==='PREVIEW';const resolution=task.resolution??1080;
     const sourcePath=join(dir,'source.mp4'),out=join(dir,'output.mp4');
     await this.stage(task,preview?'Rendering preview':`Exporting ${resolution}p video`,15);
     const sourceAt=editAssetStorageLocation(source);await this.storage.downloadToFile(sourceAt.bucket,sourceAt.objectKey,sourcePath);
@@ -335,7 +342,8 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const rendered=quickComposeRender({project:{id:project.id,revision:project.revision,settings:project.settings},canvasOverride:canvas,
       assets:project.assets.map(a=>({id:a.id,role:a.role,mimeType:a.mimeType,duration:a.duration,width:a.width,height:a.height,fps:a.fps,metadata:a.metadata,transcript:a.transcript,analysis:a.analysis})),
       elements:project.elements.map(e=>({id:e.id,assetId:e.assetId,type:e.type,track:e.track,position:e.position,startTime:e.startTime,duration:e.duration,trimStart:e.trimStart,trimEnd:e.trimEnd,properties:e.properties})),
-      imageStats,hasSourceAudio:probe.hasAudio,fps:Math.max(1,Math.min(30,Math.round(probe.fps??30)))},sourcePath,out,{overlayPaths,audioPaths},styleOne);
+      imageStats,hasSourceAudio:probe.hasAudio,fps:Math.max(1,Math.min(30,Math.round(probe.fps??30)))},sourcePath,out,{overlayPaths,audioPaths},style,
+      {fontsDir:style==='STYLETWO'?await prepareStyleTwoFonts(dir):undefined});
     if(preview){const i=rendered.args.indexOf('-preset');if(i>=0)rendered.args[i+1]='veryfast';}
     if(rendered.ass)await writeFile(join(dir,'captions.ass'),rendered.ass);
     await this.stage(task,preview?'Rendering preview':`Exporting ${resolution}p video`,30);
@@ -380,7 +388,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
   async hooks(id:string,body:Record<string,unknown>){
     const q=await this.load(id);const original=this.originalOf(q);if(!original)throw new BadRequestException('Upload a video first.');
     if(!this.cropConfirmed(q))throw new BadRequestException('Confirm the crop first.');
-    if(!q.editPath)throw new BadRequestException('Choose StyleOne or Manual editing first.');
+    if(!q.editPath)throw new BadRequestException('Choose StyleOne, StyleTwo or Manual editing first.');
     if(activeStatuses.includes(q.status))throw new ConflictException('Wait for processing to finish.');
     const external=body.externalAiAuthorized===true;
     if(this.needsAnalysis(q)&&record(original.metadata).hasAudio===true)throw new BadRequestException(activeStatuses.includes(q.status)?'XeeClip is still checking the speech in your video. Try again in a moment.':'Check the video first, then ask for hook suggestions.');
@@ -428,7 +436,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
   }
   private assertPostCopy(q:Loaded,body:Record<string,unknown>){
     this.assertEditable(q,body.revision);
-    if(!q.editPath)throw new BadRequestException('Choose StyleOne or Manual editing first.');
+    if(!q.editPath)throw new BadRequestException('Choose StyleOne, StyleTwo or Manual editing first.');
     if(body.version!==(record(q.postCopy).version??0))throw new ConflictException('Post copy changed. Refresh before saving.');
   }
   private async writePostCopy(q:Loaded,copy:ReframePostCopy){
@@ -467,23 +475,26 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     if(revision!==q.editProject.revision)throw new ConflictException('Your edits changed. Refresh and try again.');
   }
   /**
-   * Applies the actual StyleOne template to the confirmed source as ONE canonical revision, so the
+   * Applies the actual StyleOne / StyleTwo template to the confirmed source as ONE canonical revision, so the
    * editor's Undo restores whatever was there before. Captions are generated only when the video
    * has none of its own, unless the user explicitly chooses otherwise.
    */
-  async applyStyleOne(id:string,body:Record<string,unknown>,analyzed=false){
+  applyStyleOne(id:string,body:Record<string,unknown>,analyzed=false){return this.applyStyle(id,body,'STYLEONE',analyzed);}
+  applyStyleTwo(id:string,body:Record<string,unknown>,analyzed=false){return this.applyStyle(id,body,'STYLETWO',analyzed);}
+  async applyStyle(id:string,body:Record<string,unknown>,style:QuickStyle,analyzed=false){
+    const name=STYLES[style].name;
     const q=await this.load(id);this.assertEditable(q,body.revision,analyzed);
-    // The local AI pass runs first (once per upload); StyleOne then continues from the job.
-    if(!analyzed&&this.needsAnalysis(q))return this.start(id,'ANALYZE',{},{next:'STYLEONE',styleOne:{hookText:typeof body.hookText==='string'?body.hookText:undefined,captions:typeof body.captions==='string'?body.captions:undefined}});
+    // The local AI pass runs first (once per upload); the style then continues from the job.
+    if(!analyzed&&this.needsAnalysis(q))return this.start(id,'ANALYZE',{},{next:style,style:{hookText:typeof body.hookText==='string'?body.hookText:undefined,captions:typeof body.captions==='string'?body.captions:undefined}});
     const view=this.view(q);
     const mode=['GENERATE','KEEP','OFF'].includes(String(body.captions))?String(body.captions)
       :view.analysis?.subtitleState==='MISSING'&&view.hasTranscript?'GENERATE':'KEEP';
     let hooks=view.hooks;
-    // StyleOne always opens with a hook written from the video itself; without consent it is written locally.
+    // Both styles open with a hook written from the video itself; without consent it is written locally.
     if(typeof body.hookText!=='string'&&!hooks.length&&view.hasTranscript){
       const context=this.postCopyContext(q,{});const suggestions=await suggestHooks(this.router,context.transcript,false,[],
         {sourceId:context.sourceId,transcriptVersion:context.transcriptVersion,visualVersion:context.visualVersion,
-         visibleText:context.visibleText,visualSummary:context.visualSummary,speakerTurns:context.speakerTurns,template:'STYLEONE',sourceTitle:context.sourceContext?.sourcePostTitle,sourceCaption:context.sourceContext?.sourcePostText});
+         visibleText:context.visibleText,visualSummary:context.visualSummary,speakerTurns:context.speakerTurns,template:STYLES[style].template,sourceTitle:context.sourceContext?.sourcePostTitle,sourceCaption:context.sourceContext?.sourcePostText});
       hooks=suggestions.hooks;
       await this.prisma.quickReframe.update({where:{id},data:{hooks:json(hooks),postCopy:json({...emptyPostCopy(),...record(q.postCopy),
         version:(Number(record(q.postCopy).version)||0)+1,contentUnderstandingVersion:INTELLIGENCE_VERSION,
@@ -497,25 +508,26 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       project=await this.editor.phase3Command(q.editProjectId,'GENERATE_CAPTIONS',{revision:project.revision}) as unknown as typeof project;
     }
     const captions=mode!=='OFF'&&project.elements.some(e=>e.type==='SUBTITLE');
-    const compiled=quickStyleOneCommands({project:{id:q.editProjectId,revision:project.revision,settings:project.settings},assets:project.assets as never,elements:project.elements as never},{hookText,captions,replaceHook:typeof body.hookText==='string'});
-    const applied=await this.retryWriteConflict(()=>this.editor.applyAssistantBundle(q.editProjectId,project.revision,{proposalId:randomUUID(),summary:'Apply StyleOne to the confirmed crop',userMessage:'Quick Reframe: StyleOne',commands:compiled.commands,actor:'TEMPLATE_ACTION',onInvalid:'ABORT'}));
-    await this.prisma.quickReframe.update({where:{id},data:{editPath:'STYLEONE',status:'STYLED',message:'StyleOne applied',error:null}});
+    const compiled=quickStyleCommands({project:{id:q.editProjectId,revision:project.revision,settings:project.settings},assets:project.assets as never,elements:project.elements as never},{hookText,captions,replaceHook:typeof body.hookText==='string'},style);
+    const applied=await this.retryWriteConflict(()=>this.editor.applyAssistantBundle(q.editProjectId,project.revision,{proposalId:randomUUID(),summary:`Apply ${name} to the confirmed crop`,userMessage:`Quick Reframe: ${name}`,commands:compiled.commands,actor:'TEMPLATE_ACTION',onInvalid:'ABORT'}));
+    await this.prisma.quickReframe.update({where:{id},data:{editPath:style,status:'STYLED',message:`${name} applied`,error:null}});
     return this.start(id,'PREVIEW',{revision:(applied as {project:{revision:number}}).project.revision});
   }
   /**
    * Chooses Manual editing. The composition is kept unless the user explicitly asks to remove
-   * StyleOne, which is itself one undoable canonical revision.
+   * the applied style, which is itself one undoable canonical revision.
    */
   async choosePath(id:string,body:Record<string,unknown>){
     const q=await this.load(id);this.assertEditable(q,body.revision);
-    if(body.path!=='MANUAL')throw new BadRequestException('Use Apply StyleOne to choose StyleOne.');
-    if(body.removeStyleOne===true&&this.view(q).styleOneApplied){
+    if(body.path!=='MANUAL')throw new BadRequestException('Use Apply StyleOne or Apply StyleTwo to choose a style.');
+    const applied=this.view(q);
+    if((body.removeStyleOne===true||body.removeStyle===true)&&(applied.styleOneApplied||applied.styleTwoApplied)){
       const hooks=q.editProject.elements.filter(e=>e.type==='TEXT'&&record(e.properties).presetRole==='HOOK');
       const commands=[...hooks.map(e=>({kind:'ELEMENT' as const,action:'REMOVE_ELEMENT',payload:{elementId:e.id}})),
         ...(q.editProject.elements.some(e=>e.type==='SUBTITLE')?[{kind:'ELEMENT' as const,action:'REMOVE_CAPTIONS',payload:{}}]:[]),
         {kind:'ELEMENT' as const,action:'SET_VIDEO_FRAMING',payload:{mode:'FIT',scope:'ALL_VIDEO_SEGMENTS'}},
-        {kind:'SETTINGS' as const,action:'QUICK_REFRAME_MANUAL',payload:{resolvedVisualLayout:null,selectedPreset:null,aspectRatio:'SOURCE',reframePolicy:'SOURCE',zoomPolicy:'OFF',subtitlePolicy:'OFF',gradingPolicy:'NONE',quickReframeStyleOne:false}}];
-      await this.retryWriteConflict(()=>this.editor.applyAssistantBundle(q.editProjectId,q.editProject.revision,{proposalId:randomUUID(),summary:'Remove StyleOne and edit manually',userMessage:'Quick Reframe: Manual editing',commands,actor:'TEMPLATE_ACTION',onInvalid:'ABORT'}));
+        {kind:'SETTINGS' as const,action:'QUICK_REFRAME_MANUAL',payload:{resolvedVisualLayout:null,selectedPreset:null,aspectRatio:'SOURCE',reframePolicy:'SOURCE',zoomPolicy:'OFF',subtitlePolicy:'OFF',gradingPolicy:'NONE',quickReframeStyleOne:false,quickReframeStyleTwo:false}}];
+      await this.retryWriteConflict(()=>this.editor.applyAssistantBundle(q.editProjectId,q.editProject.revision,{proposalId:randomUUID(),summary:`Remove ${applied.styleTwoApplied?'StyleTwo':'StyleOne'} and edit manually`,userMessage:'Quick Reframe: Manual editing',commands,actor:'TEMPLATE_ACTION',onInvalid:'ABORT'}));
     }
     await this.prisma.quickReframe.update({where:{id},data:{editPath:'MANUAL',status:'EDITING',message:'Manual editing',error:null}});
     // Hook suggestions and the caption decision need the local AI pass; the editor opens meanwhile.

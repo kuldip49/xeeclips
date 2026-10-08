@@ -22,6 +22,7 @@ export class QuickReframeController {
   @Post(':id/post-copy') generateCopy(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.generateCopy(id,body);}
   @Put(':id/post-copy') saveCopy(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.saveCopy(id,body);}
   @Post(':id/styleone') styleOne(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.applyStyleOne(id,body);}
+  @Post(':id/styletwo') styleTwo(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.applyStyleTwo(id,body);}
   @Post(':id/path') path(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.choosePath(id,body);}
   @Put(':id/plan') save(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.save(id,body);}
   @Post(':id/preview') preview(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.start(id,'PREVIEW',body);}

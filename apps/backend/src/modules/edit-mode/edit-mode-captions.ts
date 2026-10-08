@@ -132,7 +132,16 @@ export function generateCaptions(input: {
 
 function build(words: TimedWord[], map: TimelineMap, maxWords: number): CaptionSpec[] {
   const captions: CaptionSpec[] = [];
-  for (const phrase of buildSubtitlePhrases(words, maxWords)) {
+  for (const grouped of buildSubtitlePhrases(words, maxWords)) {
+    // A phrase whose first word was cut away (the clip opens just after a trimmed lead-in such as "So", or a
+    // cut lands inside it) has no timeline position of its own. Caption the words that remain instead of
+    // losing the whole phrase: otherwise the first spoken words of the clip would have no caption.
+    let phrase = grouped;
+    if (!map.toTimeline(grouped.start).length) {
+      const kept = grouped.words.filter((word) => map.toTimeline(word.start).length);
+      if (!kept.length) continue;
+      phrase = { ...grouped, words: kept, start: kept[0].start };
+    }
     const text = sanitizeSubtitleText(phrase.words.map((word) => word.text).join(' '))
       .slice(0, MAX_CAPTION_LENGTH);
     if (!text) continue;

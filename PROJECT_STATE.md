@@ -4,6 +4,18 @@ Last updated: 2026-10-08
 
 ## Milestones
 
+- StyleTwo + Quick Reframe StyleTwo (2026-10-08, committed to `main`, NOT deployed): third automatic look
+  `AUTOMATIC_3_STYLE_TWO` (white 1080×1920 canvas, fixed 1080×860 window at y=630, Roboto Condensed headline, Anton captions
+  on rounded `#B0321B` plates). Shares StyleOne's phrase-timed 2.5–5 s emphasis-zoom policy (`ZOOM_AUTOMATIC_2`; the compiler
+  drops zooms the renderer would reject; StyleZero keeps its legacy punches). First-class Quick Reframe path
+  `POST /quick-reframe/:id/styletwo` (`STYLETWO` edit path, crop stays the canonical input, fitted whole, no second crop).
+  Shared boundary QA now treats a tight-gap verbless fragment as a continuation and pre-rolls to its setup (bounded per hop),
+  also at discovery. Fixed: StyleTwo export text size was rounded (caption wrapped differently from the preview); captions
+  dropped the phrase straddling a trimmed clip start. Real-pipeline FUNCTIONAL acceptance on `file (19).mp4` (has padding and
+  burned-in text, so NOT clean-source certification). Report and evidence: `docs/style-two-local-acceptance.md`.
+  Known, unrelated: ONLINE discovery on that file yields no candidate the legacy zoom face-lock validator accepts (StyleZero
+  included) and the shot detector misses a close-up→wide cut; in-shot two-speaker switching is uncertified.
+
 - Quick Reframe social copy (2026-10-07): public Instagram/X post context retained; Caption & Hashtags
   in StyleOne, Manual and Export; five grounded caption styles, original rewrite, three editable
   hashtag sets, independent persisted copy/version and History copy actions. Account + per-request

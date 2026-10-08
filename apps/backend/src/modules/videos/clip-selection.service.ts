@@ -253,6 +253,8 @@ export function resolveGenerationStyleReadiness(
     return { status: style.status as string, playbackUrl, applied, skipped, error: recordedError, legacy: false };
   }
   if (expectedTemplate) {
+    // StyleTwo was introduced after template provenance became mandatory.
+    if (expectedTemplate === 'AUTOMATIC_3_STYLE_TWO') return fail('StyleTwo export is missing its template identity.');
     // Pre-template-contract style state: no templateId was ever recorded on it, but the
     // GeneratedClip row's own requestedTemplate/effectiveTemplate/templateId are already
     // required (by the `ordered` filter in getResults) to agree with the current request's
@@ -388,7 +390,7 @@ export class ClipSelectionService {
   async buildGenerationSettings(generation: GenerationRequest | null | undefined, aiMode = 'FALLBACK_ONLY') {
     if (!generation) return null;
     const requestedTemplate = generation.templateId ??
-      (generation.look === 'AUTOMATIC_2' || generation.look === AUTOMATIC_RAW ? generation.look : 'AUTOMATIC_1');
+      (generation.look === 'AUTOMATIC_2' || generation.look === 'AUTOMATIC_3_STYLE_TWO' || generation.look === AUTOMATIC_RAW ? generation.look : 'AUTOMATIC_1');
     const raw = requestedTemplate === AUTOMATIC_RAW;
     if (requestedTemplate !== 'AUTOMATIC_1' && !raw && !fullTemplate(requestedTemplate)) {
       throw new BadRequestException(`Unknown generation template "${requestedTemplate}"`);

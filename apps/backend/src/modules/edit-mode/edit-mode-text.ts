@@ -92,6 +92,8 @@ export const MAX_CAPTION_LENGTH = 500;
  * the faces fontconfig was already falling back to for them.
  */
 export const EDIT_MODE_FONT_FAMILIES: Record<string, string> = {
+  'Roboto Condensed, sans-serif': 'Roboto Condensed',
+  'Anton, sans-serif': 'Anton',
   'Arial, sans-serif': 'Noto Sans',
   'Georgia, serif': 'Noto Serif',
   monospace: 'Noto Sans Mono',
@@ -481,7 +483,7 @@ export const textStylePreset = (id: string): TextStylePreset => {
 };
 
 export type CaptionStylePresetId = 'CLEAN' | 'BOLD_HIGHLIGHT' | 'MINIMAL' | 'PODCAST' |
-  'SOCIAL' | 'EDUCATIONAL' | 'HIGH_CONTRAST';
+  'SOCIAL' | 'EDUCATIONAL' | 'HIGH_CONTRAST' | 'STYLE_TWO';
 
 export type CaptionStylePreset = {
   id: CaptionStylePresetId;
@@ -496,6 +498,14 @@ export type CaptionStylePreset = {
 export const DEFAULT_CAPTION_BOX: TextBox = { x: 0.1, y: 0.73, width: 0.8, height: 0.13 };
 
 export const CAPTION_STYLE_PRESETS: CaptionStylePreset[] = [
+  { id: 'STYLE_TWO', label: 'StyleTwo', description: 'White condensed phrases in a rounded red box.',
+    box: { x: 36 / 1080, y: 1275 / 1920, width: 1008 / 1080, height: 192 / 1920 },
+    style: { fontFamily: 'Anton, sans-serif', fontSize: 52.5, fontWeight: 400, color: '#ffffff',
+      textAlign: 'center', stroke: { enabled: true, color: '#000000', width: .8 },
+      shadow: { enabled: true, color: '#000000', opacity: .8, blur: 0, offsetX: 1, offsetY: 2 },
+      background: { enabled: true, color: '#B0321B', opacity: 1, padding: 15, radius: 15 },
+      letterSpacing: 0, lineSpacing: 1.05, uppercase: true,
+      activeWord: { enabled: false, color: '#ffffff' } } },
   { id: 'CLEAN', label: 'Clean', description: 'White on a soft dark plate.',
     box: { ...DEFAULT_CAPTION_BOX },
     style: { fontFamily: 'Inter, sans-serif', fontSize: 40, fontWeight: 700, color: '#ffffff',

@@ -56,6 +56,7 @@ async function main(){
   assert.deepEqual(styled.plan.canvas.visualLayout.videoFrame,preview.plan.canvas.visualLayout.videoFrame);
   const graph=styled.args[styled.args.indexOf('-filter_complex')+1];
   assert.match(graph,/color=c=#000000:s=1080x1920/);assert.match(graph,/overlay=0:610/);
+  assert.match(graph,/drawbox=x=0:y=0:w=iw:h=ih:color=black@1:t=fill/,'StyleOne fitted-window bars are black');
   // Whole-frame FIT inside the fixed window: the confirmed crop is never cropped a second time.
   assert.equal(styled.evidence.fitExpression.length>0,true);assert.match(graph,/scale=1080:700:force_original_aspect_ratio=decrease/);
   assert.match(styled.ass,/EB Garamond/);

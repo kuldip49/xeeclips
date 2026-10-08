@@ -535,7 +535,7 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
         requestedTemplate: clip.requestedTemplate });
       const link = generatedClipEditLink(editProject);
       const style = clip.requestedTemplate ?? clip.templateId;
-      const requiresStyle = style === 'AUTOMATIC_2';
+      const requiresStyle = style === 'AUTOMATIC_2' || style === 'AUTOMATIC_3_STYLE_TWO';
       const styledReady = !!styleState?.playbackUrl &&
         ['EXPORT_READY', 'READY', 'LEGACY_STYLE_READY'].includes(styleState.status);
       const aiMode = json?.effectiveAiMode ?? clip.video.processingJobs[0]?.aiMode ?? '';
@@ -549,7 +549,7 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
         duration: Math.round(clip.duration * 10) / 10,
         thumbnailUrl: clip.thumbnailObjectKey ? `/generated-clips/${clip.id}/poster` : null,
         playbackUrl: requiresStyle ? styledReady ? styleState!.playbackUrl : null : `/generated-clips/${clip.id}/file`,
-        style: style === 'AUTOMATIC_2' ? 'StyleOne' : style === 'AUTOMATIC_RAW' ||
+        style: style === 'AUTOMATIC_3_STYLE_TWO' ? 'StyleTwo' : style === 'AUTOMATIC_2' ? 'StyleOne' : style === 'AUTOMATIC_RAW' ||
           clip.processingType === 'NORMAL_CLIPS' ? 'No Edit' : 'StyleZero',
         mode: String(aiMode) === 'ONLINE' ? 'XeePro' : 'XeeFree',
         status: requiresStyle && !styledReady

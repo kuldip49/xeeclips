@@ -4,7 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Check, Download, History, Loader2, Play } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { isProcessing, mediaUrl, renderReframe, type ReframeSession } from '@/lib/quick-reframe-api';
+import { isProcessing, mediaUrl, QUICK_STYLE_LABEL, renderReframe, type ReframeSession } from '@/lib/quick-reframe-api';
 import { cn } from '@/lib/utils';
 import { PostCopyPanel } from './post-copy-panel';
 
@@ -53,7 +53,7 @@ export function ExportStep({ session, onSession, onBack, onError }: {
         <dt className='text-muted-foreground'>Aspect ratio</dt><dd className='text-right'>{out ? ratio(out.width, out.height) : '—'}</dd>
         <dt className='text-muted-foreground'>Format</dt><dd className='text-right'>MP4 · H.264{session.hasAudio ? ' · AAC' : ''}</dd>
         <dt className='text-muted-foreground'>Estimated size</dt><dd className='text-right tabular-nums'>{out ? `≈ ${estimateMb(out.width, out.height, session.duration, session.hasAudio)} MB` : '—'}</dd>
-        <dt className='text-muted-foreground'>Editing path</dt><dd className='text-right'>{session.editPath === 'STYLEONE' ? 'StyleOne' : 'Manual'}</dd>
+        <dt className='text-muted-foreground'>Editing path</dt><dd className='text-right'>{QUICK_STYLE_LABEL[session.editPath ?? 'MANUAL']}</dd>
       </dl>
       <fieldset className='grid gap-2'><legend className='mb-2 text-xs font-semibold uppercase tracking-wider text-soft'>Quality</legend>
         <div className='grid grid-cols-2 gap-2'>{([720, 1080] as const).map((q) => <button key={q} type='button' aria-pressed={quality === q} disabled={processing}

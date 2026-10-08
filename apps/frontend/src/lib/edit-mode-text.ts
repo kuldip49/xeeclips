@@ -73,7 +73,9 @@ export const EDIT_MODE_FONTS: Array<{ id: string; label: string; css: string }> 
   { id: 'EB Garamond, serif', label: 'EB Garamond', css: '"EB Garamond", Garamond, Georgia, serif' },
   { id: 'Arial, sans-serif', label: 'Sans (legacy)', css: 'Arial, Helvetica, sans-serif' },
   { id: 'Georgia, serif', label: 'Serif (legacy)', css: 'Georgia, "Times New Roman", serif' },
-  { id: 'monospace', label: 'Mono (legacy)', css: 'ui-monospace, "Noto Sans Mono", monospace' }
+  { id: 'monospace', label: 'Mono (legacy)', css: 'ui-monospace, "Noto Sans Mono", monospace' },
+  { id: 'Roboto Condensed, sans-serif', label: 'Roboto Condensed Bold', css: '"Roboto Condensed", sans-serif' },
+  { id: 'Anton, sans-serif', label: 'Anton', css: 'Anton, sans-serif' }
 ];
 
 export const EDIT_MODE_FONT_IDS = EDIT_MODE_FONTS.map((font) => font.id);
@@ -342,7 +344,7 @@ export function canHighlightWords(properties: Record<string, unknown>) {
 export type TextStylePresetId = 'BASIC' | 'HEADING' | 'HOOK' | 'TITLE' | 'SUBTITLE' |
   'LOWER_THIRD' | 'CTA' | 'BOLD_SOCIAL' | 'MINIMAL';
 export type CaptionStylePresetId = 'CLEAN' | 'BOLD_HIGHLIGHT' | 'MINIMAL' | 'PODCAST' |
-  'SOCIAL' | 'EDUCATIONAL' | 'HIGH_CONTRAST';
+  'SOCIAL' | 'EDUCATIONAL' | 'HIGH_CONTRAST' | 'STYLE_TWO';
 
 export type StylePresetSummary<Id extends string> = {
   id: Id; label: string; description: string;
@@ -424,6 +426,14 @@ export const TEXT_STYLE_PRESETS: Array<StylePresetSummary<TextStylePresetId>> = 
 export const DEFAULT_CAPTION_BOX = { x: 0.1, y: 0.73, width: 0.8, height: 0.13 };
 
 export const CAPTION_STYLE_PRESETS: Array<StylePresetSummary<CaptionStylePresetId>> = [
+  { id: 'STYLE_TWO', label: 'StyleTwo', description: 'White condensed phrases in a rounded red box.',
+    box: { x: 36 / 1080, y: 1275 / 1920, width: 1008 / 1080, height: 192 / 1920 },
+    style: { fontFamily: 'Anton, sans-serif', fontSize: 52.5, fontWeight: 400, color: '#ffffff',
+      textAlign: 'center', stroke: { enabled: true, color: '#000000', width: .8 },
+      shadow: { enabled: true, color: '#000000', opacity: .8, blur: 0, offsetX: 1, offsetY: 2 },
+      background: { enabled: true, color: '#B0321B', opacity: 1, padding: 15, radius: 15 },
+      letterSpacing: 0, lineSpacing: 1.05, uppercase: true,
+      activeWord: { enabled: false, color: '#ffffff' } } },
   { id: 'CLEAN', label: 'Clean', description: 'White on a soft dark plate.',
     box: { ...DEFAULT_CAPTION_BOX },
     style: { fontFamily: 'Inter, sans-serif', fontSize: 40, fontWeight: 700, color: '#ffffff',

@@ -73,8 +73,10 @@ export function GenerationSetup({ videoId, catalog, savedStyles, choices, onChan
   // Plain cuts with nothing else chosen are exactly the source frame.
   const previewStyle = choices.look === 'NORMAL' && !resolved?.styled ? null : resolved;
   const looks = [...BASE_LOOKS.map((look) => ({ value: look.value as string, title: look.title, description: look.description })),
-    ...(catalog?.templates ?? []).filter((template) => template.id === 'AUTOMATIC_2')
-      .map((template) => ({ value: template.id, title: 'StyleOne', description: 'Editorial black canvas, serif headline and red highlights.' })),
+    ...(catalog?.templates ?? []).filter((template) => template.id === 'AUTOMATIC_2' || template.id === 'AUTOMATIC_3_STYLE_TWO')
+      .map((template) => ({ value: template.id, title: template.id === 'AUTOMATIC_2' ? 'StyleOne' : 'StyleTwo',
+        description: template.id === 'AUTOMATIC_2' ? 'Editorial black canvas, serif headline and red highlights.'
+          : 'White canvas, condensed headline and red boxed captions.' })),
     { value: RAW_LOOK.value as string, title: RAW_LOOK.title, description: RAW_LOOK.description }];
   const intent = resolution?.interpreted.intent;
   const derived = choices.reference?.derivedStyle;

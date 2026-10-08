@@ -42,6 +42,7 @@ import { estimateTextWidth } from '../../editing/text-layout';
 import { readTextStyle, resolveEditModeFont } from '../edit-mode-text';
 import { AUTOMATIC_2_STREET3_LAYOUT } from '../styles/automatic-2-street3-layout';
 import type { RenderCanvas, RenderTextOverlay } from './edit-mode-render.types';
+import { styleTwoAss } from './style-two-ass';
 
 export { EDIT_MODE_FONT_FAMILIES, resolveEditModeFont } from '../edit-mode-text';
 
@@ -253,7 +254,8 @@ export function buildEditModeAss(canvas: RenderCanvas,
   overlays: RenderTextOverlay[]): AssBuildResult {
   const lines = [
     '[Script Info]', 'ScriptType: v4.00+', `PlayResX: ${canvas.width}`,
-    `PlayResY: ${canvas.height}`, 'ScaledBorderAndShadow: yes', 'WrapStyle: 2', '',
+    `PlayResY: ${canvas.height}`, 'ScaledBorderAndShadow: yes', 'WrapStyle: 2',
+    ...(canvas.visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO' ? ['YCbCr Matrix: None'] : []), '',
     '[V4+ Styles]',
     'Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,' +
       'Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,' +
@@ -262,11 +264,23 @@ export function buildEditModeAss(canvas: RenderCanvas,
   const events: string[] = [];
   const overflowed: string[] = [];
   const parityNotes: string[] = [];
+  if (canvas.visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO') lines.push(
+    'Style: StyleTwoVector,Arial,20,&H00FFFFFF,&H00FFFFFF,&H00000000,&HFF000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1');
   const ordered = [...overlays].sort((left, right) => left.zIndex - right.zIndex ||
     left.startSec - right.startSec);
 
   ordered.forEach((raw, index) => {
     const overlay = withStyleDefaults(raw);
+    if (canvas.visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO') {
+      const vector = styleTwoAss(overlay, canvas.width, toAssColor);
+      if (vector) {
+        events.push(...vector.events);
+        if (vector.overflow) overflowed.push(overlay.elementId);
+        if (vector.fallback) parityNotes.push(`${overlay.elementId}: non-Latin/emoji glyphs use platform font fallback; their appearance can differ.`);
+        if (vector.truncated) parityNotes.push(`${overlay.elementId}: the long headline is displayed with an ellipsis at the minimum size; saved wording is retained.`);
+        return;
+      }
+    }
     const text = sanitizeSubtitleText(overlay.content.replace(/\r?\n/gu, ' '));
     if (!text) return;
     const styleName = `Edit${index}`;

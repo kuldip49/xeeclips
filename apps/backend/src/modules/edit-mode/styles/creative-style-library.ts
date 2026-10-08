@@ -10,6 +10,7 @@
 // `supported: false` and a note, never silently faked.
 
 import { AUTOMATIC_2_STREET3_LAYOUT as STREET3 } from './automatic-2-street3-layout';
+import { STYLE_TWO as TWO, STYLE_TWO_ID } from '@ai-content-platform/shared/style-two.cjs';
 
 export const STYLE_CATEGORIES = ['HOOK', 'CAPTIONS', 'TEXT', 'COLOR', 'ZOOM', 'FRAMING', 'AUDIO',
   'BACKGROUND', 'OVERLAY'] as const;
@@ -39,7 +40,7 @@ export type AudioSpec = { musicVolume?: number; ducking?: 'LIGHT' | 'MEDIUM' | '
   sourceVolume?: number; muteMusic?: boolean };
 export type BackgroundSpec = { layout: 'FILL' | 'FIT'; fitBackground?: 'BLUR' | 'BLACK' | 'WHITE';
   hookY?: number; captionY?: number; videoScale?: number;
-  composition?: 'STREET_EDITORIAL' };
+  composition?: 'STREET_EDITORIAL' | 'STYLE_TWO' };
 export type OverlaySpec = { logoPosition: string; logoOpacity?: number };
 
 export type StyleSpec = CaptionSpec | HookSpec | TextSpec | ColorSpec | ZoomSpec | FramingSpec |
@@ -57,6 +58,10 @@ const c = (id: string, category: StyleCategory, name: string, description: strin
 
 // ------------------------------------------------------------------ HOOK (10)
 const HOOKS: ComponentStyle[] = [
+  c('HOOK_STYLE_TWO', 'HOOK', 'StyleTwo headline', 'Heavy condensed black headline on white.',
+    { textStyle: 'HEADING', fontFamily: TWO.hookFont, fontSize: TWO.hookSize, fontWeight: 700,
+      color: '#000000', singleColor: true, noStroke: true, persistent: true,
+      uppercase: false, writing: 'KEEP', plate: 'none', position: 'TOP' }),
   c('HOOK_MINIMAL_QUESTION', 'HOOK', 'Minimal Question', 'Short question, clean small type.',
     { textStyle: 'HEADING', fontSize: 46, writing: 'QUESTION', position: 'UPPER', plate: 'none' }),
   c('HOOK_BOLD_QUESTION', 'HOOK', 'Bold Question', 'Loud question on a solid plate.',
@@ -92,6 +97,9 @@ const HOOKS: ComponentStyle[] = [
 
 // -------------------------------------------------------------- CAPTIONS (20)
 const CAPTIONS: ComponentStyle[] = [
+  c('CAP_STYLE_TWO', 'CAPTIONS', 'StyleTwo red captions', 'White condensed phrase in a rounded red box.',
+    { preset: 'STYLE_TWO', fontFamily: TWO.captionFont, fontSize: TWO.captionSize,
+      uppercase: true, activeWord: false }),
   c('CAP_CLEAN_LOWER_THIRD', 'CAPTIONS', 'Clean lower-third', 'White on a soft plate, low.', { preset: 'CLEAN', y: 0.76 }),
   c('CAP_BOLD_SOCIAL', 'CAPTIONS', 'Bold social', 'Heavy outlined social captions.', { preset: 'BOLD_HIGHLIGHT', activeWord: false }),
   c('CAP_YELLOW_ACTIVE', 'CAPTIONS', 'Yellow active word', 'White captions, the spoken word in yellow.',
@@ -228,6 +236,8 @@ const AUDIOS: ComponentStyle[] = [
 
 // ------------------------------------------------------------ BACKGROUND (8)
 const BACKGROUNDS: ComponentStyle[] = [
+  c('BG_STYLE_TWO', 'BACKGROUND', 'StyleTwo white composition', 'Fixed measured footage window and white lower area.',
+    { layout: 'FILL', fitBackground: 'WHITE', composition: 'STYLE_TWO' }),
   c('BG_FULL_FRAME', 'BACKGROUND', 'Full frame', 'Video fills the frame.', { layout: 'FILL' }),
   c('BG_BLURRED', 'BACKGROUND', 'Blurred', 'Whole frame over a blurred copy of itself.', { layout: 'FIT', fitBackground: 'BLUR' }),
   c('BG_BLACK', 'BACKGROUND', 'Black', 'Whole frame on black.', { layout: 'FIT', fitBackground: 'BLACK' }),
@@ -262,7 +272,7 @@ export const componentStyle = (id: string | null | undefined) => (id ? BY_ID.get
 export const componentStylesFor = (category: StyleCategory) =>
   COMPONENT_STYLES.filter((style) => style.category === category);
 
-// ------------------------------------------------------- FULL TEMPLATES (20)
+// ------------------------------------------------------- FULL TEMPLATES
 export type FullTemplate = { id: string; name: string; description: string; aspectRatio: '9:16';
   components: Partial<Record<StyleCategory, string>> };
 const t = (id: string, name: string, description: string,
@@ -270,6 +280,14 @@ const t = (id: string, name: string, description: string,
   ({ id, name, description, aspectRatio: '9:16', components });
 
 export const FULL_TEMPLATES: FullTemplate[] = [
+  // Presentation plus the shared phrase-timed zoom policy. It retains the base edit's audio, grade
+  // and framing policy, but NOT the base edit's zoom events: those are Automatic 1's short punch-ins
+  // (about 1.1-1.6 s). ZOOM_AUTOMATIC_2 is the one canonical emphasis policy of the stable pipeline
+  // (2.5-5 s phrase-timed, face-safe, spaced, replacing inherited punches), so StyleTwo consumes
+  // that decision instead of carrying a second zoom policy.
+  t(STYLE_TWO_ID, 'StyleTwo', 'White canvas, condensed black headline and red boxed captions',
+    { HOOK: 'HOOK_STYLE_TWO', CAPTIONS: 'CAP_STYLE_TWO', BACKGROUND: 'BG_STYLE_TWO',
+      ZOOM: 'ZOOM_AUTOMATIC_2' }),
   // Automatic 2 keeps Automatic 1's timeline/cuts/grade/audio, but deliberately
   // overrides camera and zoom policy. Those are canonical editable settings and
   // EFFECT elements, not a forked renderer.
@@ -327,8 +345,8 @@ export function creativeCatalog() {
   return {
     categories: STYLE_CATEGORIES,
     // Legacy definitions remain resolvable for old projects/requests, but new
-    // generation exposes only the second automatic style beside Automatic 1.
-    templates: FULL_TEMPLATES.filter((template) => template.id === 'AUTOMATIC_2'),
+    // generation exposes StyleOne and StyleTwo beside the default StyleZero.
+    templates: FULL_TEMPLATES.filter((template) => template.id === 'AUTOMATIC_2' || template.id === STYLE_TWO_ID),
     components: Object.fromEntries(STYLE_CATEGORIES.map((category) => [category,
       componentStylesFor(category)])) as Record<StyleCategory, ComponentStyle[]>
   };

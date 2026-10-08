@@ -32,10 +32,10 @@ const els = (p, type) => p.elements.filter((e) => e.type === type);
 
 function catalogTests() {
   console.log('-- Step 10 catalogue');
-  ok('legacy templates remain available internally and Automatic 2 is added', lib.FULL_TEMPLATES.length === 21 &&
+  ok('legacy templates remain available internally and automatic styles are added', lib.FULL_TEMPLATES.length === 22 &&
     lib.fullTemplate('PODCAST_PRO') && lib.fullTemplate('AUTOMATIC_2'));
-  ok('new-generation catalogue exposes only Automatic 2',
-    JSON.stringify(lib.creativeCatalog().templates.map((item) => item.id)) === '["AUTOMATIC_2"]');
+  ok('new-generation catalogue exposes StyleOne and StyleTwo',
+    JSON.stringify(lib.creativeCatalog().templates.map((item) => item.id).sort()) === '["AUTOMATIC_2","AUTOMATIC_3_STYLE_TWO"]');
   const automatic2 = lib.fullTemplate('AUTOMATIC_2');
   // 2026-10-03: no supporting line under the picture (TEXT component removed by request).
   ok('Automatic 2 keeps its style identity and owns only framing/zoom behaviour', automatic2 &&

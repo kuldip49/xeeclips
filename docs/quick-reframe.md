@@ -9,7 +9,7 @@ alter the manual crop, video subtitle layer or rendering pipeline.
 
 ## The guided sequence
 
-**Import → 1. Crop (manual) → Done Cropping → 2. Choose Style → 3. Edit (StyleOne or Manual) → 4. Export → History.**
+**Import → 1. Crop (manual) → Done Cropping → 2. Choose Style → 3. Edit (StyleOne, StyleTwo or Manual) → 4. Export → History.**
 
 `/quick-reframe` is a separate top-navigation page with its own concurrency-one BullMQ queue. It owns
 a canonical `EditProject` but never creates Video, ProcessingJob, ClipCandidate or GeneratedClip rows,
@@ -26,7 +26,7 @@ already-reachable steps are links back; nothing is lost by going back.
 | Upload / import | `PLAYBACK` job: ffprobe, an H.264/AAC browser copy only when the codec needs one, and the whole-frame draft. Deterministic. |
 | 1. Crop | Nothing. No detection, OCR, face/subject tracking, suggestion or correction. The API refuses `/analyze`, `/styleone` and `/hooks` until the crop is confirmed; `/suggest` no longer exists. |
 | Done Cropping | `PREPARE` job: the exact rectangle is baked into SOURCE with FFmpeg (deterministic). |
-| Choose StyleOne / Manual | `ANALYZE` job (local only: faces/OCR on the uploaded frame, Whisper). Cached on the ORIGINAL asset, so a re-crop never repeats it. |
+| Choose StyleOne / StyleTwo / Manual | `ANALYZE` job (local only: faces/OCR on the uploaded frame, Whisper). Cached on the ORIGINAL asset, so a re-crop never repeats it. |
 | Hooks | Local generator; OpenAI only with the per-request consent box. |
 
 The caption situation (`subtitleState`) is reported **for the confirmed crop**: burned-in captions the user
@@ -90,7 +90,7 @@ back to this step instead of stacking a second crop.
 
 ### 2. Choose Style (`choose-step.tsx`)
 
-"How would you like to edit your video?" offers **Apply StyleOne** and **Open Manual Editor**. Neither
+"How would you like to edit your video?" offers **Apply StyleOne**, **Apply StyleTwo** and **Open Manual Editor**. Neither
 runs before the crop is confirmed (the API refuses StyleOne, analysis, hooks, preview and export until then),
 and no AI result is shown here: the screen only says that the speech and captions are checked after the
 choice. Choosing either starts the `ANALYZE` job when the upload has not been analyzed yet; for StyleOne the
@@ -98,6 +98,20 @@ job keeps the operation claimed and continues straight into StyleOne and its pre
 sees an idle gap. Switching from Manual to StyleOne asks first; switching
 from StyleOne to Manual offers "Keep StyleOne and edit" or "Start from the cropped video". Each switch is
 one canonical revision, so editor Undo restores the previous composition.
+
+### 3a-2. StyleTwo (same step component, `POST /quick-reframe/:id/styletwo`)
+
+StyleTwo (`AUTOMATIC_3_STYLE_TWO`, white canvas, Roboto Condensed headline, Anton captions on rounded red plates) is a
+first-class server-side path next to StyleOne: the edit-path enum is `STYLEONE | STYLETWO | MANUAL`, the chooser has
+its own card, the session reports `styleTwoApplied`, and `applyStyle` / `quickStyleCommands` / `quickComposeRender`
+take the style (`QuickStyle`). It reuses the exact StyleOne mechanics: `resolveCreativeStyle(AUTOMATIC_3_STYLE_TWO)` →
+`compileCreativeStyle` → `applyAssistantBundle` as ONE undoable revision, the baked crop stays the canonical
+input and is fitted whole inside StyleTwo's 1080×860 window at y=630 (FIT; black window matte exactly as the editor preview
+paints it), `ZOOM_NONE` and a static whole-frame camera (Quick Reframe never zooms or re-crops), and the same preview /
+export / History / Re-edit / Edit More flow. The editor's EditTemplate library (`POST /edit-mode/projects/:id/template/apply`)
+is not a style route: it resolves built-in/user EditTemplate ids only and answers 404 "Template not found" for any automatic
+style id (StyleOne's included). Tests: `scripts/test-quick-reframe-styletwo.cjs` (deterministic) and the live
+isolated-stack flow documented in `docs/style-two-local-acceptance.md`.
 
 ### 3a. StyleOne (`styleone-step.tsx`)
 
@@ -161,7 +175,7 @@ when the project changes.
 
 ### History
 
-Quick Reframe History cards show the **Quick Reframe** label, the editing path (StyleOne/Manual),
+Quick Reframe History cards show the **Quick Reframe** label, the editing path (StyleOne/StyleTwo/Manual),
 preview, **Re-edit** (StyleOne result screen, or the editor for Manual), **Export**, **Download** and
 **Delete** (removes exports, previews, the cropped source and the original). Reopening restores the crop,
 hook, captions and adjustments because they are all canonical state.
