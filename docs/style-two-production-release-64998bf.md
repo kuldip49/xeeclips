@@ -1,10 +1,10 @@
 # StyleTwo production release attempt — 2026-10-08
 
-**Original release result: acceptance failed and 64998bf was rolled back. Follow-up crop fix: local acceptance passed; production rollout is pending strict idle checks.**
+**Current result: crop-parity fix `f9ad75cd74e7b38e65d2a50e2b04e47200cf172c` passed local and live production acceptance, is deployed, and processing is reopened. Original attempts `64998bf` and `6f4a927` were rolled back. The historical attempt details below are retained; the final release results appear in the follow-up section.**
 
 Commit `64998bfc8fa9284af8f0527ec52e7a77b383cc7e` was verified on `kuldip49/xeeclips` `origin/main`, built, and temporarily deployed behind a processing maintenance gate. The final manual-crop editor comparison exposed a reproducible preview/export position mismatch. The previous backend and static frontend were restored. Public health/routes pass, maintenance is off, disposable production QA accounts/content are removed, and all pre-existing database fingerprints match the pre-deployment snapshot. No application source or approved design was changed during this deployment attempt.
 
-## Versions and production safety
+## Original 64998bf attempt: versions and production safety
 
 | Item | Observed result |
 |---|---|
@@ -148,7 +148,46 @@ Fresh deterministic rerenders again match all **1,762 video / 2,744 audio frames
 
 Additional application files: `edit-mode-render-plan.ts` and `edit-mode-render.types.ts` carry a StyleTwo-only baked-source flag; `edit-mode-filtergraph.ts`, `edit-preview.tsx` and shared crop geometry consume the native FIT box. Additional evidence: `storage/style-two-crop-parity/{final-fit-deltas,tiny-before-deltas,tiny-fixed-deltas,fit-quick-deltas,fit-roundtrip-deltas,fit-regressions}.json`; actual MP4s, shared geometry, compiler arguments, preview/export pairs and differences remain in that directory.
 
-The original production runtime independently stopped during the continuation. Docker startup failed on inaccessible stale UNIX socket entries. Only two verified socket-only runtime directories were quarantined intact; no configuration, secrets, database or volume storage was moved. The existing containers and public API recovered (200). A new 27,687,508-byte backup restored successfully into isolated PostgreSQL; SHA-256 `9bf91f243ea6ead69d1be773a0bde96dcd23a4db594baa04dd5de039c361579a`. Original counts: 3 users, 175 clips, 100 edit projects, 4 Quick Reframes, 26 total credits. Follow-up deployment still requires two strict idle checks and live production acceptance; final versions/results will be recorded after those checks.
+The original production runtime independently stopped during the continuation. Docker startup failed on inaccessible stale UNIX socket entries. Only two verified socket-only runtime directories were quarantined intact; no configuration, secrets, database or volume storage was moved. The existing containers and public API recovered (200), and original data fingerprints matched exactly. A new 27,687,508-byte backup restored successfully into isolated PostgreSQL; SHA-256 `9bf91f243ea6ead69d1be773a0bde96dcd23a4db594baa04dd5de039c361579a`. Original counts: 3 users, 175 clips, 100 edit projects, 4 Quick Reframes, 26 total credits.
+
+### Final production release — passed and reopened
+
+Release commit **`f9ad75cd74e7b38e65d2a50e2b04e47200cf172c`** was committed and pushed to `kuldip49/xeeclips` `main` after local acceptance. Running backend: `xeeclip-backend:f9ad75c`, image `sha256:bdd5dcbc97eabbe41dd6fa9538abde850baff67e3c5070bd83aa5e223bf8c437`, with the exact OCI Git revision label. Final clean static Cloudflare frontend: **`7ae450dd-b588-4127-8866-5233406375cf`**. Static hosting/asset routing is preserved; no SSR was introduced.
+
+Maintenance was verified before cutover; new public processing mutations were rejected before reservations. Login, reads, media, History and admin remained allowed, with processing exceptions restricted to two exact disposable QA sessions. Two strict idle snapshots passed before restart. Runtime environment, persistent mounts and original record fingerprints were checked after restart. One operational checker compared the same bind source as Windows `C:/projects/.../assets/music` and Docker Desktop's `/run/desktop/mnt/host/c/projects/.../assets/music`; it conservatively rolled back. After normalizing only that equivalent host-drive alias, all mount/environment/fingerprint checks passed on the repeated rollout. No application source or mount target was changed to bypass the check.
+
+Actual production canonical-editor frames were captured after reload at **0.5/3/12/25/34 s**, desktop and mobile 375/390 widths, then compared to their real exports. All 30 frames pass the unchanged **2 production-pixel** rollback threshold:
+
+| Live workflow | Desktop max X/Y | 375 viewport | 390 viewport |
+|---|---:|---:|---:|
+| Create → manual crop → StyleTwo | 1 | 2 | 1 |
+| Quick Reframe saved crop → StyleTwo | 1 | 1 | 2 |
+
+The shared serialized geometry matches exactly at every viewport. Quick Reframe retains all 906×1152 already-baked pixels, fits them once into the unchanged window, and performs no second automatic crop. The native window/background and approved hook/caption styling remain intact. The remaining 1–2 px mobile video/screenshot rasterization differences are recorded rather than claimed as zero. **No parity-triggered rollback was required for the final release.**
+
+| Acceptance | Actual result |
+|---|---|
+| Source | Authorized `C:/Users/kuldi/Downloads/file (19).mp4`; same 0–39.1 s clip in all three styles; two main speakers, other people visible. Contains existing headline/padding, so this is functional testing rather than clean-source certification. |
+| Live zoom / speaker switches | 0 rendered zoom events; 0 recorded in-shot speaker switches; 6 camera moves; 147 analyzed samples / 109 with faces; 0 face-safety violations; subject-safety ratio 98.58%. Existing planners unchanged. Accepted local 2.5 s zoom fixture passes crop parity; natural important-phrase zoom and in-shot speaker switching are not certified by this source. |
+| Captions / audio | 26 groups, 112 positive-duration timed words; max start/end discrepancy `7.105427357601002e-15` s against the real SOURCE transcript. Subtitle/overlay bounds pass. Three zero-duration ASR entries remain the pre-existing transcript limitation. Audio lag: StyleTwo/StyleOne −5 ms (correlation 0.99923), StyleZero −21 ms (0.93587). |
+| Create editor | Eight real browser steps pass: History → reopen → hook edit → caption-word correction → crop → Undo → Redo → export → reload. Exact saved crop, typography, plate style and corrected word persist. Revision-7 export matches the captured editor. |
+| Quick Reframe editor / UI | Saved confirmed `(0.08,0.24,0.84,0.60)` crop persists. Hook/caption edits, Undo/Redo, canonical export and reload pass. Current-revision preview regenerated after edits; six chooser/preview/export/History/Re-edit/Edit More UI checks pass. |
+| Cache isolation | Four sequential live requests: StyleTwo → StyleZero → StyleOne → StyleTwo. Three distinct canonical keys; repeated StyleTwo key stable; every delivered identity correct; no foreign-style output. All requests produced new clip IDs, so an actual cache hit is not claimed. |
+| StyleZero / StyleOne regression | Live same-source renders pass; deterministic rerenders each match 1,762 video and 2,744 audio decoded frames. StyleTwo no-crop also unchanged; baked Quick Reframe old/new FIT outputs match 1,173 video / 1,829 audio frames. |
+| Auth / ownership / UI | Secure browser login/logout and revocation, cross-account source/clip/editor/Quick Reframe/History ownership, ordinary-user admin denial, owner admin, authenticated byte-range media, desktop/mobile routes and no browser errors pass. |
+| Credits / Ask AI | 11 settled QA outputs consume 11 credits from the disposable 16-credit allowance, leaving 5. A corrected checker's redundant pre-pass produced one extra QA render; its concurrent duplicate was rejected with 409. Zero-credit Create/Quick Reframe add no reservation. Consent denial, scoped mute proposal/apply/Undo and caption-correction persistence pass. Existing-user credits unchanged. |
+| XeePro | Real ONLINE analysis and No Edit generation pass. The separate known edited-candidate face-lock rejection remains outside this crop-only fix. |
+| Cleanup / reopening | Exactly two QA accounts and their owned media/projects/Quick Reframes/sessions/usage removed; audit entries retained; all original fingerprint checks pass; no live QA work/reservations. Original tunnel restored and validated, proxy stopped, revoked QA credentials removed. Clean frontend published, notice absent at 375/390, public/local health 200, normal unauthenticated processing returns 401 rather than maintenance 503. |
+
+Final evidence is under `storage/style-two-fit-parity-release/`: `production-create-deltas.json`, `production-quick-deltas.json`, `source19-editor-results.json`, `qr-editor-roundtrip.json`, `qr-ui-check.json`, `cache-isolation.json`, `source19-mechanical-results.json`, `auth-ownership.json`, `credits-askai.json`, `pro-state.json`, `cleanup-result.json`, `runtime-recovery.json`, `backend-deployed.json`, `backup-restore.json`, `final-health.json`, and `acceptance-gates.json`.
+
+- [StyleTwo final cropped output](C:/projects/ai-content-platform/storage/style-two-fit-parity-release/source19-editor-final.mp4)
+- [Three-style comparison](C:/projects/ai-content-platform/storage/style-two-fit-parity-release/production-styles-comparison.png)
+- [Corrected word and crop: preview/export pair](C:/projects/ai-content-platform/storage/style-two-fit-parity-release/parity-create/exact-t0.5-pair.png)
+- [Manual crop preview/export pair at 25 s](C:/projects/ai-content-platform/storage/style-two-fit-parity-release/parity-create/exact-t25-pair.png)
+- [Manual crop overlay](C:/projects/ai-content-platform/storage/style-two-fit-parity-release/parity-create/exact-t25-overlay.png)
+- [Manual crop difference](C:/projects/ai-content-platform/storage/style-two-fit-parity-release/parity-create/exact-t25-difference.png)
+- [Quick Reframe preview/export pair](C:/projects/ai-content-platform/storage/style-two-fit-parity-release/parity-quick/exact-t25-pair.png)
 
 ## Evidence
 
@@ -171,6 +210,6 @@ Local files under `C:/projects/ai-content-platform/storage/style-two-release-649
 
 ## Remaining limitations
 
-Full clean-source visual certification and in-shot two-speaker switching certification remain pending. Legacy ONLINE edited-clip face-lock rejection and the missed close-up→wide shot cut are separate issues; neither validator nor shared shot detection was changed during this deployment. Production XeePro smoke exercised ONLINE analysis + No Edit, not the known failing edited-candidate case. This source produced no rendered StyleTwo emphasis zoom, and its transcript has three zero-duration ASR entries. The new manual-crop preview mismatch above blocks releasing this exact commit.
+Full clean-source visual certification and in-shot two-speaker switching certification remain pending. Legacy ONLINE edited-clip face-lock rejection and the missed close-up→wide shot cut are separate issues; neither validator nor shared shot detection was changed during this deployment. Production XeePro smoke exercised ONLINE analysis + No Edit, not the known failing edited-candidate case. This source produced no rendered StyleTwo emphasis zoom, and its transcript has three zero-duration ASR entries. The former manual-crop and tiny Quick Reframe parity blockers are fixed; the final live release passes the strict 2 px gate.
 
-The original `64998bf` and first crop fix `6f4a927` were both rolled back after their respective production parity failures. The native FIT follow-up above is the current release candidate. No force push, destructive Git command, production DB repair, or volume deletion was performed.
+The original `64998bf` and first crop fix `6f4a927` were both rolled back after their respective production parity failures. Native FIT follow-up `f9ad75c` is now deployed and reopened after passing live acceptance. No force push, destructive Git command, production DB repair, or volume deletion was performed.

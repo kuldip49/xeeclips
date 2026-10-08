@@ -4,7 +4,7 @@ Last updated: 2026-10-08
 
 ## Milestones
 
-- StyleTwo + Quick Reframe StyleTwo (2026-10-08, committed to `main`, NOT deployed): third automatic look
+- StyleTwo + Quick Reframe StyleTwo (2026-10-08, deployed `f9ad75c` from `main`): third automatic look
   `AUTOMATIC_3_STYLE_TWO` (white 1080×1920 canvas, fixed 1080×860 window at y=630, Roboto Condensed headline, Anton captions
   on rounded `#B0321B` plates). Shares StyleOne's phrase-timed 2.5–5 s emphasis-zoom policy (`ZOOM_AUTOMATIC_2`; the compiler
   drops zooms the renderer would reject; StyleZero keeps its legacy punches). First-class Quick Reframe path
@@ -24,7 +24,10 @@ Last updated: 2026-10-08
   exact 177×315 production mobile reproduction now passes at 1 px; manual crop cases and round-trips remain ≤2 px.
   StyleZero/StyleOne, StyleTwo no-crop and baked Quick Reframe deterministic video/audio remain unchanged.
   Original Docker runtime recovered from stale socket startup errors without changing volume data; fresh backup restored.
-  Production redeployment pending strict idle gates and live acceptance.
+  Final production acceptance passed: manual crop desktop/375/390 ≤1/2/1 px; Quick Reframe ≤1/1/2 px.
+  Real editor round-trips, four live cache replays, ownership/auth, credits/Ask AI, XeePro ONLINE + No Edit pass.
+  Disposable QA accounts/content removed; original data/session/credit fingerprints preserved; maintenance off, health 200.
+  Static Cloudflare frontend `7ae450dd-b588-4127-8866-5233406375cf`; approved StyleTwo design unchanged.
 
 - Quick Reframe social copy (2026-10-07): public Instagram/X post context retained; Caption & Hashtags
   in StyleOne, Manual and Export; five grounded caption styles, original rewrite, three editable
