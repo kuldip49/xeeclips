@@ -15,6 +15,7 @@ import { colorAdjustmentFilter } from './edit-mode-color-filter';
 import { atempoChain, overlayTransformFilter,
   segmentTransformFilter } from './edit-mode-segment-filter';
 import { zoomAnchorExpression, zoomEnvelopeExpression } from './edit-mode-zoom';
+import { styleTwoCropTransform, styleTwoCropFilter, styleTwoCropCameraFilter } from '@ai-content-platform/shared/style-two-crop.cjs';
 
 export type GraphInput = {
   /** Trusted, validated source-local preparation (Quick Reframe masks). Absent for existing editors. */
@@ -95,6 +96,11 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
 
   // --- Video timeline -------------------------------------------------------
   const segments = plan.videoSegments;
+  const canonicalCrops = segments.map(segment =>
+    plan.canvas.visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO'
+      ? styleTwoCropTransform(plan.canvas.sourceWidth, plan.canvas.sourceHeight, segment) : null);
+  const manualStyleTwo = canonicalCrops.some(Boolean);
+  const cameraFilter = manualStyleTwo ? styleTwoCropCameraFilter(input.cameraFilter) : input.cameraFilter;
   const n = segments.length;
   const manualCropExpression = segments.filter((segment) => segment.crop.left > 0 ||
     segment.crop.right > 0 || segment.crop.top > 0 || segment.crop.bottom > 0)
@@ -124,8 +130,9 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
     // timeline still produces byte-identical FFmpeg arguments.
     const retime = Math.abs(speed - 1) < 1e-6
       ? 'PTS-STARTPTS' : `(PTS-STARTPTS)/${speed.toFixed(6)}`;
-    const transform = segmentTransformFilter(segment, plan.canvas.sourceWidth,
-      plan.canvas.sourceHeight);
+    const canonicalCrop = canonicalCrops[i];
+    const transform = canonicalCrop ? styleTwoCropFilter(canonicalCrop)
+      : segmentTransformFilter(segment, plan.canvas.sourceWidth, plan.canvas.sourceHeight);
     // Colour first, on the source pixels, then geometry - the order the preview
     // composes in, and the order that keeps crop/rotation/pad black genuinely
     // black. See edit-mode-color-filter.ts for the full rationale.
@@ -204,10 +211,11 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
     composited = 'vinfofitted';
   }
   if (useLayoutFrame && layoutFrame) {
-    const frameWidth = Math.max(2, Math.round(layoutFrame.width * width));
-    const frameHeight = Math.max(2, Math.round(layoutFrame.height * height));
-    const frameX = Math.round(layoutFrame.x * width);
-    const frameY = Math.round(layoutFrame.y * height);
+    const cropWindow = canonicalCrops.find(Boolean)?.target;
+    const frameWidth = cropWindow?.width ?? Math.max(2, Math.round(layoutFrame.width * width));
+    const frameHeight = cropWindow?.height ?? Math.max(2, Math.round(layoutFrame.height * height));
+    const frameX = cropWindow?.x ?? Math.round(layoutFrame.x * width);
+    const frameY = cropWindow?.y ?? Math.round(layoutFrame.y * height);
     const background = plan.canvas.visualLayout?.background.color ?? '#000000';
     const cropBackdrop = manualCropExpression && plan.canvas.visualLayout?.editingProfile !== 'AUTOMATIC_3_STYLE_TWO'
       ? `,drawbox=x=0:y=0:w=iw:h=ih:color=black@1:t=fill:enable='${manualCropExpression}'`
@@ -219,7 +227,7 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
     // Automatic 2's camera is already solved at the card aspect. Keep zoompan
     // at that same size; emitting a 9:16 zoom surface here would create a
     // second centre crop and cut the speaker's forehead again.
-    graph.push(`[vlayoutsrc]${input.cameraFilter}${zoomFor(frameWidth, frameHeight)},` +
+    graph.push(`[vlayoutsrc]${cameraFilter}${zoomFor(frameWidth, frameHeight)},` +
       `scale=${frameWidth}:${frameHeight}:` +
       `force_original_aspect_ratio=increase,crop=${frameWidth}:${frameHeight}[vlayoutfg]`);
     graph.push(`[vlayoutbg][vlayoutfg]overlay=${frameX}:${frameY}[vlaidout]`);

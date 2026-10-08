@@ -69,7 +69,7 @@
     "test:generation-p0": "npm run build && node scripts/test-unified-generation.cjs",
     "verify:automatic-2": "npm run build && node scripts/verify-automatic-2-render.cjs",
     "test:automatic-2-camera": "npm run build && node scripts/test-automatic-2-camera.cjs",
-    "test:style-two": "npm run build && node scripts/test-style-two.cjs && node scripts/test-style-two-zoom.cjs && node scripts/test-clip-boundary-continuation.cjs && node scripts/test-quick-reframe-styletwo.cjs && node scripts/test-quick-reframe-styleone.cjs",
+    "test:style-two": "npm run build && node scripts/test-style-two.cjs && node scripts/test-style-two-crop.cjs && node scripts/test-style-two-zoom.cjs && node scripts/test-clip-boundary-continuation.cjs && node scripts/test-quick-reframe-styletwo.cjs && node scripts/test-quick-reframe-styleone.cjs",
     "verify:style-two-preview": "node scripts/verify-style-two-preview.cjs",
     "verify:edit-mode-ai": "npm run build && node scripts/verify-edit-mode-ai.cjs",
     "soak:edit-mode-ai": "npm run build && node scripts/soak-edit-mode-ai.cjs"

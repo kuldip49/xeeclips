@@ -1,6 +1,8 @@
 'use client';
 
 import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
+import { styleTwoCropTransform, styleTwoCropCamera, type StyleTwoCropTransform } from '@ai-content-platform/shared/style-two-crop.cjs';
 import { Pause, Play, RotateCw } from 'lucide-react';
 import type { EditAspectRatio, EditAsset, EditElement,
   VisualElementProperties } from '@/lib/edit-mode-types';
@@ -20,6 +22,29 @@ import { layoutFittedFontSize, type FitRegion } from '@/lib/edit-mode-text';
 import { EditCropOverlay } from './edit-crop-overlay';
 
 const clock = (seconds: number) => `${Math.floor(Math.max(0, seconds) / 60)}:${Math.floor(Math.max(0, seconds) % 60).toString().padStart(2, '0')}`;
+
+/** Raster stages match the shared FFmpeg geometry. The source crop/rotation is
+ * clipped before fit/pad and manual scale; camera zoom belongs to the outer
+ * frame, so it cannot change the manual crop's origin. Percentages here only
+ * project already-resolved pixel boxes into the responsive preview. */
+function StyleTwoCropSurface({ geometry: g, frameStyle, children }: {
+  geometry: StyleTwoCropTransform; frameStyle: CSSProperties; children: ReactNode;
+}) {
+  const box = (b: { x: number; y: number; width: number; height: number }) => ({
+    left: `${b.x / g.source.width * 100}%`, top: `${b.y / g.source.height * 100}%`,
+    width: `${b.width / g.source.width * 100}%`, height: `${b.height / g.source.height * 100}%` });
+  return <div data-testid='style-two-crop-surface' className='absolute overflow-hidden bg-black'
+    style={frameStyle} data-crop-transform={JSON.stringify(g)}>
+    <div className='absolute overflow-hidden bg-black' style={box(g.scaled)}>
+      <div className='absolute overflow-hidden bg-black' style={box(g.fitted)}>
+        <div className='absolute inset-0' style={{ transformOrigin: 'center', transform:
+          `rotate(${g.rotation}deg) scale(${g.flipH ? -1 : 1}, ${g.flipV ? -1 : 1})` }}>
+          {children}
+        </div>
+      </div>
+    </div>
+  </div>;
+}
 export type EditPreviewHandle = { toggle: () => void; pause: () => void };
 export type CropEditorState = { rect: CropRect; preset: CropAspectPreset; sourceAspect: number;
   sourceWidth: number; sourceHeight: number; sourceAssetId?: string;
@@ -331,8 +356,14 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   // BLUR (a blurred copy of the frame) would need a second synced video, so it is shown
   // as a neutral backdrop and labelled rather than drawn as black (which it never is).
   const fitted = !previewFill(aspectRatio, reframePolicy, mapping?.element.properties);
-  const card = resolvedVisualLayout?.videoFrame?.mode === 'CARD'
+  const resolvedCard = resolvedVisualLayout?.videoFrame?.mode === 'CARD'
     ? resolvedVisualLayout.videoFrame : null;
+  const cropGeometry = styleTwo && !cropEditor && mapping && resolvedCard
+    ? styleTwoCropTransform(mediaAsset?.width || source.width || 1080,
+      mediaAsset?.height || source.height || 1920, mapping.element.properties) : null;
+  const card = cropGeometry && resolvedCard ? { ...resolvedCard,
+    x: cropGeometry.target.x / 1080, y: cropGeometry.target.y / 1920,
+    width: cropGeometry.target.width / 1080, height: cropGeometry.target.height / 1920 } : resolvedCard;
   const cameraPath = resolvedVisualLayout?.cameraPath ?? [];
   // FIT framing inside a card window (Quick Reframe StyleOne): the whole camera region is fitted inside
   // the window with black bars, exactly like the renderer's scale+pad. It is never stretched to fill.
@@ -357,7 +388,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     const size = layoutFittedFontSize(element.properties, region);
     return size === null ? element : { ...element, properties: { ...element.properties, fontSize: size } };
   };
-  const cameraCrop = (() => {
+  const rawCameraCrop = (() => {
     if (styleTwo && cardFit) return styleTwoFrame === 'INFORMATION_FIT' && resolvedVisualLayout?.informationCrop
       ? resolvedVisualLayout.informationCrop : { x: 0, y: 0, w: 1, h: 1 };
     if (!cameraPath.length) return null;
@@ -371,6 +402,8 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
       y: left.y + (right.y - left.y) * mix, w: left.w + (right.w - left.w) * mix,
       h: left.h + (right.h - left.h) * mix };
   })();
+  const cameraCrop = rawCameraCrop && cropGeometry && !cardFit
+    ? styleTwoCropCamera(rawCameraCrop, cropGeometry) : rawCameraCrop;
   const zoom = elements.find((element) => element.type === 'EFFECT' &&
     element.properties.effect === 'ZOOM' && element.properties.enabled !== false &&
     currentPlayheadSec >= element.startTime &&
@@ -396,6 +429,16 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   const combinedTransform = [zoomState.scale > 1.0001
     ? `scale(${zoomState.scale.toFixed(5)})` : '', segmentTransform.transform ?? '']
     .filter(Boolean).join(' ') || undefined;
+  const canonicalCrop = cameraCrop ? cropGeometry : null;
+  const canonicalFrameStyle: CSSProperties = card && cameraCrop ? (() => {
+    const { x, y, width, height } = pictureRect(cameraCrop)!;
+    return { left: `${(x - cameraCrop.x / cameraCrop.w * width) * 100}%`,
+      top: `${(y - cameraCrop.y / cameraCrop.h * height) * 100}%`,
+      width: `${width / cameraCrop.w * 100}%`, height: `${height / cameraCrop.h * 100}%`,
+      transform: zoomState.scale > 1.0001 ? `scale(${zoomState.scale})` : undefined,
+      transformOrigin: `${(cameraCrop.x + zoomState.x * cameraCrop.w) * 100}% ` +
+        `${(cameraCrop.y + zoomState.y * cameraCrop.h) * 100}%` };
+  })() : {};
   // A card layout (StyleOne) is a black canvas: a fitted picture inside its window has black bars.
   const cardColor = styleTwo ? resolvedVisualLayout?.background?.color ?? '#FFFFFF' : '#000000';
   const backdrop = card ? cardColor : fitBackground === 'BLACK' ? '#000000' : fitBackground === 'WHITE' ? '#ffffff' : '#262b36';
@@ -436,14 +479,20 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
           applies them, so what is framed is what is exported. */}
       {styleTwo && card && <span aria-hidden className='pointer-events-none absolute bg-black'
         style={{ left: `${card.x * 100}%`, top: `${card.y * 100}%`, width: `${card.width * 100}%`, height: `${card.height * 100}%` }} />}
-      <video key={`${mediaAsset?.id}-${mediaAttempt}`} ref={video}
+      {(() => { const surface = <video key={`${mediaAsset?.id}-${mediaAttempt}`} ref={video}
         src={mediaAsset ? `${editAssetPlaybackUrl(mediaAsset.id)}${mediaAttempt ? `?retry=${mediaAttempt}` : ''}` : undefined}
         poster={source.sourceVideoId ? editSourcePosterUrl(source.sourceVideoId) : undefined}
         data-testid='edit-preview-video' data-media-state={mediaState}
         className={`absolute ${cropEditor ? 'max-w-none object-fill' : `${card ? '' : 'inset-0 h-full w-full'} ${
           previewFill(aspectRatio, reframePolicy, mapping?.element.properties)
             ? 'object-cover' : 'object-contain'}`}`} preload='metadata'
-        style={cropTransform
+        style={canonicalCrop ? {
+          left: `${-canonicalCrop.rect.x / canonicalCrop.rect.width * 100}%`,
+          top: `${-canonicalCrop.rect.y / canonicalCrop.rect.height * 100}%`,
+          width: `${canonicalCrop.source.width / canonicalCrop.rect.width * 100}%`,
+          height: `${canonicalCrop.source.height / canonicalCrop.rect.height * 100}%`,
+          maxWidth: 'none', maxHeight: 'none', objectFit: 'fill', ...colorStyle
+        } : cropTransform
           ? { left: cropTransform.translateX, top: cropTransform.translateY,
             width: cropTransform.sourceWidth * cropTransform.scale,
             height: cropTransform.sourceHeight * cropTransform.scale, maxWidth: 'none', ...colorStyle }
@@ -472,7 +521,13 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
         onLoadedData={() => setMediaState('READY')} onCanPlay={() => setMediaState('READY')}
         onError={() => { setPlaying(false); setMediaState('FAILED'); }}
         onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
-        onTimeUpdate={(event) => timeUpdate(event.currentTarget)} />
+        onTimeUpdate={(event) => timeUpdate(event.currentTarget)} />;
+        return canonicalCrop ? <div className='absolute left-0 top-0' style={{ width: 1080, height: 1920,
+          transformOrigin: '0 0', transform: `scale(${canvasSize.width / 1080}, ${canvasSize.height / 1920})` }}>
+          <StyleTwoCropSurface geometry={canonicalCrop} frameStyle={canonicalFrameStyle}>
+            {surface}</StyleTwoCropSurface>
+        </div> : surface;
+      })()}
       {card && <>
         <span aria-hidden className='pointer-events-none absolute left-0 top-0 w-full bg-black'
           style={{ height: `${card.y * 100}%`, background: cardColor }} />

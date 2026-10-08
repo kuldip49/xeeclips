@@ -15,6 +15,12 @@ Last updated: 2026-10-08
   burned-in text, so NOT clean-source certification). Report and evidence: `docs/style-two-local-acceptance.md`.
   Known, unrelated: ONLINE discovery on that file yields no candidate the legacy zoom face-lock validator accepts (StyleZero
   included) and the shot detector misses a close-up→wide cut; in-shot two-speaker switching is uncertified.
+  Production rollout of `64998bf` was attempted behind maintenance and rolled back on 2026-10-08: manual editor crop
+  introduces a confirmed preview/export subject-position offset. Previous backend/static frontend restored, maintenance off,
+  QA accounts/content removed, original data/session/credit fingerprints preserved. See `docs/style-two-production-release-64998bf.md`.
+  Follow-up: StyleTwo-only manual crop now shares integer source geometry and camera rounding between React and FFmpeg;
+  exact failing crop and seven crop shapes pass at ≤1 production pixel on desktop/375/390, including crop + zoom/rotation.
+  Deterministic StyleZero/StyleOne and StyleTwo no-crop video/audio baselines unchanged. Production redeployment pending idle gates.
 
 - Quick Reframe social copy (2026-10-07): public Instagram/X post context retained; Caption & Hashtags
   in StyleOne, Manual and Export; five grounded caption styles, original rewrite, three editable
