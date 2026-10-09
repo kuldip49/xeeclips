@@ -152,7 +152,8 @@ compute boundary.
 
 - For the EOF/stronger-tail work and exact continuation point, read
   `docs/ending-v3-continuation.md`. The old positive Delivery excerpt ends inside its payoff word and must fail; the intact-source
-  QA success uses the intact source and meets the handoff's commit/push gate. Production remains untouched.
+  QA success uses the intact source; local fix `974669c` is committed. Automatic approval review blocked the main push until
+  explicit approval of that input distinction. Production remains untouched.
 
 - `PROJECT_STATE.md` is the authoritative, continuously-updated record of what's implemented per milestone,
   including exact field semantics (e.g. how `shotBoundaries` intervals are half-open) and what's explicitly

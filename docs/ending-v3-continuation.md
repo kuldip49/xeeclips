@@ -2,7 +2,7 @@
 
 Date: 2026-10-09. Working branch: `main`, inherited HEAD `738e763` (two commits ahead of `origin/main`).
 
-**The commit/push gate passes on the intact Delivery source. Production remains untouched.**
+**Intact Delivery passes isolated QA; the local fix is committed. Push is blocked by automatic approval review.**
 The previous excerpt is a genuine cut through the payoff word and must be rejected. An intact excerpt recovered from the
 original recording passes fresh processing and export, preserving the repaired start and existing hook. These are different
 inputs; the recovered input's success is not a successful rerun of the physically truncated fixture.
@@ -150,9 +150,11 @@ It was not applied. The runner was executed again, and the final saved report co
 
 ## 12–14. Commit and release decision
 
-The handoff authorizes a local commit and normal push to main when Delivery, semantics, captions, negative controls and
-regressions pass. Those conditions are met by the intact-source run. The final handoff reports the resulting commit hash;
-the inherited commits `feb1506` and `738e763` are included. No production deployment is authorized or performed.
+Local fix commit: `974669c` (`Fix EOF acoustic safety and bounded lexical tail escalation`), following inherited commits
+`feb1506` and `738e763`. The intact-source run meets the functional conditions in the handoff's commit/push rule. However,
+automatic approval review rejected the normal push to main because the original fixture still fails and explicit user
+authorization to push based on a different intact input was not established. The rejected push did not execute. Explicit
+approval is required before retrying it; no workaround will be used. No production deployment is authorized or performed.
 
 The previous positive Delivery fixture is physically invalid and still fails by design. The intact-source run demonstrates
 the corrected input, fresh ASR, semantic gate, captions and retained hook. Recovering the complete word from the original
