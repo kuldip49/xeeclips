@@ -43,6 +43,10 @@ async function wait(load, done, label, ms = 900000) {
   console.error('uploaded', video.id);
   const analysis = await wait(() => api(`/videos/${video.id}/clip-analysis`), s => s.analysisStatus === 'READY', 'analysis');
   console.error('analysis READY');
+  if (process.env.QA_ANALYSIS_ONLY === '1') {   // negative controls: the boundary decision is in the analysis, no render needed
+    writeFileSync(resolve(out, 'run-summary.json'), JSON.stringify({ videoId: video.id, analysisStatus: analysis.analysisStatus }, null, 2));
+    console.log(JSON.stringify({ videoId: video.id, analysisStatus: analysis.analysisStatus })); return;
+  }
   const selectionStarted = Date.now();
   await api(`/videos/${video.id}/clip-selection`, 'POST', { requestedClipCount: 1, outputStyle: 'AI_EDITED',
     generation: { look: 'AUTOMATIC_3_STYLE_TWO', brief: '', components: {}, templateId: 'AUTOMATIC_3_STYLE_TWO', referenceId: null } });

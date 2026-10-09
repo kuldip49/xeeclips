@@ -128,3 +128,42 @@ unjustified line: ASR word ends are only good to about 100 ms (the same audio ga
 voice energy continuing to about 27.60 s), so the distance to the end of the audio cannot separate a finished word from a cut one.
 The margin test is removed. With nothing after the word the closure is `SOURCE_END` whatever the margin, and acceptance still needs
 doubt about the token itself, one bounded tail pass, and the semantic reviewer.
+
+## 8. Isolated pre-production acceptance (xeeqa, :4100) - result: NOT READY
+
+Images built from clean exports of the commits (file-by-file identical to git, line endings normalised): AI service
+`xeeclip-ai-service:aba8bb6` (`sha256:2aaee9e2...`, contains `/tail-transcriptions`; AI-service code is identical in `feb1506`) and backend
+`xeeclip-backend:feb1506` (`sha256:6fb769be...`). The stack used its own PostgreSQL, Redis, MinIO and a copy of the models volume; production was
+not touched (user/video counts unchanged).
+
+Real pipeline, Delivery source, fresh ASR, ONLINE, EDITED_CLIPS, StyleTwo, one clip:
+
+| Stage | Result |
+| --- | --- |
+| Fresh ASR | ended `It turns out it looks more like a metal...`, final word p = 0.32 (production shape reproduced) |
+| Uncertainty | `FINAL_WORD_CONFIDENCE_LOW`, `_DROP`, `TRAILING_ELLIPSIS` detected |
+| Tail pass | exactly one `/tail-transcriptions` call, 8 s window, second reading `man` (p 0.46), earlier words 100% matched -> `ASR_CONFLICTING`, closure `SOURCE_END`, deterministic gate accepted |
+| First run | gate stopped before any tail call: the word ended 30 ms before the end of the audio and a 40 ms margin rule treated that as a cut. Margin rule removed (`feb1506`) |
+| Live semantic reviewer | **rejected** at analysis and at export: the clip "ends with the unresolved phrase 'it looks more like a metal...'". No clip delivered. Not forced. |
+
+Reviewer diagnostics (real `gpt-5.6-luna`, exact fresh-ASR words, 3-5 runs per target):
+
+* correct word `Manuel.` -> accepted 12/12 across all four candidate targets;
+* `metal...` -> rejected 12/12 across the pipeline's targets; accepted 5/5 only for a 27.65 target that the pipeline does not use;
+* the verdict flips with a 30 ms change of `target.end`, and an evidence-rich `endingNote` (confidence, second-pass reading, match rate) flipped different targets
+  (saved as `.real-qa-preview/ending-qa/enriched-reviewer-note.patch`, not applied). The reviewer judges meaning: with `metal` the payoff is unintelligible, which
+  is also what StyleTwo captions would show. This is a payoff-intelligibility problem, not a boundary-logic problem.
+
+Existing hook `Two name checks in a delivery fraud talk, and neither one matches` against the fresh-ASR transcript (real creative service, `existingHook`): ACCEPTED and
+preserved, 2/2; grounding 88, misleading risk 12, naturalness 75, context 86, clickability 86 (human-reviewed control: 86 / 16 / 78 / 91 / 84).
+
+Negative controls (same audio cut at four points, full isolated stack):
+
+| Control | ASR heard | Result |
+| --- | --- | --- |
+| cut at 18.95 s, "...really is" | `is...` | rejected (`DANGLING_CLAUSE`) |
+| cut at 19.10 s, mid-word "Greg" | `is...` (fragment dropped by ASR) | rejected (`DANGLING_CLAUSE`) |
+| cut at 15.76 s, "...you order" | `order.` | passed the strict gate (terminal full stop), rejected by the semantic reviewer |
+| cut at 17.00 s, mid "oh," | `something, you know.` (final word p = 0.067) | **delivered**: strict path trusts a full stop on a hallucinated token. Old and new gates behave identically. |
+
+The last row is a pre-existing gap, not caused by this work: a terminally punctuated but near-zero-confidence final word at the end of the audio is trusted.
