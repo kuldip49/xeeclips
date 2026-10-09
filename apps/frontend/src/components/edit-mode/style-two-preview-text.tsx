@@ -33,7 +33,10 @@ export function StyleTwoPreviewText({ element }: { element: Pick<EditElement, 'p
     <path d={paths} fill={style.color} stroke={style.stroke.enabled ? style.stroke.color : 'none'}
       strokeWidth={style.stroke.enabled ? style.stroke.width * 3.6 : 0}
       paintOrder='stroke fill' />
-    {layout.fallback.map((g, i) => <text key={i} x={g.x} y={g.y} fontSize={g.size}
-      fontFamily={style.fontFamily} fill={style.color}>{g.text}</text>)}
+    {/* Native fallback fonts use em sizing in SVG and line-height sizing in libass.
+        Match the measured native Hindi fallback and keep the whole shaped line together. */}
+    {layout.fallback.map((g, i) => <text key={i} x={g.x} y={g.anchor ? g.y - g.size * .15 : g.y}
+      fontSize={g.anchor ? g.size * .74 : g.size}
+      fontFamily={style.fontFamily} textAnchor={g.anchor} fill={style.color}>{g.text}</text>)}
   </svg>;
 }

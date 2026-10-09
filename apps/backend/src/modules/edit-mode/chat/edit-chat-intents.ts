@@ -298,7 +298,7 @@ function detectOp(text: string, original: string, subject: Subject,
     if (/\bcurio|intrigu|question|mystery|open loop|tease|teaser\b/u.test(text)) {
       return { family: 'HOOK', mode: 'CURIOSITY' };
     }
-    if (/\bstronger|better|punch|catch|compelling|more engaging|hits? harder|improve|bolder claim|clickier\b/u
+    if (/\bstronger|better|punch|catch|compelling|more engaging|more interesting|clickbait|hits? harder|improve|bolder claim|clickier\b/u
       .test(text) && !/\b(?:font|bold(?:er)?\b(?! claim)|weight)\b/u.test(text)) {
       return { family: 'HOOK', mode: 'STRONGER' };
     }

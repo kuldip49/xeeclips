@@ -52,7 +52,7 @@ export const generatePostCopy=(s:ReframeSession,options:{externalAiAuthorized:bo
 export const savePostCopy=(s:ReframeSession,selectedCaption:string,selectedHashtags:string[],captionStyle?:string)=>reframeRequest(`/${s.id}/post-copy`,'PUT',{revision:s.revision,version:s.postCopy?.version??0,selectedCaption,selectedHashtags,...(captionStyle?{captionStyle}:{})});
 export const renderReframe=(s:ReframeSession,kind:'preview'|'export',resolution:720|1080=1080)=>reframeRequest(`/${s.id}/${kind}`,'POST',{revision:s.revision,resolution});
 export const reframeForProject=(editProjectId:string)=>reframeRequest(`/project/${encodeURIComponent(editProjectId)}`);
-export const HOOK_CATEGORY_LABEL:Record<ReframeHookCategory,string>={BOLD:'Bold',CURIOSITY:'Curiosity',QUESTION:'Question',CONTRARIAN:'Contrarian',EMOTIONAL:'Emotional',PROFESSIONAL:'Professional',SARCASTIC:'Sarcastic',HUMOROUS:'Humorous',AUTHORITY:'Authority / Insight',STORY:'Story',WARNING:'Warning'};
+export const HOOK_CATEGORY_LABEL:Record<ReframeHookCategory,string>={BOLD:'Bold',CURIOSITY:'Curiosity',QUESTION:'Question',CONTRARIAN:'Contrarian',EMOTIONAL:'Emotional',PROFESSIONAL:'Professional',SARCASTIC:'Sarcastic',HUMOROUS:'Humorous',AUTHORITY:'Authority / Insight',STORY:'Story',WARNING:'Warning',HIDDEN_TRUTH:'Hidden truth',UNEXPECTED_RESULT:'Unexpected result',TENSION:'Tension',CHALLENGE:'Challenge',CONFLICT:'Conflict',MISTAKE:'Mistake',WAIT_UNTIL:'Wait until',MYTH_REALITY:'Myth vs reality',BEFORE_AFTER:'Before / After',REVEAL:'Reveal'};
 export const recommendedHook=(hooks:ReframeHook[])=>hooks.find(h=>h.recommended)??hooks[0];
 /** Where the wizard should open for a session that already exists. */
 export type ReframeStep='crop'|'choose'|'edit'|'export';

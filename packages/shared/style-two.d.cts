@@ -17,7 +17,7 @@ export function usesStyleTwoVectors(style: { fontFamily: string; fontWeight?: nu
 export function styleTwoText(input: Box & { content: string; fontFamily: string; fontSize: number;
   uppercase?: boolean; textAlign?: 'left' | 'center' | 'right'; letterSpacing?: number; lineHeight?: number; boxed?: boolean; padding?: number; radius?: number; scale: number }): {
   size: number; lines: string[]; paths: PathCommand[][];
-  fallback: Array<{ text: string; x: number; y: number; size: number }>;
+  fallback: Array<{ text: string; x: number; y: number; size: number; anchor?: 'start' | 'middle' | 'end' }>;
   plate: Box & { radius: number }; overflow: boolean; truncated: boolean;
 } | null;
 export function svgPath(commands: PathCommand[]): string;

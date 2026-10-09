@@ -22,7 +22,7 @@ import { adaptHashtagsForPlatform, packageConsistency, packagingFor, packagingTe
   platformPackagingPrompt } from './platform-packaging';
 
 export const CLIP_JUDGE_MODEL = LLM_DEFAULT_OPENAI_MODEL;
-export const CLIP_CONTENT_PROMPT_VERSION = 'clip-content-v9-shared-intelligence';
+export const CLIP_CONTENT_PROMPT_VERSION = 'clip-content-v10-semantic-clickability';
 const SCORE_FIELDS = ['hookScore', 'standaloneScore', 'payoffScore', 'flowScore',
   'informationScore', 'retentionScore', 'shareabilityScore'] as const;
 const HOOK_SCORE_FIELDS = ['relevance', 'clarity', 'curiosity', 'payoffAlignment',

@@ -38,7 +38,8 @@ export class EditModeAnalysisService {
 
     const transcript = await this.post('/transcriptions', {
       bucket: location.bucket,
-      object_key: location.objectKey
+      object_key: location.objectKey,
+      task: 'transcribe'
     });
     const rawAnalysis = await this.post('/edit-analysis', {
       bucket: location.bucket,

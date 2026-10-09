@@ -1,4 +1,5 @@
-import { transcriptBoundaryWords } from '../content-intelligence/clip-boundary.service';
+import { ClipBoundaryService, transcriptBoundaryWords } from '../content-intelligence/clip-boundary.service';
+import { LlmRouterService } from './llm-router.service';
 import { isTransientAiServiceFailure, postAiServiceJson, waitForAiServiceHealthy, type AiServiceResponse } from './ai-service-http';
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Job, Worker } from 'bullmq';
@@ -322,6 +323,7 @@ export function speechCoverageForRange(start: number, end: number,
 
 @Injectable()
 export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
+  private readonly boundaryRouter = new LlmRouterService();
   private readonly logger = new Logger(VideoProcessorService.name);
   private readonly connection = new IORedis(
     process.env.REDIS_URL ?? 'redis://localhost:6379',
@@ -434,7 +436,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       try {
         // Not fetch: its hidden 300 s headers timeout failed every source over ~50 minutes.
         response = await postAiServiceJson(`${this.aiServiceUrl}/transcriptions`,
-          { bucket, object_key: objectKey }, this.aiServiceTimeoutMs);
+          { bucket, object_key: objectKey, task: 'transcribe' }, this.aiServiceTimeoutMs);
         this.logger.log('POST completed');
       } catch (error) {
         this.logger.error(`POST failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -856,19 +858,27 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       });
       const transcriptWords = transcriptBoundaryWords(rawTranscriptSegments);
       const boundaryStartedAt = Date.now();
-      const preliminaryShortlist = shortlistBeforeBoundaries.map((candidate) => {
-        const optimized = optimizeClipBoundaries(candidate, transcriptWords);
+      const preliminaryShortlist: ScoredClipCandidate[] = [];
+      for (const candidate of shortlistBeforeBoundaries) {
+        const repaired = await new ClipBoundaryService().repairSemantic(candidate, transcriptWords, this.boundaryRouter,
+          performance.effectiveAiMode === 'ONLINE', { sourceDuration: video.duration ?? undefined });
+        const optimized = { ...optimizeClipBoundaries(candidate, transcriptWords), ...repaired };
         const startTime = round2(optimized.startTime);
         const endTime = round2(optimized.endTime);
-        return { ...candidate, startTime, endTime, duration: round2(endTime - startTime),
+        preliminaryShortlist.push({ ...candidate, startTime, endTime, duration: round2(endTime - startTime),
           transcriptText: optimized.transcriptText,
           rangeKey: `${startTime.toFixed(3)}:${endTime.toFixed(3)}`,
           openingStrength: optimized.openingStrength, endingStrength: optimized.endingStrength,
           leadingTrimmedMs: optimized.leadingTrimmedMs, trailingWasteMs: optimized.trailingWasteMs,
-          reject: candidate.reject || (optimized.evidenceAvailable && !optimized.valid),
+          previousTranscriptContext: transcriptWords.filter(w => w.end <= startTime).slice(-100).map(w => w.text).join(' '),
+          nextTranscriptContext: transcriptWords.filter(w => w.start >= endTime).slice(0, 100).map(w => w.text).join(' '),
+          reject: candidate.reject || !optimized.valid,
           rejectionReason: optimized.evidenceAvailable && !optimized.valid ? optimized.reasons.join(',') : candidate.rejectionReason,
-          evidence: { ...candidate.evidence, boundaryQa: optimized.qa } };
-      });
+          evidence: { ...candidate.evidence, boundaryQa: optimized.qa, boundaryRepair: {
+            version: 2, requestedTargetDuration: candidate.duration, rawStart: candidate.startTime, rawEnd: candidate.endTime,
+            finalStart: startTime, finalEnd: endTime, reasons: optimized.reasons, startAdjustment: optimized.startAdjustment, endAdjustment: optimized.endAdjustment },
+            speakerTurns: rawTranscriptSegments.filter(s => s.end > startTime && s.start < endTime).map(s => ({speaker:s.speaker ?? 'unknown',text:s.text})) } });
+      }
       performance.boundaryOptimizationMs += Date.now() - boundaryStartedAt;
       const visualEnabled = this.visualAnalysisEnabled ||
         (performance.effectiveAiMode === 'FALLBACK_ONLY' &&
@@ -1087,7 +1097,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         heuristicCandidates = heuristicCandidates.map((candidate, index) => ({
           ...(performance.effectiveAiMode === 'FALLBACK_ONLY'
             ? applyDeterministicEvidence(candidate, evidences[index]) : candidate),
-          evidence: evidences[index] as unknown as Record<string, unknown>,
+          evidence: { ...candidate.evidence, ...evidences[index] } as unknown as Record<string, unknown>,
           providerMetadata: multimodalMetadata ? [multimodalMetadata] : [] }));
         await checkpoint(stage, 'COMPLETED', 100);
         overallProgress = Math.max(overallProgress, 88);

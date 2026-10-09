@@ -1,6 +1,7 @@
 import { creativeService, publicCreativePackage } from '../content-intelligence/creative-package.service';
 import type { ReframeContentUnderstanding, ReframeHashtagSet, ReframePostCopy, ReframeSocialCaption, ReframeSocialSource } from '@ai-content-platform/shared';
 import type { LlmRouterService } from '../processing/llm-router.service';
+import type { BoundaryQa } from '../content-intelligence/clip-boundary.service';
 import { createPerformanceTelemetry, performanceContext } from '../processing/performance-telemetry';
 
 export const CAPTION_STYLES = ['Concise', 'Engaging', 'Professional', 'Conversational', 'Bold', 'Humorous'] as const;
@@ -8,7 +9,7 @@ export const HASHTAG_GROUPS = ['Focused', 'Broad', 'Niche'] as const;
 export const REWRITE_DIRECTIONS = ['Shorter', 'More engaging', 'Professional', 'Casual', 'Stronger opening', 'Cleaner CTA'] as const;
 export type PostCopyContext = { transcript: string; visibleText: string; subtitleText: string;
   sourceId?: string; transcriptVersion?: string; visualVersion?: string; sceneType?: string; visualSummary?: string;
-  speakerTurns?:Array<{speaker:string;text:string}>; template?:string;
+  speakerTurns?:Array<{speaker:string;text:string}>; template?:string; boundaryQa?:BoundaryQa;
   sourceContext: ReframeSocialSource | null; selectedHook: string; editingDirection: string; purpose: string; selectedCaption: string };
 const text = (value: unknown, limit = 2200) => typeof value === 'string' ? value.trim().slice(0, limit) : '';
 const normal = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
@@ -49,10 +50,11 @@ export async function generatePostCopy(router: LlmRouterService, context: PostCo
     external, evidence: { sourceId: context.sourceId, transcriptVersion: context.transcriptVersion, visualVersion: context.visualVersion,
       transcript: context.transcript, visibleText: [context.visibleText, context.subtitleText].filter(Boolean).join('\n'),
       visualSummary: context.visualSummary, sceneType: context.sceneType,
-      speakerTurns:context.speakerTurns,template:context.template,
+      speakerTurns:context.speakerTurns,template:context.template,boundaryQa:context.boundaryQa,
       sourceTitle: context.sourceContext?.sourcePostTitle, sourceCaption: context.sourceContext?.sourcePostText,
       sourceHashtags: context.sourceContext?.sourceHashtags, intent: context.purpose },
-    selectedHook: context.selectedHook, direction: [context.editingDirection, rewrite].filter(Boolean).join('; ') }));
+    selectedHook: context.selectedHook, existingHook: context.selectedHook ? {text:context.selectedHook} : undefined,
+    direction: [context.editingDirection, rewrite].filter(Boolean).join('; ') }));
   const u = p.understanding;
   return { generatedCaptions: p.captions, generatedHashtagSets: p.hashtagSets,
     understanding: { topic: u.mainTopic, mainMessage: u.centralClaim, audience: u.audience, tone: u.emotionalAngle,

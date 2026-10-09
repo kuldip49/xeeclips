@@ -14,8 +14,8 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { LlmRouterService } from '../processing/llm-router.service';
-import { chooseBestHook } from '../editing/hook-generator';
-import type { StrictJsonSchema } from '../processing/llm-provider.service';
+import { creativeService } from '../content-intelligence/creative-package.service';
+import { createPerformanceTelemetry, performanceContext } from '../processing/performance-telemetry';
 import { PrismaService } from '../database/prisma.service';
 import { EditModeService } from './edit-mode.service';
 import { validatePresetCommands, type PresetPlan } from './presets/edit-preset-commands';
@@ -25,16 +25,6 @@ import {
   EDIT_PRESETS, editPresetList, isEditPresetId, readEditPresetRun, readEditProjectStyle,
   type EditPresetId
 } from './presets/edit-preset-policy';
-
-const HOOK_SCHEMA: StrictJsonSchema = {
-  type: 'object', additionalProperties: false,
-  required: ['hooks'],
-  properties: {
-    hooks: { type: 'array', minItems: 1, maxItems: 5,
-      items: { type: 'object', additionalProperties: false, required: ['text'],
-        properties: { text: { type: 'string' } } } }
-  }
-};
 
 @Injectable()
 export class EditModePresetService {
@@ -131,8 +121,10 @@ export class EditModePresetService {
       height: asset.height, originalName: asset.originalName
     }));
 
+    const currentHook = elements.find(element => element.type === 'TEXT' &&
+      (element.properties.presetRole === 'HOOK' || element.properties.templateRole === 'HOOK'));
     const hookOverride = await this.llmHook(policy.hookPolicy, evidence.transcriptText,
-      policy.automatic);
+      policy.automatic, currentHook ? String(currentHook.properties.content ?? '') : '');
     const proposal = planPreset({ policy, evidence, elements, assets, currentStyle, previousRun,
       hookOverride });
     // A generated plan is validated before it can reach the canonical layer,
@@ -156,27 +148,16 @@ export class EditModePresetService {
    * deterministic path uses, so an ungrounded or clickbait line is discarded
    * rather than written to the timeline. FALLBACK_ONLY skips this entirely.
    */
-  private async llmHook(hookPolicy: string, transcript: string, automatic: boolean) {
+  private async llmHook(hookPolicy: string, transcript: string, automatic: boolean, currentHook = '') {
     if (!automatic || hookPolicy === 'OFF' || !transcript.trim()) return null;
     if ((process.env.EDIT_MODE_PRESET_LLM_ENABLED ?? 'true').toLowerCase() === 'false') return null;
     if (!this.llm.isAnyConfigured('hookGeneration')) return null;
     const excerpt = transcript.slice(0, 6000);
     try {
-      const result = await this.llm.generate<{ hooks: Array<{ text: string }> }>({
-        role: 'hookGeneration',
-        request: {
-          schemaName: 'edit_mode_preset_hook', schema: HOOK_SCHEMA, role: 'hookGeneration',
-          cacheKey: `edit-mode-preset-hook:${excerpt.length}:${excerpt.slice(0, 120)}`,
-          systemPrompt: 'You write short on-screen headlines for a video edit. Use only facts ' +
-            'stated in the transcript. Never invent names, numbers or claims. No clickbait, no ' +
-            'meta phrasing about "this clip" or "this video". 5 to 12 words each.',
-          userPrompt: `Transcript:\n${excerpt}\n\nReturn up to five candidate headlines.`,
-          options: { temperature: 0.4, maxOutputTokens: 400 }
-        }
-      });
-      const candidates = (result.data?.hooks ?? []).map((hook) => String(hook?.text ?? ''))
-        .filter(Boolean);
-      const best = chooseBestHook(candidates, { transcript, title: '', synopsis: '' }).best;
+      const result = await performanceContext.run(createPerformanceTelemetry('ONLINE'), () => creativeService(this.llm)
+        .create({ external: true, hooksOnly: true, evidence: { transcript: excerpt }, direction: hookPolicy,
+          existingHook: currentHook ? {text:currentHook} : undefined }));
+      const best = result.status === 'ACCEPTED' ? result.hooks.find(h => h.recommended && h.source === 'OPENAI') : undefined;
       return best ? { text: best.text, source: 'LLM_ASSISTED' as const } : null;
     } catch (error) {
       this.logger.warn(`Preset headline routing unavailable, using deterministic hook: ${

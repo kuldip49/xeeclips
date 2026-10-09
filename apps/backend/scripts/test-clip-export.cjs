@@ -19,13 +19,17 @@ assert.notEqual(renderedClipObjectKey('proj', 'vid', '3.000:18.000',
 
 /** Normal and AI Edited variants coexist; an existing valid variant is never rendered again. */
 async function testOutputVariants(source, directory) {
+  const {CreativePackageService} = require('../dist/modules/content-intelligence/creative-package.service');
+  const transcriptText = 'The experiment showed that the cooling system kept the equipment stable throughout the complete test.';
+  const sharedPackage = await new CreativePackageService({generate(){throw Error('local fixture');}}).create({external:false,evidence:{transcript:transcriptText}});
+  let segments = [{start:2,end:18,text:transcriptText}];
   const rows = new Map();
   let nextId = 0;
   const keyOf = ({ videoId, rangeKey, variantKey }) => `${videoId}|${rangeKey}|${variantKey}`;
   const removed = [];
   let downloads = 0;
   const prisma = {
-    video: {findUniqueOrThrow:async()=>({transcript:null})},
+    video: {findUniqueOrThrow:async()=>({transcript:{segments}})},
     generatedClip: {
       findUnique: async ({ where }) => where.objectKey
         ? [...rows.values()].find(row => row.objectKey === where.objectKey) ?? null
@@ -39,7 +43,7 @@ async function testOutputVariants(source, directory) {
         return rows.get(key);
       }
     },
-    processingJob: { findFirst: async () => ({ id: 'job', aiMode: 'ONLINE', telemetry: {} }) }
+    processingJob: { findFirst: async () => ({ id: 'job', aiMode: 'FALLBACK_ONLY', telemetry: {} }) }
   };
   const storage = {
     downloadToFile: async (_bucket, _key, path) => { downloads++; copyFileSync(source, path); },
@@ -52,7 +56,10 @@ async function testOutputVariants(source, directory) {
   const exporter = new ClipExportService(prisma, storage);
   const video = { id: 'vid', projectId: 'proj', bucket: 'videos', objectKey: 'source.mp4',
     duration: 20, targetPlatform: 'TIKTOK' };
-  const candidate = { id: 'cand', rangeKey: '2.000:17.000', startTime: 2, endTime: 17 };
+  const candidate = { id: 'cand', rangeKey: '2.000:17.000', startTime: 2, endTime: 17, transcriptText,creativeCandidates:{sharedPackage} };
+  const retained = segments; segments=[];
+  await assert.rejects(()=>exporter.export(video,candidate,{processingType:'NORMAL_CLIPS'}),e=>e.report?.reasons.includes('NO_TIMING_EVIDENCE'));
+  segments=retained;assert.equal(downloads,0,'missing boundary evidence rejects before media download/render');
   const edited = { id: 'edited-row', videoId: 'vid', candidateId: 'cand', rangeKey: candidate.rangeKey,
     variantKey: 'EDITED_CLIPS:TIKTOK', processingType: 'EDITED_CLIPS', aspectRatio: '9:16',
     width: 1080, height: 1920, bucket: 'clips', objectKey: 'x-edited-tiktok.mp4' };

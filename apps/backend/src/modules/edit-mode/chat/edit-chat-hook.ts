@@ -1,22 +1,15 @@
 import { creativeService, deterministicCreative } from '../../content-intelligence/creative-package.service';
-import { localUnderstanding } from '../../content-intelligence/content-understanding.service';
-import { sharedQuality } from '../../content-intelligence/creative-quality.service';
+import { localUnderstanding, type ContentEvidence } from '../../content-intelligence/content-understanding.service';
+import { sharedQuality, hookMeetsThreshold } from '../../content-intelligence/creative-quality.service';
 // Workstream G: creative hook rewriting, grounded.
 //
 // "Change the hook", "make it shorter", "more curiosity based", "try another".
 // Every one of these edits the SAME existing hook element through
 // SET_TEXT_CONTENT - this module only decides the wording.
 //
-// Two sources, one gate:
-//   * DETERMINISTIC candidates are built from the opening of the cached
-//     transcript by the same grounded rewriter the auto-edit pipeline uses
-//     (`deterministicHookCandidates`, read-only from the frozen editing module),
-//     and "shorter" compresses the current line by removing words only.
-//   * MODEL candidates (ONLINE only, through the EditMode-local editingPlan
-//     route) are requested under a strict schema.
-// Both are then run through `scoreHook` against the transcript, which rejects
-// ungrounded lines, fabricated quotes, clickbait and false urgency. A candidate
-// that fails the gate is never proposed, whichever path produced it.
+// Shared creative generation and clickability/context gates use retained video
+// evidence. Explicit "shorter" requests additionally use the compatibility
+// compression helpers, which only remove words from the current headline.
 
 import { Logger } from '@nestjs/common';
 import type { LlmRouterService } from '../../processing/llm-router.service';
@@ -176,17 +169,17 @@ export function rankHookCandidates(input: { mode: HookMode; current: string | nu
 
 /** Deterministic, source-grounded candidates for one mode. */
 export function deterministicHookSuggestions(input: { mode: HookMode; current: string | null;
-  tried: string[]; opening: string; transcript: string }): HookSuggestion[] {
-  const evidence = { transcript: input.transcript };
+  tried: string[]; opening: string; transcript: string; evidence?: ContentEvidence }): HookSuggestion[] {
+  const evidence = { ...input.evidence, transcript: input.transcript };
   const u = localUnderstanding(evidence), draft = deterministicCreative(evidence, u);
-  const ranked = sharedQuality.rank(draft.hooks, evidence, u, 'LOCAL', [...input.tried, input.current ?? ''])
+  const ranked = sharedQuality.rank(draft.hooks, evidence, u, 'LOCAL', [...input.tried, input.current ?? '']).filter(hookMeetsThreshold)
     .map(h => ({ text: h.text, source: 'DETERMINISTIC' as const, mechanism: h.category, score: h.score / 10 }));
   if (input.mode !== 'SHORTER' || !input.current) return ranked;
   // "Shorter" tightens the SAME line by removing words; a different, longer local reframing is not shorter.
   const shorter = shorterVersions(input.current);
   const compressed = rankHookCandidates({ mode: 'SHORTER', current: input.current, tried: input.tried,
     transcript: input.transcript, candidates: shorter.map(text => ({ text, source: 'DETERMINISTIC' as const })) });
-  // Shared hooks may be shorter than the legacy five-word floor; judge their compressions by the shared gate (3–12 words).
+  // Shared hooks may be shorter than the legacy five-word floor (4–26 words).
   const sharedCompressed = compressed.length ? [] : sharedQuality.rank(shorter.map(text => ({ text,
     category: /\?$/u.test(text) ? 'QUESTION' as const : 'BOLD' as const })), evidence, u, 'LOCAL', [...input.tried, input.current])
     .map(h => ({ text: h.text, source: 'DETERMINISTIC' as const, mechanism: h.category, score: h.score / 10 }));
@@ -203,18 +196,19 @@ export function deterministicHookSuggestions(input: { mode: HookMode; current: s
  */
 export async function modelHookSuggestions(input: { llm: LlmRouterService; logger: Logger;
   mode: HookMode; current: string | null; tried: string[]; opening: string;
-  transcript: string }): Promise<{ suggestions: HookSuggestion[]; attempted: boolean;
+  transcript: string; evidence?: ContentEvidence }): Promise<{ suggestions: HookSuggestion[]; attempted: boolean;
     latencyMs: number; error?: string }> {
   const started = Date.now();
   if ((process.env.EDIT_MODE_CHAT_LLM_ENABLED ?? 'true').toLowerCase() === 'false') return { suggestions: [], attempted: false, latencyMs: 0 };
   try {
     const mode = chatPlannerAiMode();
     const p = await performanceContext.run(createPerformanceTelemetry(mode), () => creativeService(input.llm).create({
-      external: mode === 'ONLINE', hooksOnly: true, evidence: { transcript: input.transcript },
+      external: mode === 'ONLINE', hooksOnly: true, evidence: { ...input.evidence, transcript: input.transcript },
+      existingHook: input.current ? { text: input.current } : undefined, changeHook: true,
       exclude: [...input.tried, input.current ?? ''], direction: MODE_BRIEF[input.mode] + (input.current ? ' Current: ' + input.current : '') }));
     // "Shorter" means fewer words, as in the deterministic path; fewer characters alone is not shorter.
     const words = (text: string) => text.trim().split(/\s+/u).length;
-    const suggestions = p.hooks.filter(h => input.mode !== 'SHORTER' || !input.current || words(h.text) < words(input.current))
+    const suggestions = p.hooks.filter(h => hookMeetsThreshold(h) && (input.mode !== 'SHORTER' || !input.current || words(h.text) < words(input.current)))
       .map(h => ({ text: h.text, source: h.source === 'OPENAI' ? 'LLM' as const : 'DETERMINISTIC' as const, mechanism: h.category, score: h.score / 10 }));
     return { suggestions, attempted: p.internal.routes.length > 0, latencyMs: Date.now() - started };
   } catch { return { suggestions: [], attempted: true, latencyMs: Date.now() - started, error: 'Creative suggestions unavailable' }; }

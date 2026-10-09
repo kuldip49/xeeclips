@@ -27,6 +27,7 @@ import { preparationFingerprint, quickCleanRender, quickComposeRender, quickOutp
 import { prepareStyleTwoFonts } from '../edit-mode/render/style-two-fonts';
 import { publicCreativePackage } from '../content-intelligence/creative-package.service';
 import { INTELLIGENCE_VERSION } from '../content-intelligence/content-understanding.service';
+import { retainedBoundaryQa } from '../content-intelligence/edit-project-evidence';
 import { suggestHooks, HOOK_CATEGORIES } from './quick-reframe-hooks';
 import { downloadSocial, MAX_REFRAME_BYTES, socialSource } from './social-source';
 import { CAPTION_STYLES, emptyPostCopy, generatePostCopy, normalizeHashtags, REWRITE_DIRECTIONS, type PostCopyContext } from './quick-reframe-post-copy';
@@ -398,13 +399,13 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const {hooks,warnings,package:p}=await suggestHooks(this.router,context.transcript,external,exclude,
       {sourceId:context.sourceId,transcriptVersion:context.transcriptVersion,visualVersion:context.visualVersion,
        visibleText:[context.visibleText,context.subtitleText].filter(Boolean).join('\n'),sceneType:context.sceneType,visualSummary:context.visualSummary,
-       speakerTurns:context.speakerTurns,template:context.template,
+       speakerTurns:context.speakerTurns,template:context.template,boundaryQa:context.boundaryQa,
        sourceTitle:context.sourceContext?.sourcePostTitle,sourceCaption:context.sourceContext?.sourcePostText,sourceHashtags:context.sourceContext?.sourceHashtags},
-      typeof body.direction==='string'?body.direction.slice(0,500):'',category);
+      typeof body.direction==='string'?body.direction.slice(0,500):'',category,context.selectedHook);
     // Regenerate with nothing new keeps the current list rather than emptying it.
     if(hooks.length||!exclude.length){const saved=await this.prisma.quickReframe.updateMany({where:{id,postCopy:{equals:q.postCopy as Prisma.InputJsonValue},editProject:{revision:q.editProject.revision},status:q.status,operationId:q.operationId},data:{hooks:json(hooks),externalAiAuthorized:external,
       postCopy:json({...emptyPostCopy(),...record(q.postCopy),version:(Number(record(q.postCopy).version)||0)+1,
-        creativePackage:{...record(record(q.postCopy).creativePackage),version:1,understanding:p.understanding,hooks:p.hooks,selectedHook:p.selectedHook,status:p.status},contentUnderstandingVersion:INTELLIGENCE_VERSION,_intelligenceInternal:p.internal})}});if(!saved.count)throw new ConflictException('The video or post copy changed. Refresh and try again.');}
+        creativePackage:{...record(record(q.postCopy).creativePackage),version:p.version,understanding:p.understanding,hooks:p.hooks,selectedHook:p.selectedHook,status:p.status,boundaryQa:p.boundaryQa},contentUnderstandingVersion:INTELLIGENCE_VERSION,_intelligenceInternal:p.internal})}});if(!saved.count)throw new ConflictException('The video or post copy changed. Refresh and try again.');}
     return {session:await this.get(id),warnings};
   }
   /** Use only content retained by the confirmed crop and canonical timeline. Original post text is supporting context. */
@@ -426,6 +427,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const hook=q.editProject.elements.find(e=>e.type==='TEXT'&&record(e.properties).presetRole==='HOOK'&&record(e.properties).hidden!==true);
     const copy={...emptyPostCopy(),...record(q.postCopy)};
     return {sourceId:source.id,transcriptVersion:createHash('sha256').update(JSON.stringify({transcript:source.transcript??original.transcript,ranges})).digest('hex'),
+      boundaryQa:retainedBoundaryQa(segments,ranges,source.duration??original.duration??undefined),
       speakerTurns:segments.map(record).filter(s=>typeof s.speaker==='string'&&ranges.some(r=>Number(s.start)>=r.start-.001&&Number(s.end)<=r.end+.001)).map(s=>({speaker:String(s.speaker),text:String(s.text??'')})),
       template:q.editPath ?? 'MANUAL',
       visualVersion:createHash('sha256').update(JSON.stringify({confirmed:q.confirmed,regions:retained})).digest('hex'),sceneType:regions.length?'video with on-screen text':'',
@@ -494,14 +496,14 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     if(typeof body.hookText!=='string'&&!hooks.length&&view.hasTranscript){
       const context=this.postCopyContext(q,{});const suggestions=await suggestHooks(this.router,context.transcript,false,[],
         {sourceId:context.sourceId,transcriptVersion:context.transcriptVersion,visualVersion:context.visualVersion,
-         visibleText:context.visibleText,visualSummary:context.visualSummary,speakerTurns:context.speakerTurns,template:STYLES[style].template,sourceTitle:context.sourceContext?.sourcePostTitle,sourceCaption:context.sourceContext?.sourcePostText});
+         visibleText:context.visibleText,visualSummary:context.visualSummary,speakerTurns:context.speakerTurns,boundaryQa:context.boundaryQa,template:STYLES[style].template,sourceTitle:context.sourceContext?.sourcePostTitle,sourceCaption:context.sourceContext?.sourcePostText});
       hooks=suggestions.hooks;
       await this.prisma.quickReframe.update({where:{id},data:{hooks:json(hooks),postCopy:json({...emptyPostCopy(),...record(q.postCopy),
         version:(Number(record(q.postCopy).version)||0)+1,contentUnderstandingVersion:INTELLIGENCE_VERSION,
-        creativePackage:{...record(record(q.postCopy).creativePackage),understanding:suggestions.package.understanding,hooks},
+        creativePackage:{...record(record(q.postCopy).creativePackage),version:suggestions.package.version,understanding:suggestions.package.understanding,hooks,boundaryQa:suggestions.package.boundaryQa,status:suggestions.package.status},
         _intelligenceInternal:suggestions.package.internal})}});
     }
-    const hookText=typeof body.hookText==='string'?body.hookText.slice(0,160):hooks.find(h=>h.recommended)?.text??'';
+    const hookText=typeof body.hookText==='string'?body.hookText.slice(0,320):hooks.find(h=>h.recommended)?.text??'';
     let project=await this.editor.get(q.editProjectId) as unknown as {revision:number;settings:unknown;assets:Asset[];elements:Loaded['editProject']['elements']};
     if(mode==='GENERATE'&&!project.elements.some(e=>e.type==='SUBTITLE')){
       if(!view.hasTranscript)throw new BadRequestException('No speech was found to caption.');

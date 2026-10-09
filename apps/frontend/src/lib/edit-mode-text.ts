@@ -517,8 +517,10 @@ export function layoutFittedFontSize(properties: Record<string, unknown>, region
   if (!region || !(Math.abs(size - region.fontSize) < 0.01)) return null;
   const width = Number.isFinite(Number(properties.width)) ? Math.max(0, Math.min(1, Number(properties.width))) : region.width;
   const height = Number.isFinite(Number(properties.height)) ? Math.max(0, Math.min(1, Number(properties.height))) : region.height;
-  return autoFitText(String(properties.content ?? ''), { width, height, maxLines: region.maxLines, preferred: region.fontSize,
-    minimum: Math.min(30, region.fontSize), lineHeight: region.lineHeight, ...(region.glyphWidthEm ? { glyphWidthEm: region.glyphWidthEm } : {}) });
+  const hook = String(properties.templateRole ?? properties.presetRole ?? '') === 'HOOK';
+  return autoFitText(String(properties.content ?? ''), { width, height,
+    maxLines: hook && String(properties.content ?? '').split(/\s+/u).length > 14 ? Math.max(3, region.maxLines) : region.maxLines, preferred: region.fontSize,
+    minimum: Math.min(hook ? (region.glyphWidthEm ? 20 : 24) : 30, region.fontSize), lineHeight: region.lineHeight, ...(region.glyphWidthEm ? { glyphWidthEm: region.glyphWidthEm } : {}) });
 }
 
 // --- Export line breaks ------------------------------------------------------------------------

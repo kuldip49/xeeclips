@@ -54,8 +54,8 @@ assert(repaired.reasons.includes('CONTEXT_PREROLL_CONTINUATION'));
 assert(Math.abs(repaired.startTime - (words[setup].start - .08)) < 1e-6, `starts at the setup sentence, got ${repaired.startTime}`);
 assert(repaired.startTime < words[fragment].start - 3, 'moved back to the sentence that introduces the fragment');
 assert(repaired.startTime > words[setup - 1].end - .001, 'but no further than that sentence (smallest natural boundary, not the full pre-roll)');
-assert.deepEqual(repaired.qa, { START_COMPLETE: true, END_COMPLETE: true, THOUGHT_COMPLETE: true,
-  QUESTION_RESOLVED: true, PUNCHLINE_INCLUDED: true, CONTEXT_SUFFICIENT: true });
+assert(Object.values(repaired.qa).every(Boolean));
+assert.equal(Object.keys(repaired.qa).length, 14);
 assert.equal(repaired.valid, true);
 assert(Math.abs(repaired.endTime - service.repair({ ...selected, startTime: words[setup].start }, words, { sourceDuration: last.end + 5 }).endTime) < 1e-6,
   'the complete ending is untouched by the opening repair');
@@ -119,5 +119,44 @@ assert.equal(chain.valid, true); assert.deepEqual(Object.values(chain.qa).every(
 assert(words[consequenceAt].start - chain.startTime > 5, 'the setup is further than one pre-roll from the raw start, but each hop is within one');
 const tooFar = service.repair({ startTime: words[consequenceAt].start, endTime: last.end + .1, transcriptText: '' }, words, { sourceDuration: last.end + 5, preRoll: 2.4 });
 assert.equal(tooFar.valid, false, 'a setup beyond two pre-rolls of the raw start is out of reach: the candidate is not silently stretched');
-console.log('Boundary continuation: tight-gap fragment detected, bounded pre-roll to the setup sentence, complete ending kept, planner agrees, controls unchanged: PASS');
+// 9. Delivery: a source excerpt may already begin on a fragment. Index zero and ASR punctuation cannot certify it.
+const deliveryWords = transcript([['A recall yesterday.', 0],
+  ['We talked about delivery fraud and checked whether the names matched the people.', .48],
+  ['The first name did not match and the second looked more like a Manuel.', .3]], 0);
+const deliveryRange = {startTime:0,endTime:deliveryWords.at(-1).end + .15,transcriptText:''};
+const deliveryQa = service.validate(deliveryRange,deliveryWords,{sourceDuration:deliveryRange.endTime,minDuration:1});
+assert.equal(deliveryQa.valid,false);
+assert.equal(deliveryQa.qa.START_COMPLETE,false);
+assert.equal(deliveryQa.qa.CONTEXT_SUFFICIENT,false);
+assert.equal(deliveryQa.qa.NO_DANGLING_CLAUSE,false);
+assert.equal(deliveryQa.qa.END_COMPLETE,true,'opening failure must not disturb the complete ending');
+assert.equal(deliveryQa.qa.VIEWER_SATISFIED_END,true);
+assert.equal(deliveryQa.endTime,deliveryRange.endTime,'existing ending remains unchanged');
+assert(deliveryQa.reasons.includes('SOURCE_START_FRAGMENT'));
+for(const opening of ['The experiment compared two cooling systems.','A courier arrived yesterday.','A package costs extra.','A driver left yesterday.']){
+  const controlWords=transcript([[opening,0],['The rest of the story finishes with a clear result.',.5]],0);
+  assert.equal(service.repair({startTime:0,endTime:controlWords.at(-1).end+.15,transcriptText:''},controlWords,
+    {sourceDuration:controlWords.at(-1).end+.15,minDuration:1}).qa.START_COMPLETE,true,opening+' is a complete source opening');
+}
+
+// Segment-only evidence follows the same rule; no fabricated equal-width word times.
+const segmentOnly = [{start:0,end:1.6,text:'A recall yesterday.'},
+  {start:2,end:20,text:'We checked the names and the second looked more like a Manuel.'}];
+assert.equal(service.validate({startTime:0,endTime:20.15,transcriptText:''},segmentOnly,{sourceDuration:20.15,minDuration:1}).qa.START_COMPLETE,false);
+
+// When genuine earlier context exists, only its nearest complete sentence is added, with the exact same payoff.
+const withContext = transcript([['The unrelated weather report is over.',0],
+  ['We discussed delivery fraud on our previous show.',.6],['A recall yesterday.',.12],
+  ['We checked both names and neither person matched the name we expected.',.48],
+  ['The second person looked more like a Manuel.',.3]],20);
+const deliveryStart = at(withContext,'A');
+const contextStart = at(withContext,'We');
+const contextRange = {startTime:withContext[deliveryStart].start,endTime:withContext.at(-1).end+.15,transcriptText:''};
+const contextRepair = service.repair(contextRange,withContext,{sourceDuration:contextRange.endTime,minDuration:1});
+assert(contextRepair.valid);
+assert(contextRepair.startTime>=withContext[contextStart].start-.08 && contextRepair.startTime<=withContext[contextStart].start);
+assert.equal(contextRepair.endTime,contextRange.endTime);
+assert(Object.values(contextRepair.qa).every(Boolean));
+
+console.log('Boundary continuation: tight-gap/source-start fragments rejected, smallest bounded setup recovered when available, complete ending kept, planner agrees, controls unchanged: PASS');
 console.log(JSON.stringify({ original: selected.startTime, repaired: repaired.startTime, end: repaired.endTime, reasons: repaired.reasons, qa: repaired.qa }));

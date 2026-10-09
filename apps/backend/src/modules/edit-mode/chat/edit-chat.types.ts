@@ -140,7 +140,7 @@ export function readChatThread(settings: unknown): ChatThread {
     hook: {
       elementId: typeof hook.elementId === 'string' ? hook.elementId : null,
       tried: (Array.isArray(hook.tried) ? hook.tried : [])
-        .map((line) => String(line).slice(0, 200)).slice(-CHAT_MAX_TRIED_HOOKS)
+        .map((line) => String(line).slice(0, 320)).slice(-CHAT_MAX_TRIED_HOOKS)
     }
   };
 }

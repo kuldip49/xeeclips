@@ -71,7 +71,8 @@ export type ContentPackaging = { version: 1; primaryCategory: ContentCategory;
   qa: PackagingQa; packagingScore: { value: number; potential: 'HIGH' | 'MEDIUM' | 'LOW';
     components: Record<string, number> }; generationSource: 'LUNA' | 'OLLAMA' | 'DETERMINISTIC' };
 
-export type PackagingInput = { sharedPackage?: CreativePackage; sourceId?: string; startTime?: number; endTime?: number; analysis?: Record<string, unknown>; aiMode: AiProcessingMode; transcript: string; title: string;
+export type PackagingInput = { sharedPackage?: CreativePackage; sourceId?: string; startTime?: number; endTime?: number; previousContext?: string; nextContext?: string;
+  speakerTurns?: Array<{speaker:string;text:string}>; analysis?: Record<string, unknown>; aiMode: AiProcessingMode; transcript: string; title: string;
   synopsis: string; wholeVideoSummary: string; originalName?: string; sourceDescription?: string;
   channelName?: string; ocrText?: string; speakerTrackIds?: string[];
   existingHooks?: string[]; existingCaption?: string; existingHashtags?: string[];
@@ -399,10 +400,11 @@ export class ContentPackagingService {
       synopsis: input.synopsis, platform: input.targetPlatform ?? null, verifiedEntities };
     const shared = input.sharedPackage ?? await creativeService(this.router).create({ external: input.aiMode === AiProcessingMode.ONLINE,
       evidence: { sourceId: input.sourceId, startTime: input.startTime, endTime: input.endTime,
-        transcript: input.transcript, visibleText: input.ocrText, sourceTitle: input.originalName || input.title,
+        transcript: input.transcript, previousContext: input.previousContext, nextContext: input.nextContext,
+        visibleText: input.ocrText, sourceTitle: input.originalName || input.title,
         sourceCaption: input.sourceDescription, sourceHashtags: input.existingHashtags,
         visualSummary: input.wholeVideoSummary, analysis: input.analysis,
-        speakerTurns: (input.speakerTrackIds ?? []).map(speaker => ({ speaker, text: '' })) } });
+        speakerTurns: input.speakerTurns ?? (input.speakerTrackIds ?? []).map(speaker => ({ speaker, text: '' })) } });
     const hookCandidates = shared.hooks.map(h => ({ ...packagingHook(h.text, hookContext,
       category.primaryCategory, narrative.archetype, narrative.emotionalTone, narrative.humor, identity.entities),
       rejected: '', score: h.score / 100 }));
@@ -430,7 +432,7 @@ export class ContentPackagingService {
       hookBoldnessValid: selectedHook.components.boldness >= .5,
       hookCategoryFit: selectedHook.components.categoryFit >= .5,
       hookHumorFit: selectedHook.components.humorFit >= .7,
-      hookReadable: words(selectedHook.text).length >= 5 && words(selectedHook.text).length <= 20,
+      hookReadable: words(selectedHook.text).length >= 4 && words(selectedHook.text).length <= 26,
       hookFirstFrameValid: null,
       captionNotDuplicateHook: normal(selectedCaption) !== normal(selectedHook.text),
       captionRelevant: words(selectedCaption).some((word) => input.transcript.toLowerCase().includes(word.toLowerCase())),
@@ -449,8 +451,8 @@ export class ContentPackagingService {
       captionStrength: qa.captionNotDuplicateHook && qa.captionRelevant ? .85 : .35,
       hashtagRelevance: qa.hashtagsRelevant ? .85 : .3, firstFrameStrength: .5,
       subtitleVisualQuality: .5 };
-    const value = round(Object.values(components).reduce((sum, item) => sum + item, 0) /
-      Object.keys(components).length);
+    const value = Math.min(shared.quality.passed ? 1 : .49, round(Object.values(components).reduce((sum, item) => sum + item, 0) /
+      Object.keys(components).length));
     return { version: 1, sharedPackage: shared, synopsis: shared.synopsis, primaryCategory: category.primaryCategory,
       secondaryCategory: category.secondaryCategory, categoryConfidence: category.confidence,
       wholeVideoCategory: category.wholeVideoCategory, archetype: narrative.archetype,
@@ -476,8 +478,8 @@ export class ContentPackagingService {
     const components = { ...packaging.packagingScore.components, hookStrength: selected.score,
       firstFrameStrength,
       subtitleVisualQuality: rendered.subtitleTelemetry ? .9 : .5 };
-    const value = round(Object.values(components).reduce((sum, item) => sum + item, 0) /
-      Object.keys(components).length);
+    const value = Math.min(packaging.sharedPackage?.quality.passed === false ? .49 : 1,
+      round(Object.values(components).reduce((sum, item) => sum + item, 0) / Object.keys(components).length));
     return { ...packaging, selectedHook: selected,
       qa: { ...packaging.qa, hookFirstFrameValid: firstFrame.valid,
         hookReadable: rendered.hookReadable !== false,

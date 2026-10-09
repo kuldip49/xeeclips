@@ -87,8 +87,12 @@ export class EditModeController {
     const project=await this.editMode.get(id);
     if (body.revision!==project.revision) throw new BadRequestException('Your edits changed. Refresh before generating suggestions.');
     const external=body.externalAiAuthorized===true;
+    const currentHook=project.elements.find(element=>element.type==='TEXT' && element.properties &&
+      ['presetRole','templateRole'].some(role=>(element.properties as Record<string,unknown>)[role]==='HOOK'));
+    const currentText=currentHook ? String((currentHook.properties as Record<string,unknown>).content ?? '').trim() : '';
     const p=await performanceContext.run(createPerformanceTelemetry(external?'ONLINE':'FALLBACK_ONLY'),()=>creativeService(this.llm).create({
       evidence:editProjectEvidence(project),external,hooksOnly:body.hooksOnly!==false,
+      existingHook:currentText ? {text:currentText} : undefined,changeHook:body.hooksOnly!==false,
       exclude:Array.isArray(body.exclude)?body.exclude.filter((v):v is string=>typeof v==='string').slice(0,30):[],
       direction:typeof body.direction==='string'?body.direction.slice(0,500):'',
       category:HOOK_CATEGORIES.includes(body.category as HookCategory)?body.category as HookCategory:undefined}));

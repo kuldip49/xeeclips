@@ -14,7 +14,9 @@
 //
 // There is no "podcast always gets five zooms" anywhere in here, by design.
 
-import { deterministicHook } from '../../editing/hook-generator';
+import { deterministicCreative } from '../../content-intelligence/creative-package.service';
+import { localUnderstanding } from '../../content-intelligence/content-understanding.service';
+import { sharedQuality } from '../../content-intelligence/creative-quality.service';
 import type { EditElementType } from '@prisma/client';
 import {
   emptyEstimatedChanges, type PresetCommand, type PresetElementCommand, type PresetPlan
@@ -165,7 +167,8 @@ function resolveHook(policy: EditPresetPolicy, evidence: PresetEvidence,
     return { policy: 'OFF' as const, text: null };
   }
   if (override?.text) return { policy: policy.hookPolicy, text: override.text };
-  const scored = deterministicHook({ transcript: evidence.transcriptText, title: '', synopsis: '' });
+  const clipEvidence = {transcript:evidence.transcriptText}, understanding = localUnderstanding(clipEvidence);
+  const scored = sharedQuality.rank(deterministicCreative(clipEvidence,understanding).hooks,clipEvidence,understanding,'LOCAL')[0];
   if (!scored) {
     warnings.push('No headline could be grounded in the source words at an acceptable quality, ' +
       'so no hook is added.');

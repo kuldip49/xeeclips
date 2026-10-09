@@ -13,8 +13,9 @@ export function rankHooks(candidates: HookCandidate[], transcript: string, limit
     localUnderstanding(evidence)).slice(0, limit);
 }
 export async function suggestHooks(router: LlmRouterService, transcript: string, external: boolean, exclude: string[] = [],
-  context: Partial<ContentEvidence> = {}, direction = '', category?: ReframeHookCategory) {
+  context: Partial<ContentEvidence> = {}, direction = '', category?: ReframeHookCategory, currentHook = '') {
   const p = await performanceContext.run(createPerformanceTelemetry(external ? 'ONLINE' : 'FALLBACK_ONLY'), () =>
-    creativeService(router).create({ evidence: { ...context, transcript }, external, hooksOnly: true, exclude, direction, category }));
+    creativeService(router).create({ evidence: { ...context, transcript }, external, hooksOnly: true, exclude, direction, category,
+      existingHook: currentHook ? { text: currentHook } : undefined, changeHook: !!direction.trim() }));
   return { hooks: p.hooks, warnings: p.warnings, package: p };
 }

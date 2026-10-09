@@ -107,8 +107,7 @@ export function shortenHook(text: string, level: number): string {
   return words.join(' ');
 }
 
-// Finds the largest font / fewest lines that fit the zone, shortening the text
-// only when no size down to the minimum fits.
+// Finds the largest font / fewest lines that preserve all words inside the zone.
 export function fitHookText(text: string, zone: Rect, options: {
   maxFont?: number; minFont?: number; maxLines?: number; startShortenLevel?: number;
   widthScale?: number; heightScale?: number } = {}): HookFit | null {
@@ -119,13 +118,11 @@ export function fitHookText(text: string, zone: Rect, options: {
   const heightScale = options.heightScale ?? 1;
   const pad = HOOK_TYPE.strokePad;
   let attempts = 0;
-  for (let level = options.startShortenLevel ?? 0; level <= 5; level++) {
-    const candidate = shortenHook(text, level);
+  {
+    const candidate = text.replace(/\s+/gu, ' ').trim();
     const words = candidate.split(' ').filter(Boolean);
     if (!words.length) return null;
-    // Fit priority for a long headline: use the upper header space and a smaller
-    // size before touching the wording. Shortening only happens once even the
-    // long-hook floor has failed, so levels above 0 are effectively a last step.
+    // Use more lines and a bounded smaller size while preserving the wording.
     const minFont = hookMinFont(words.length, baseMinFont);
     // For each line count keep the largest fitting size, then prefer fewer lines
     // unless an extra line buys a clearly larger headline.
@@ -141,7 +138,7 @@ export function fitHookText(text: string, zone: Rect, options: {
         const score = font - lineCost(lines, words.length);
         if (!best || score > best.score)
           best = { text: candidate, lines: broken, fontSize: font, width, height,
-            shortenLevel: level, attempts, score };
+            shortenLevel: 0, attempts, score };
         break;
       }
     }
@@ -151,7 +148,7 @@ export function fitHookText(text: string, zone: Rect, options: {
     }
   }
   // Last resort for a single over-long word: shrink below the normal minimum.
-  const words = shortenHook(text, 5).split(' ').filter(Boolean);
+  const words = text.trim().split(/\s+/u).filter(Boolean);
   const floor = hookMinFont(words.length, baseMinFont);
   const lines = breakLines(words, Math.min(maxLines, words.length), floor);
   const widest = Math.max(...lines.map((line) => estimateTextWidth(line, 1))) * widthScale;
@@ -160,7 +157,7 @@ export function fitHookText(text: string, zone: Rect, options: {
   if (!words.length || font < 36) return null;
   return { text: words.join(' '), lines: breakLines(words, lines.length, font), fontSize: font,
     width: widest * font + pad * 2, height: lines.length * font * HOOK_TYPE.lineHeight * heightScale + pad * 2,
-    shortenLevel: 5, attempts: attempts + 1 };
+    shortenLevel: 0, attempts: attempts + 1 };
 }
 
 // Subtitle line layout: at most two lines inside `maxWidth`, shrinking the font

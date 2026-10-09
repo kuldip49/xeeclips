@@ -1,4 +1,5 @@
 // EditMode Phase 6 + Workstream G: the AI chat editor.
+import { editProjectEvidence } from '../../content-intelligence/edit-project-evidence';
 //
 //   message + selection + range + playhead
 //     -> bounded structured context: objects behind opaque handles, semantic
@@ -491,7 +492,8 @@ export class EditChatService {
         'use it.', route: 'NONE', code: 'CREATIVE_UNAVAILABLE' };
     }
     const input = { mode, current, tried, opening: context.transcript.opening,
-      transcript: context.runtime.groundingText };
+      transcript: context.runtime.creativeEvidence?.transcript ?? context.runtime.groundingText,
+      evidence: context.runtime.creativeEvidence };
     const model = await modelHookSuggestions({ llm: this.llm, logger: this.logger, ...input });
     if (model.suggestions.length) return { suggestion: model.suggestions[0] };
     const local = deterministicHookSuggestions(input);
@@ -746,6 +748,7 @@ export class EditChatService {
         playheadSec: Number.isFinite(Number(input.playheadSec)) ? Number(input.playheadSec) : 0
       }
     });
+    context.runtime.creativeEvidence = editProjectEvidence(project);
     return { project, context, thread };
   }
 

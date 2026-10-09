@@ -48,7 +48,7 @@ export type ResolvedVisualLayout = {
   version: 1;
   canvas: { width: number; height: number; aspect: '9:16' };
   videoFrame: NormalizedRect & { mode: 'FILL' | 'FIT' | 'CARD'; cropPolicy: string };
-  hook: NormalizedRect & { enabled: boolean; maxWidth: number; maxLines: 3;
+  hook: NormalizedRect & { enabled: boolean; maxWidth: number; maxLines: 2 | 3 | 4;
     fontSize: number; lineHeight: number; safeRegion: 'TOP' };
   captions: NormalizedRect & { maxWidth: number; maxLines: 2; fontSize: number;
     lineHeight: number; baseline: number; activeWordScale: 1; safeRegion: 'LOWER_THIRD' };

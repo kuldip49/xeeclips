@@ -14,6 +14,7 @@ import { PrismaService } from '../database/prisma.service';
 import { probeMedia } from '../processing/media-probe';
 import { StorageService } from '../storage/storage.service';
 import { EditModeAnalysisService } from './edit-mode-analysis.service';
+import { fitRetainedHook } from './styles/resolved-visual-layout';
 import type { EditElementInput, PreparedEditSource } from './edit-mode.types';
 import { editProjectState } from './edit-mode.types';
 import type { PresetCommand } from './presets/edit-preset-commands';
@@ -362,7 +363,7 @@ export class EditModeService {
     const project=await this.prisma.editProject.findUniqueOrThrow({where:{id},select:{settings:true}});
     const previous=settingsRecord(settingsRecord(project.settings).contentIntelligence), incoming=settingsRecord(creativePackage);
     const saved=hooksOnly ? {...previous,version:incoming.version,understanding:incoming.understanding,hooks:incoming.hooks,selectedHook:incoming.selectedHook,
-      status:incoming.status,contextRevision:revision} : {...incoming,contextRevision:revision,copyRevision:revision};
+      status:incoming.status,boundaryQa:incoming.boundaryQa,contextRevision:revision} : {...incoming,contextRevision:revision,copyRevision:revision};
     const result=await this.prisma.editProject.updateMany({where:{id,revision,settings:{equals:project.settings as Prisma.InputJsonValue}},data:{settings:
       {...settingsRecord(project.settings),contentIntelligence:saved} as Prisma.InputJsonValue}});
     if (!result.count) throw new ConflictException('Your edits changed. Refresh before generating suggestions.');
@@ -1337,7 +1338,8 @@ export class EditModeService {
         if (item.type !== 'TEXT') throw new BadRequestException('UPDATE_TEXT requires a TEXT element');
         if (typeof input.content !== 'string') throw new BadRequestException('content must be a string');
         const content = input.content.slice(0, 2000);
-        const patch: Record<string, unknown> = { content };
+        const patch: Record<string, unknown> = { content, textRuns: [],
+          ...fitRetainedHook(item.properties as Record<string, unknown>, content) };
         if (input.fontSize !== undefined) patch.fontSize = Math.min(300, Math.max(8,
           this.positiveNumber(input.fontSize, 'fontSize')));
         if (input.fontWeight !== undefined) patch.fontWeight = Math.min(900, Math.max(100,
@@ -1734,7 +1736,9 @@ export class EditModeService {
         if (typeof input.content !== 'string') {
           throw new BadRequestException('content must be a string');
         }
-        return withProperties(item, { content: input.content.slice(0, MAX_TEXT_LENGTH), textRuns: [] });
+        const content = input.content.slice(0, MAX_TEXT_LENGTH);
+        return withProperties(item, { content, textRuns: [],
+          ...fitRetainedHook(item.properties as Record<string, unknown>, content) });
       }
       if (action === 'SET_TEXT_RUNS') {
         assertEditScope(action, requestedTextScope, ['SELECTED_ELEMENT']);

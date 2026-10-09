@@ -323,6 +323,11 @@ export class EditModeRenderService {
       const assFileName = textOverlays.length ? 'edit-mode.ass' : null;
       if (assFileName) {
         const ass = buildEditModeAss(plan.canvas, textOverlays);
+        const overflowingHook = ass.overflowed.find(id => project.elements.some(e => e.id === id &&
+          e.properties && typeof e.properties === 'object' && !Array.isArray(e.properties) &&
+          String((e.properties as Record<string, unknown>).templateRole ?? (e.properties as Record<string, unknown>).presetRole ?? '') === 'HOOK'));
+        if (overflowingHook) throw new EditExportError('INVALID_TIMELINE',
+          'The complete headline does not fit its safe region. Enlarge the text box before exporting.', {elementId:overflowingHook});
         await writeFile(join(directory, assFileName), ass.content, 'utf8');
         for (const elementId of ass.overflowed) {
           plan.warnings.push(`Text element ${elementId} needed more lines than its box holds; ` +

@@ -300,9 +300,57 @@ async function main() {
   };
   const hookBeforeAi = aiProject.elements.find((item) => item.id === reconstructedHook.id)
     .properties.content;
-  await sayAndApply('change the on screen hook');
-  assert.notEqual(aiProject.elements.find((item) => item.id === reconstructedHook.id)
-    .properties.content, hookBeforeAi);
+  // STALE EXPECTATION REPLACED (strong-hook policy; the application behaviour is unchanged).
+  //
+  // The previous assertion here was:
+  //     await sayAndApply('change the on screen hook');            // needsClarification must be false
+  //     assert.notEqual(hook content after, hookBeforeAi);          // the hook text MUST have changed
+  // It was written when the offline ("deterministic", no model) Ask AI path always produced some rewrite for a clip.
+  //
+  // Why that is obsolete: with no model, the only candidates for this fixture's six-word transcript
+  // ("One clear idea survives this edit") are reusable templates built from its most frequent words:
+  //     "What's behind clear and idea?", "clear and idea: what actually matters?",
+  //     "clear and idea through the lens of survives and edit".
+  // They are ungrammatical filler with novelty 37-38 (bar: 60), so Ask AI deliberately excludes them
+  // (`deterministicHookSuggestions` keeps only hooks that meet every eligibility threshold). The intended policy is: a good grounded
+  // hook is returned; a weak local one is refused rather than silently downgrading quality just to produce text.
+  //
+  // What this test now pins instead: (1) the offline refusal is explicit, proposes no change and leaves the hook alone;
+  // (2) the refusal is correct for THIS fixture while the same offline path still returns a good hook when one exists;
+  // (3) the route the refusal offers - the user's own exact wording - still applies, so the rest of the flow is unchanged.
+  const { deterministicHookSuggestions } = require('../dist/modules/edit-mode/chat/edit-chat-hook.js');
+  const { hookMeetsThreshold, sharedQuality } = require('../dist/modules/content-intelligence/creative-quality.service.js');
+  const { deterministicCreative } = require('../dist/modules/content-intelligence/creative-package.service.js');
+  const { localUnderstanding } = require('../dist/modules/content-intelligence/content-understanding.service.js');
+  const fixtureTranscript = 'One clear idea survives this edit';
+  const fixtureEvidence = { transcript: fixtureTranscript };
+  const fixtureCandidates = sharedQuality.rank(deterministicCreative(fixtureEvidence, localUnderstanding(fixtureEvidence)).hooks,
+    fixtureEvidence, localUnderstanding(fixtureEvidence), 'LOCAL', [hookBeforeAi]);
+  assert(fixtureCandidates.length > 0 && fixtureCandidates.every((hook) => !hookMeetsThreshold(hook)),
+    'the only offline candidates for this fixture are weak reusable templates that miss the eligibility thresholds');
+  assert(fixtureCandidates.every((hook) => hook.components.novelty * 100 < 60), 'they miss on novelty (generic frame), not by accident');
+  assert.deepEqual(deterministicHookSuggestions({ mode: 'REWRITE', current: hookBeforeAi, tried: [], opening: '', transcript: fixtureTranscript }), [],
+    'a weak offline candidate is never offered as a suggestion');
+  const richTranscript = 'You keep saying yes to request that you cannot sustain. Accepting disagreement gives your boundaries room to work. '
+    + 'I used to think every request deserved a yes. And I realized that saying yes to everyone was leaving no time for focused work. '
+    + 'Protecting time for your priorities means accepting that some people will disagree with your decisions. Chasing approval makes decisions depend on others.';
+  const richOffline = deterministicHookSuggestions({ mode: 'REWRITE', current: hookBeforeAi, tried: [], opening: '', transcript: richTranscript });
+  assert(richOffline.length > 0 && richOffline.every((hook) => hook.source === 'DETERMINISTIC')
+    && richOffline.some((hook) => hook.text === 'Where approval ends, boundaries begin'),
+  'when a good grounded hook CAN be produced offline it is still returned');
+  const refused = await chat.plan(aiProject.id, { message: 'change the on screen hook', revision: aiProject.revision,
+    selectedElementId: null, selectedTimeRange: null, playheadSec: 4.5 });
+  assert.equal(refused.proposal.needsClarification, true, 'offline AI refuses to invent a weak hook');
+  assert.match(refused.proposal.clarificationQuestion, /couldn't find another headline that is supported/u);
+  assert.match(refused.proposal.clarificationQuestion, /exact wording/u, 'and tells the user how to proceed');
+  assert.doesNotMatch(refused.proposal.clarificationQuestion, /What's behind|actually matters|through the lens/u, 'no weak template leaks into the message');
+  assert.deepEqual(refused.proposal.changes, [], 'a refusal proposes no change');
+  assert.equal(aiProject.elements.find((item) => item.id === reconstructedHook.id).properties.content, hookBeforeAi,
+    'and the existing hook is left untouched');
+  const exactWording = 'A sharper opening';
+  await sayAndApply(`change the on screen hook to "${exactWording}"`);
+  assert.equal(aiProject.elements.find((item) => item.id === reconstructedHook.id).properties.content, exactWording,
+    'the user\'s own exact wording still applies offline');
   const captionTextBeforeAi = aiProject.elements.filter((item) => item.type === 'SUBTITLE')
     .map((item) => item.properties.content);
   await sayAndApply('make captions smaller');

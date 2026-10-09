@@ -10,7 +10,7 @@ export type ResolvedVisualLayout = {
   editingProfile?: 'AUTOMATIC_2' | 'AUTOMATIC_3_STYLE_TWO';
   canvas: { width: 1080; height: 1920; aspect: '9:16' };
   videoFrame: NormalizedRect & { mode: 'FILL' | 'FIT' | 'CARD'; cropPolicy: string };
-  hook: NormalizedRect & { enabled: boolean; maxWidth: number; maxLines: 2 | 3;
+  hook: NormalizedRect & { enabled: boolean; maxWidth: number; maxLines: 2 | 3 | 4;
     fontSize: number; lineHeight: number; safeRegion: 'TOP'; glyphWidthEm?: number };
   captions: NormalizedRect & { maxWidth: number; maxLines: 2; fontSize: number;
     lineHeight: number; baseline: number; activeWordScale: 1; safeRegion: 'LOWER_THIRD' };
@@ -57,6 +57,20 @@ export function autoFitText(text: string, input: { width: number; height: number
   return input.minimum;
 }
 
+/** Fit replacement headlines in existing boxes, including older saved projects.
+ * The stored size keeps preview and export in agreement. */
+export function fitRetainedHook(properties: Record<string, unknown>, content: string): Record<string, unknown> {
+  if (String(properties.templateRole ?? properties.presetRole ?? '') !== 'HOOK'
+    || /Roboto Condensed/iu.test(String(properties.fontFamily))) return {};
+  const preferred = Number(properties.fontSize), width = Number(properties.width), height = Number(properties.height);
+  if (!(preferred > 0 && width > 0 && height > 0)) return {};
+  const serif = /EB Garamond/iu.test(String(properties.fontFamily));
+  const long = content.trim().split(/\s+/u).length > 14;
+  return { fontSize: autoFitText(content, { width, height, preferred, minimum: Math.min(serif ? 20 : 24, preferred),
+    maxLines: serif ? (long ? 3 : 2) : (long ? 4 : 3), lineHeight: Number(properties.lineSpacing) || 1.1,
+    ...(serif ? { glyphWidthEm: .4 } : {}) }) };
+}
+
 export function resolveVisualLayout(resolved: ResolvedCreativeStyle, evidence?: {
   sourceWidth?: number | null; sourceHeight?: number | null; faceShotRatio?: number;
   hookText?: string | null;
@@ -70,7 +84,7 @@ export function resolveVisualLayout(resolved: ResolvedCreativeStyle, evidence?: 
     return { version: 1, editingProfile: STYLE_TWO_ID,
       canvas: { width: 1080, height: 1920, aspect: '9:16' },
       videoFrame: { ...normalized(TWO.media), mode: 'CARD', cropPolicy: framing?.reframePolicy ?? 'AUTO' },
-      hook: { ...hook, enabled: hookStyle?.none !== true, maxWidth: hook.width, maxLines: 3,
+      hook: { ...hook, enabled: hookStyle?.none !== true, maxWidth: hook.width, maxLines: (evidence?.hookText?.split(/\s+/u).length ?? 0) > 14 ? 4 : 3,
         fontSize: TWO.hookSize, lineHeight: TWO.hookLineHeight, safeRegion: 'TOP' },
       captions: { ...captions, maxWidth: captions.width, maxLines: 2, fontSize: TWO.captionSize,
         lineHeight: TWO.captionLineHeight, baseline: captions.y + captions.height / 2,
@@ -103,8 +117,9 @@ export function resolveVisualLayout(resolved: ResolvedCreativeStyle, evidence?: 
     : { x: 0.07, y: 0.055, width: 0.86, height: 0.18 };
   const hookPreferred = street ? STREET3.typography.hook.fontSize
     : Math.min(52, hookStyle?.fontSize ?? 48);
+  const hookLines = hookText.split(/\s+/u).length > 14 ? (street ? 3 : 4) : (street ? 2 : 3);
   const hookFont = autoFitText(hookText, { width: hookRect.width, height: hookRect.height,
-    maxLines: street ? 2 : 3, preferred: hookPreferred, minimum: street ? 22 : 30,
+    maxLines: hookLines, preferred: hookPreferred, minimum: street ? (hookLines > 2 ? 20 : 22) : 24,
     lineHeight: street ? STREET3.typography.hook.lineHeight : 1.08,
     ...(street ? { glyphWidthEm: STREET3.typography.glyphWidthEm } : {}) });
   const captionRect = street
@@ -126,7 +141,7 @@ export function resolveVisualLayout(resolved: ResolvedCreativeStyle, evidence?: 
     canvas: { width: 1080, height: 1920, aspect: '9:16' },
     videoFrame,
     hook: { ...hookRect, enabled: hookStyle?.none !== true, maxWidth: hookRect.width,
-      maxLines: street ? 2 : 3, fontSize: hookFont,
+      maxLines: hookLines, fontSize: hookFont,
       lineHeight: street ? STREET3.typography.hook.lineHeight : 1.08,
       safeRegion: 'TOP', ...(street ? { glyphWidthEm: STREET3.typography.glyphWidthEm } : {}) },
     captions: { ...captionRect, maxWidth: captionRect.width, maxLines: 2,

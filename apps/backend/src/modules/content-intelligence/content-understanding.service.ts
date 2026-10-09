@@ -1,14 +1,15 @@
 import { createHash } from 'crypto';
 import { Injectable } from '@nestjs/common';
 import type { LlmRouterService } from '../processing/llm-router.service';
+import type { BoundaryQa } from './clip-boundary.service';
 
-export const INTELLIGENCE_VERSION = 'content-intelligence-v1';
+export const INTELLIGENCE_VERSION = 'content-intelligence-v2';
 export type ContentEvidence = { sourceId?: string; startTime?: number; endTime?: number;
   transcriptVersion?: string; visualVersion?: string; transcript: string; previousContext?: string;
   nextContext?: string; speakerTurns?: Array<{ speaker: string; text: string }>;
   visualSummary?: string; visibleText?: string; sceneType?: string; sourceTitle?: string;
   sourceCaption?: string; sourceHashtags?: string[]; tone?: string; template?: string;
-  intent?: string; analysis?: Record<string, unknown> };
+  intent?: string; analysis?: Record<string, unknown>; boundaryQa?: BoundaryQa };
 export type Participant = { id: string; name: string; role: 'HOST' | 'GUEST' | 'INTERVIEWER' | 'INTERVIEWEE' | 'SPEAKER' | 'NARRATOR'; evidence: string };
 export type ContentUnderstanding = { version: string; evidenceKey: string; mainTopic: string; subtopic: string;
   centralClaim: string; tension: string; keyInsight: string; surprisingPoint: string; emotionalAngle: string;
@@ -16,10 +17,17 @@ export type ContentUnderstanding = { version: string; evidenceKey: string; mainT
   participants: Participant[]; speakerCount: number | null; conversationRelationship: string;
   sceneContext: string; visibleText: string; keyEntities: string[]; question: string; payoff: string;
   bestAngle: string; watchReason: string; supportedClaims: string[] };
+export function spokenRegister(text: string): 'Hindi' | 'Hinglish' | 'English' {
+  const tokens = text.split(/\s+/u).filter(Boolean), native = tokens.filter(t => /[\u0900-\u097f]/u.test(t)).length;
+  if (native >= tokens.length * .55) return 'Hindi';
+  const roman = (text.match(/\b(?:hai|hain|kyun|kyunki|kya|kaise|lekin|nahi|apni|apne|maine|zaroori|karna|liye|matlab)\b/giu) ?? []).length;
+  return roman >= 3 || native > tokens.length * .15 ? 'Hinglish' : 'English';
+}
 export const compactEvidence = (e: ContentEvidence): ContentEvidence => ({
   sourceId: e.sourceId, startTime: e.startTime, endTime: e.endTime,
+  boundaryQa: e.boundaryQa,
   transcriptVersion: e.transcriptVersion, visualVersion: e.visualVersion,
-  transcript: e.transcript.slice(0, 9000), previousContext: e.previousContext?.slice(0, 700), nextContext: e.nextContext?.slice(0, 700),
+  transcript: e.transcript.slice(0, 9000), previousContext: e.previousContext?.slice(-1500), nextContext: e.nextContext?.slice(0, 1500),
   speakerTurns: e.speakerTurns?.slice(0, 20).map(t => ({ speaker: t.speaker.slice(0, 80), text: t.text.slice(0, 240) })),
   visualSummary: e.visualSummary?.slice(0, 1500), visibleText: e.visibleText?.slice(0, 2200), sceneType: e.sceneType?.slice(0, 100),
   sourceTitle: e.sourceTitle?.slice(0, 240), sourceCaption: e.sourceCaption?.slice(0, 2500), sourceHashtags: e.sourceHashtags?.slice(0, 12),

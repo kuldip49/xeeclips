@@ -227,8 +227,8 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
       // preview applies the same fit, `layoutFittedText` on the frontend).
       if (region && visualLayout?.editingProfile !== 'AUTOMATIC_3_STYLE_TWO' && element.type !== 'SUBTITLE' && Math.abs(number(properties.fontSize, region.fontSize) - region.fontSize) < 0.01) {
         const fitted = autoFitText(overlay.content, { width: clamp01(number(properties.width, region.width)),
-          height: clamp01(number(properties.height, region.height)), maxLines: region.maxLines, preferred: region.fontSize,
-          minimum: Math.min(30, region.fontSize), lineHeight: region.lineHeight,
+          height: clamp01(number(properties.height, region.height)), maxLines: role === 'HOOK' && overlay.content.split(/\s+/u).length > 14 ? Math.max(3, region.maxLines) : region.maxLines, preferred: region.fontSize,
+          minimum: Math.min(role === 'HOOK' ? ('glyphWidthEm' in region ? 20 : 24) : 30, region.fontSize), lineHeight: region.lineHeight,
           ...('glyphWidthEm' in region && region.glyphWidthEm ? { glyphWidthEm: region.glyphWidthEm } : {}) });
         overlay = { ...overlay, fontSizePx: fontSizePx(fitted, canvas.width) };
       }

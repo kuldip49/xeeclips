@@ -1,4 +1,5 @@
 // The bounded, structured view of a project that a chat turn reasons over.
+import type { ContentEvidence } from '../../content-intelligence/content-understanding.service';
 //
 // The whole project is never sent to a model. What goes out is a compact
 // catalogue of addressable OBJECTS - the hook, the logo, the music, the caption
@@ -173,6 +174,7 @@ export type ChatContext = {
     map: TimelineMap;
     words: TimedWord[];
     groundingText: string;
+    creativeEvidence?: ContentEvidence;
     faceCentres: Array<{ sourceSec: number; x: number; y: number }>;
     analysisFrames: AnalysisFrame[];
     shotBoundaries: number[];

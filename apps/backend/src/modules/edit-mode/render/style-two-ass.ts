@@ -55,7 +55,8 @@ export function styleTwoAss(overlay: RenderTextOverlay, canvasWidth: number,
   for (const glyph of text.fallback) {
     const [, x, y] = transform([['m', glyph.x, glyph.y - glyph.size]], 0, 0)[0];
     const primary = color(overlay.color, overlay.opacity);
-    events.push(event(`{\\an7\\pos(${x},${y})\\frz${-overlay.rotation}` +
+    const alignment = glyph.anchor === 'middle' ? 8 : glyph.anchor === 'end' ? 9 : 7;
+    events.push(event(`{\\an${alignment}\\pos(${x},${y})\\frz${-overlay.rotation}` +
       `\\fn${overlay.fontFamily.split(',')[0]}\\fs${glyph.size}\\bord0\\shad0` +
       `\\alpha&H${primary.slice(2, 4)}&\\1c&H${primary.slice(4)}&}${escapeAssText(glyph.text)}`));
   }

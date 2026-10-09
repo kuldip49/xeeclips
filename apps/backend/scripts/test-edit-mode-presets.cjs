@@ -673,12 +673,13 @@ async function testNoPromptAndFallback() {
 
   // A configured provider that fails falls back to the deterministic path
   // instead of failing the plan.
-  const failing = await seed(talkingHeadAnalysis(), { llm: { calls: 0,
+  const failing = await seed(talkingHeadAnalysis(), { llm: { calls: 0, roles: [],
     isAnyConfigured() { return true; },
-    async generate() { this.calls++; throw new Error('provider down'); } } });
+    async generate(input) { this.calls++; this.roles.push(input.role); throw new Error('provider down'); } } });
   const resilient = await failing.presets.preview(failing.projectId,
     { presetId: 'MOTIVATIONAL' });
-  assert.equal(failing.llm.calls, 1, 'the configured provider was attempted');
+  assert.equal(failing.llm.calls, 3, 'shared understanding plus one bounded primary creative retry');
+  assert.deepEqual(failing.llm.roles, ['clipUnderstanding','creativeGeneration','creativeGeneration']);
   assert.equal(resilient.generation, 'DETERMINISTIC', 'a provider failure degrades, never throws');
   await failing.presets.apply(failing.projectId, { presetId: 'MOTIVATIONAL' });
 
@@ -712,10 +713,17 @@ async function testNoPromptAndFallback() {
   }
 
   // A grounded provider headline is accepted and marked as LLM-assisted.
-  const grounded = 'Compound Interest Beats Timing The Market';
+  const choices = [
+    {text:'Why Does Compound Interest Beat Timing The Market?',category:'QUESTION'},
+    {text:'Why missing the best trading days costs investment returns',category:'HIDDEN_TRUTH'},
+    {text:'Investing discipline beats the forecast — can you stay invested?',category:'CHALLENGE'}];
+  const {sharedQuality}=require('../dist/modules/content-intelligence/creative-quality.service');
+  const {localUnderstanding}=require('../dist/modules/content-intelligence/content-understanding.service');
+  const fixtureEvidence={transcript:SPEECH.join(' ')};
+  const grounded = sharedQuality.rank(choices,fixtureEvidence,localUnderstanding(fixtureEvidence))[0].text;
   const assisted = await seed(talkingHeadAnalysis(), { llm: { calls: 0,
     isAnyConfigured() { return true; },
-    async generate() { this.calls++; return { data: { hooks: [{ text: grounded }] },
+    async generate(input) { this.calls++; return { data: input.role==='critic'?{supported:true,failures:[]}:input.role==='clipUnderstanding'?{}:{ hooks: choices },
       metadata: {} }; } } });
   const assistedPlan = await assisted.presets.preview(assisted.projectId,
     { presetId: 'MOTIVATIONAL' });

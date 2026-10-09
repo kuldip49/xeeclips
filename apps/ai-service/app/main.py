@@ -54,10 +54,12 @@ def _quietest_cut(wav: wave.Wave_read, target: int, rate: int, total: int) -> in
 
 
 def _chunk_bounds(path: str):
-    """(start_sample, end_sample) windows, or None when the WAV is not 16-bit mono PCM."""
+    """16 kHz mono PCM windows; other formats use Whisper's resampling decoder."""
     try:
         with wave.open(path, 'rb') as wav:
-            if wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+            # Raw arrays passed to Faster-Whisper are always interpreted as 16 kHz.
+            # Accepting 22.05/44.1 kHz here slows speech and puts word times beyond the source.
+            if wav.getnchannels() != 1 or wav.getsampwidth() != 2 or wav.getframerate() != 16000:
                 return None
             rate, total = wav.getframerate(), wav.getnframes()
             size = TRANSCRIPTION_CHUNK_SEC * rate

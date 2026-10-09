@@ -32,9 +32,10 @@ export type ReframePlan = { version: 1; aspect: ReframeAspect;
   audio: { muted: boolean; volume: number }; resolution: 720 | 1080; reasons: string[] };
 /** The part of a plan that changes source pixels. Confirming the crop bakes exactly this into SOURCE. */
 export type ReframePreparation = Pick<ReframePlan, 'aspect' | 'crop' | 'framing' | 'tracking' | 'cleanup'> & { denoise: boolean };
-export type ReframeHookCategory = 'BOLD' | 'CURIOSITY' | 'QUESTION' | 'CONTRARIAN' | 'EMOTIONAL' | 'PROFESSIONAL' | 'SARCASTIC' | 'HUMOROUS' | 'AUTHORITY' | 'STORY' | 'WARNING';
+export type ReframeHookCategory = 'BOLD' | 'CURIOSITY' | 'QUESTION' | 'CONTRARIAN' | 'EMOTIONAL' | 'PROFESSIONAL' | 'SARCASTIC' | 'HUMOROUS' | 'AUTHORITY' | 'STORY' | 'WARNING'
+  | 'HIDDEN_TRUTH' | 'UNEXPECTED_RESULT' | 'TENSION' | 'CHALLENGE' | 'CONFLICT' | 'MISTAKE' | 'WAIT_UNTIL' | 'MYTH_REALITY' | 'BEFORE_AFTER' | 'REVEAL';
 export type ReframeHook = { text: string; category: ReframeHookCategory; score: number; recommended: boolean;
-  source: 'OPENAI' | 'LOCAL' };
+  source: 'OPENAI' | 'LOCAL'; CLICKABILITY_SCORE?: number; CONTEXT_SCORE?: number };
 export type ReframeEditPath = 'STYLEONE' | 'STYLETWO' | 'MANUAL';
 /** Social post copy is metadata, never a timeline element or burned-in subtitle. */
 export type ReframeSocialSource = { sourcePostText: string; sourceHashtags: string[];

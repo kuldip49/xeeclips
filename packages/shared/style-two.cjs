@@ -28,8 +28,9 @@ const usesStyleTwoVectors = style => Boolean(fontRole(style.fontFamily)) &&
   !(style.textRuns || []).some(run => run.color.toLowerCase() !== style.color.toLowerCase());
 const graphemes = new Intl.Segmenter('en', { granularity: 'grapheme' });
 const chars = text => Array.from(graphemes.segment(text.normalize('NFC')), item => item.segment);
+const needsShaping = text => /[\u0600-\u06ff\u0900-\u0dff]/u.test(text);
 function width(text, role, size, spacing = 0) {
-  return chars(text).reduce((n, c, i) => n + (fonts[role].glyphs[c]?.advance ?? 1) * size + (i ? spacing : 0), 0);
+  return chars(text).reduce((n, c, i) => n + (fonts[role].glyphs[c]?.advance ?? (needsShaping(c) ? .7 : 1)) * size + (i ? spacing : 0), 0);
 }
 function wrap(text, role, size, maxWidth, spacing = 0) {
   return text.split(/\r?\n/u).flatMap(paragraph => {
@@ -50,7 +51,7 @@ function styleTwoText(input) {
   if (!role) return null;
   const text = input.uppercase ? input.content.toUpperCase() : input.content;
   const spacing = input.letterSpacing || 0;
-  const maxLines = role === 'hook' ? 3 : 2;
+  const maxLines = role === 'hook' ? (text.trim().split(/\s+/u).length > 14 ? 4 : 3) : 2;
   const lineHeight = input.lineHeight || (role === 'hook' ? STYLE_TWO.hookLineHeight : STYLE_TWO.captionLineHeight);
   const padX = input.boxed ? (input.padding ?? STYLE_TWO.paddingX) * input.scale : 0;
   const padY = input.boxed ? (input.padding ?? STYLE_TWO.paddingX) * 10 / 9 * input.scale : 0;
@@ -63,16 +64,9 @@ function styleTwoText(input) {
     size = Math.max(minimum, size - input.scale);
     lines = wrap(text, role, size, input.width - padX * 2, spacing);
   }
-  // Keep canonical wording editable, but a headline beyond the bounded minimum
-  // displays an ellipsis instead of painting outside its three-line safe area.
-  const truncated = role === 'hook' && (lines.length > maxLines ||
-    lines.some(line => width(line, role, size, spacing) > input.width));
-  if (truncated) {
-    lines = lines.slice(0, maxLines);
-    let last = chars(lines[lines.length - 1] || '').slice(0, -1).join('');
-    while (last && width(`${last}…`, role, size, spacing) > input.width) last = chars(last).slice(0, -1).join('');
-    lines[lines.length - 1] = `${last.trimEnd()}…`;
-  }
+  // Never remove words to fit a headline. Impossible manual text is reported as
+  // overflow to the export gate rather than disguised as a successful ellipsis.
+  const truncated = false;
   const cap = fonts[role].cap * size;
   const pitch = size * lineHeight;
   const inkHeight = Math.max(0, (lines.length - 1) * pitch + cap);
@@ -88,6 +82,14 @@ function styleTwoText(input) {
   lines.forEach((line, row) => {
     let x = lineX(width(line, role, size, spacing));
     const y = firstBaseline + row * pitch;
+    // Complex scripts need whole-line shaping: separate glyph events disconnect
+    // vowel marks and conjuncts. Keep the existing native font fallback together.
+    if (needsShaping(line)) {
+      const anchor = input.textAlign === 'left' ? 'start' : input.textAlign === 'right' ? 'end' : 'middle';
+      fallback.push({ text: line, x: anchor === 'middle' ? input.x + input.width / 2
+        : anchor === 'end' ? input.x + input.width - padX : input.x + padX, y, size, anchor });
+      return;
+    }
     for (const c of chars(line)) {
       const glyph = fonts[role].glyphs[c];
       if (glyph) {
