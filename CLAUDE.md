@@ -143,7 +143,7 @@ palette or hex classes to app chrome. Video stages stay black and generated medi
 
 ### AI service boundary
 
-`apps/ai-service` exposes `/health`, a transcription endpoint, and `/visual-analysis` (accepts a MinIO
+`apps/ai-service` exposes `/health`, a transcription endpoint, `/tail-transcriptions` (one bounded re-transcription of a clip ending, used only when the last word of a clip is ASR-unreliable; see `docs/ending-qa-asr-uncertainty.md`), and `/visual-analysis` (accepts a MinIO
 object + chunk time ranges, returns one position-keyed visual result per chunk). It has no database access
 and no knowledge of Projects/Videos — the backend owns all persistence and calls the AI service as a stateless
 compute boundary.

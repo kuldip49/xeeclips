@@ -1,4 +1,5 @@
-import { ClipBoundaryService, transcriptBoundaryWords } from '../content-intelligence/clip-boundary.service';
+import { ClipBoundaryService, transcriptBoundaryWords, type TailRequest } from '../content-intelligence/clip-boundary.service';
+import { tailPassFromResponse, type TailPass } from '../content-intelligence/ending-evidence';
 import { LlmRouterService } from './llm-router.service';
 import { isTransientAiServiceFailure, postAiServiceJson, waitForAiServiceHealthy, type AiServiceResponse } from './ai-service-http';
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
@@ -461,6 +462,46 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * ONE bounded re-transcription of the seconds before a clip end whose verdict hangs on an unreliable last token.
+   * The result is stored on that transcript word, so export and the editor reach the same ending verdict from the same
+   * evidence. Any failure returns null and the ending keeps its strict verdict; it never throws into the pipeline.
+   */
+  private async requestTailPass(video: { id: string; audioBucket: string | null; audioObjectKey: string | null },
+    request: TailRequest, segments: Array<{ id: string; start: number; end: number; words: unknown }>,
+    words: Array<{ start: number; end: number; tailPass?: TailPass }>): Promise<TailPass | null> {
+    if (process.env.ENDING_TAIL_VERIFICATION_ENABLED?.toLowerCase() === 'false' || !video.audioBucket || !video.audioObjectKey) return null;
+    try {
+      const transcript = await this.prisma.transcript.findUnique({ where: { videoId: video.id }, select: { language: true } });
+      const response = await postAiServiceJson(`${this.aiServiceUrl}/tail-transcriptions`, {
+        bucket: video.audioBucket, object_key: video.audioObjectKey, window_start: request.windowStart,
+        window_end: request.windowEnd, final_word_end: request.wordEnd, task: 'transcribe',
+        ...(transcript?.language ? { language: transcript.language } : {}) },
+      Math.min(this.aiServiceTimeoutMs, 120_000));
+      if (!response.ok) {
+        this.logger.warn(`Ending tail check unavailable (${response.status}); the strict ending verdict stands`);
+        return null;
+      }
+      const pass = tailPassFromResponse(await response.json(), request.wordEnd);
+      if (!pass) return null;
+      const segment = segments.find(item => item.start <= request.wordStart + .001 && item.end >= request.wordEnd - .001
+        && Array.isArray(item.words));
+      if (segment) {
+        const stored = (segment.words as Array<Record<string, unknown>>).map(word =>
+          word.start === request.wordStart && word.end === request.wordEnd ? { ...word, tailPass: pass } : word);
+        await this.prisma.transcriptSegment.update({ where: { id: segment.id }, data: { words: stored as unknown as Prisma.InputJsonValue } });
+      }
+      const word = words.find(item => item.start === request.wordStart && item.end === request.wordEnd);
+      if (word) word.tailPass = pass;
+      this.logger.log(JSON.stringify({ event: 'ending_tail_check', wordEnd: request.wordEnd,
+        window: [pass.windowStart, pass.windowEnd], words: pass.words.length, stopped: pass.acoustics.stopped }));
+      return pass;
+    } catch (error) {
+      this.logger.warn('Ending tail check failed: ' + (error instanceof Error ? error.message : String(error)));
+      return null;
+    }
+  }
+
   private async awaitAiServiceRecovery(attempt: number) {
     await new Promise((resolve) => setTimeout(resolve, 5000 * attempt));
     const healthy = await waitForAiServiceHealthy(this.aiServiceUrl, 5 * 60_000);
@@ -854,14 +895,22 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       performance.shortlistCount = shortlistBeforeBoundaries.length;
 
       const rawTranscriptSegments = await this.prisma.transcriptSegment.findMany({
-        where: { transcript: { videoId } }, select: { start: true, end: true, text: true, words: true, speaker: true }
+        where: { transcript: { videoId } }, select: { id: true, start: true, end: true, text: true, words: true, speaker: true }
       });
       const transcriptWords = transcriptBoundaryWords(rawTranscriptSegments);
       const boundaryStartedAt = Date.now();
       const preliminaryShortlist: ScoredClipCandidate[] = [];
+      // At most one tail check per distinct ending, however many candidates end on that word.
+      const tailChecks = new Map<string, Promise<TailPass | null>>();
+      const verifyTail = (request: TailRequest) => {
+        const key = `${request.wordStart}:${request.wordEnd}`;
+        let check = tailChecks.get(key);
+        if (!check) tailChecks.set(key, check = this.requestTailPass(video, request, rawTranscriptSegments, transcriptWords));
+        return check;
+      };
       for (const candidate of shortlistBeforeBoundaries) {
         const repaired = await new ClipBoundaryService().repairSemantic(candidate, transcriptWords, this.boundaryRouter,
-          performance.effectiveAiMode === 'ONLINE', { sourceDuration: video.duration ?? undefined });
+          performance.effectiveAiMode === 'ONLINE', { sourceDuration: video.duration ?? undefined, verifyTail });
         const optimized = { ...optimizeClipBoundaries(candidate, transcriptWords), ...repaired };
         const startTime = round2(optimized.startTime);
         const endTime = round2(optimized.endTime);
@@ -876,7 +925,8 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
           rejectionReason: optimized.evidenceAvailable && !optimized.valid ? optimized.reasons.join(',') : candidate.rejectionReason,
           evidence: { ...candidate.evidence, boundaryQa: optimized.qa, boundaryRepair: {
             version: 2, requestedTargetDuration: candidate.duration, rawStart: candidate.startTime, rawEnd: candidate.endTime,
-            finalStart: startTime, finalEnd: endTime, reasons: optimized.reasons, startAdjustment: optimized.startAdjustment, endAdjustment: optimized.endAdjustment },
+            finalStart: startTime, finalEnd: endTime, reasons: optimized.reasons, startAdjustment: optimized.startAdjustment, endAdjustment: optimized.endAdjustment,
+            endingEvidence: optimized.endingEvidence ?? null },
             speakerTurns: rawTranscriptSegments.filter(s => s.end > startTime && s.start < endTime).map(s => ({speaker:s.speaker ?? 'unknown',text:s.text})) } });
       }
       performance.boundaryOptimizationMs += Date.now() - boundaryStartedAt;

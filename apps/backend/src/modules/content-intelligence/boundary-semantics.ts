@@ -28,3 +28,10 @@ export function endingSignals(text: string, nextText: string, continues: boolean
     STORY_BEAT_COMPLETE: storyComplete, NO_DANGLING_CLAUSE: noClause, NO_DANGLING_PRONOUN: noPronoun,
     NO_UNRESOLVED_SETUP: !unresolved && storyComplete, VIEWER_SATISFIED_END: satisfied };
 }
+
+/** Text primitives shared by the boundary service and the ending-evidence assessment. */
+export const terminal = (s: string) => /[.!?।॥]["'’”\])]*$/u.test(s.trim()) && !/\.{3}$/u.test(s.trim());
+export const dangling = (s: string) => /(?:\b(?:and|but|because|which|that|if|when|to|the|a|an|such as|for example|first|second|third)|और|लेकिन|क्योंकि|अगर|तो)[,;:]?\s*$/iu.test(s.replace(/[.!?।]+$/u, ''));
+export const continuation = (s: string) => /^(?:and|but|then|so|because|therefore|which means|in other words|as a result|second|third|finally|the answer|the punchline|the result|turns out|in the end|that conversation|that experience|that decision|that['’]s (?:why|how|what)|और|लेकिन|क्योंकि|इसलिए|मतलब|आखिर|नतीजा)[\s,:]/iu.test(s.trim());
+export const CLAUSE_WORD = /^(?:is|are|was|were|am|be|been|being|has|have|had|do|does|did|will|would|can|could|should|shall|may|might|must|get|gets|got|go|goes|went|say|says|said|think|thinks|know|knows|mean|means|want|wants|need|needs|make|makes|made|take|takes|took|see|sees|saw|let|lets|let's|i|you|we|he|she|they|it)$|['’](?:s|re|m|ve|ll|d)$|n['’]t$/iu;
+export const bare = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}'’]/gu, '');

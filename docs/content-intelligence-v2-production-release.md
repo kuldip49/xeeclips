@@ -42,3 +42,7 @@ Maintenance blocked new public mutations before reservations/dispatch, with exce
 - Previously documented unrelated stale candidate/understanding and worker-startup fixtures remain outside the required 25-script suite. Provider editorial scores/latency vary; local font/render acceptance is not a replacement for real multilingual media certification.
 
 Evidence and verified backup are retained locally in `storage/content-intelligence-v2-release/` (Git-ignored): `backup-restore.json`, `idle-1.json`, `idle-2.json`, `backend-deployed.json`, `worker-deployed.json`, `create-state.json`, `failed-delivery-analysis.private.json`, `production-failure-rollback.json`, `rollback-security-checks.json`, `cleanup-result.json`, `final-health.json`, and `before-ci-v2-9a027cd.dump`. Authorized review material remains in `.real-qa-preview/creative-acceptance/human-review/`.
+
+## Follow-up: ending-gate fix
+
+The production blocker above is diagnosed and fixed in `docs/ending-qa-asr-uncertainty.md` (not deployed). Finding: the wrong final word did not fail the gate; the ASR trailing ellipsis did. The fix needs the new AI-service image (`/tail-transcriptions`) as well as the backend.

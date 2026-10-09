@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from app.visual_analysis import analyze_video_chunks
 from app.edit_analysis import analyze_edit_window
+from app.tail_analysis import MAX_TAIL_WINDOW_SEC, measure_tail, read_window
 
 logger = logging.getLogger('uvicorn.error')
 visual_analysis_lock = Lock()  # One CPU-heavy video at a time per service process.
@@ -155,6 +156,35 @@ class TranscriptionResponse(BaseModel):
     language_probability: float | None
     duration: float | None
     segments: list[TranscriptSegment]
+
+
+class TailTranscriptionRequest(BaseModel):
+    """One short window of the stored WAV, for verifying an acceptance-critical clip ending."""
+    bucket: str = Field(min_length=1)
+    object_key: str = Field(min_length=1)
+    window_start: float = Field(ge=0)
+    window_end: float = Field(gt=0)
+    final_word_end: float = Field(gt=0)
+    task: str = Field(default='transcribe', pattern='^(translate|transcribe)$')
+    language: str | None = None
+
+
+class TailAcousticsModel(BaseModel):
+    final_word_end: float
+    speech_db: float | None
+    boundary_db: float | None
+    post_silence_ms: float
+    audio_ends_ms: float
+    stopped: bool
+    speech_continues: bool | None
+
+
+class TailTranscriptionResponse(BaseModel):
+    window_start: float
+    window_end: float
+    language: str | None
+    words: list[TranscriptWord]
+    acoustics: TailAcousticsModel
 
 
 class VisualChunk(BaseModel):
@@ -367,6 +397,47 @@ def _transcribe(request: TranscriptionRequest) -> TranscriptionResponse:
         raise HTTPException(status_code=500, detail=f'Transcription failed: {error}') from error
     finally:
         logger.info('Total execution time: %.3f seconds', perf_counter() - started_at)
+
+
+@app.post('/tail-transcriptions', response_model=TailTranscriptionResponse)
+def tail_transcription(request: TailTranscriptionRequest) -> TailTranscriptionResponse:
+    """Re-transcribe ONE bounded window (<= MAX_TAIL_WINDOW_SEC) and measure the audio at the cut.
+
+    Used only when the last word of a clip decides its ending QA and the first pass looks unstable. It never
+    transcribes the whole source and callers make at most one request per clip ending.
+    """
+    if request.window_end - request.window_start > MAX_TAIL_WINDOW_SEC + 1e-6:
+        raise HTTPException(status_code=422, detail=f'Tail window is limited to {MAX_TAIL_WINDOW_SEC:.0f} seconds')
+    if not (request.window_start < request.final_word_end <= request.window_end + 1e-6):
+        raise HTTPException(status_code=422, detail='final_word_end must lie inside the tail window')
+    with transcription_lock:
+        whisper_model = get_whisper_model()
+        try:
+            with TemporaryDirectory(prefix='ai-content-tail-') as directory:
+                audio_path = Path(directory) / 'audio.wav'
+                get_storage_client().fget_object(request.bucket, request.object_key, str(audio_path))
+                audio, rate, actual_start, _ = read_window(str(audio_path), request.window_start, request.window_end)
+                if audio.size < rate // 2:
+                    raise HTTPException(status_code=422, detail='Tail window contains no audio')
+                raw_segments, info = whisper_model.transcribe(
+                    audio, beam_size=5, vad_filter=True,
+                    vad_parameters={'min_silence_duration_ms': int(os.getenv('WHISPER_VAD_MIN_SILENCE_MS', '500'))},
+                    word_timestamps=True, task=request.task, language=request.language)
+                words = [
+                    TranscriptWord(start=word.start + actual_start, end=word.end + actual_start, text=word.word.strip(),
+                                   confidence=getattr(word, 'probability', None))
+                    for segment in raw_segments for word in (segment.words or []) if word.word.strip()
+                ]
+                acoustics = measure_tail(audio, rate, actual_start, request.final_word_end,
+                                         [(w.start, w.end) for w in words])
+                return TailTranscriptionResponse(
+                    window_start=actual_start, window_end=actual_start + audio.size / rate, language=info.language,
+                    words=words, acoustics=TailAcousticsModel(**acoustics.__dict__))
+        except HTTPException:
+            raise
+        except Exception as error:
+            logger.exception('Tail transcription failed')
+            raise HTTPException(status_code=500, detail=f'Tail transcription failed: {error}') from error
 
 
 @app.post('/visual-analysis', response_model=list[VisualAnalysisResult])
