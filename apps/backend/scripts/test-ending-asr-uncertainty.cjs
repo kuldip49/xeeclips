@@ -212,7 +212,7 @@ check('10 an unstable tail pass cannot certify an ending', () => {
   const cases = [
     ['tail words disagree beyond the last token', words => tailFor(words, { finalText: 'man', scramble: true }), 'TAIL_UNSTABLE'],
     ['tail pass hears more speech after the cut', words => tailFor(words, { finalText: 'man', extra: 'and' }), 'FRESH_PASS_HEARS_MORE_SPEECH'],
-    ['audio shows voice running on past the word', words => tailFor(words, { finalText: 'man', speechContinues: true }), 'ACOUSTIC_SPEECH_CONTINUES'],
+    ['audio shows voice running on past the word', words => tailFor(words, { finalText: 'man', speechContinues: true }), 'VOICE_CONTINUING_AT_EOF'],
     ['fresh pass ends on a function word', words => tailFor(words, { finalText: 'the' }), 'FRESH_PASS_INCOMPLETE']];
   for (const [label, tail, reason] of cases) {
     const j = judge(target, { tail });

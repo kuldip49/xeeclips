@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from app.visual_analysis import analyze_video_chunks
 from app.edit_analysis import analyze_edit_window
-from app.tail_analysis import MAX_TAIL_WINDOW_SEC, measure_tail, read_window
+from app.tail_analysis import EOF_REACH_SEC, MAX_TAIL_WINDOW_SEC, measure_tail, read_window
 
 logger = logging.getLogger('uvicorn.error')
 visual_analysis_lock = Lock()  # One CPU-heavy video at a time per service process.
@@ -167,6 +167,9 @@ class TailTranscriptionRequest(BaseModel):
     final_word_end: float = Field(gt=0)
     task: str = Field(default='transcribe', pattern='^(translate|transcribe)$')
     language: str | None = None
+    # 'base' = the normal transcription model. 'strong' = the optional higher-quality model for ambiguous tails only
+    # (WHISPER_TAIL_MODEL_PATH); 503 when it is not installed. Never used for the full source.
+    model: str = Field(default='base', pattern='^(base|strong)$')
 
 
 class TailAcousticsModel(BaseModel):
@@ -177,6 +180,9 @@ class TailAcousticsModel(BaseModel):
     audio_ends_ms: float
     stopped: bool
     speech_continues: bool | None
+    eof: str | None = None
+    eof_level_db: float | None = None
+    eof_body_drop_db: float | None = None
 
 
 class TailTranscriptionResponse(BaseModel):
@@ -185,6 +191,9 @@ class TailTranscriptionResponse(BaseModel):
     language: str | None
     words: list[TranscriptWord]
     acoustics: TailAcousticsModel
+    model: str = 'base'
+    acoustics_version: int = 2
+    elapsed_ms: float = 0.0
 
 
 class VisualChunk(BaseModel):
@@ -270,6 +279,22 @@ def get_whisper_model() -> WhisperModel:
         raise HTTPException(
             status_code=503, detail='Whisper model not loaded. Check local model path.',
         )
+    return model
+
+
+def get_tail_model() -> WhisperModel:
+    """The optional stronger model, loaded on first use and kept. It exists only for ambiguous clip-ending tails."""
+    model = getattr(app.state, 'tail_model', None)
+    if model is not None:
+        return model
+    path = os.getenv('WHISPER_TAIL_MODEL_PATH', '/models/whisper-tail')
+    if not Path(path).is_dir() or not (Path(path) / 'model.bin').is_file():
+        raise HTTPException(status_code=503, detail='Stronger tail model is not installed')
+    model = WhisperModel(path, device=os.getenv('WHISPER_DEVICE', 'cpu'),
+                         compute_type=os.getenv('WHISPER_COMPUTE_TYPE', 'int8'), local_files_only=True)
+    app.state.tail_model = model
+    app.state.tail_model_name = os.getenv('WHISPER_TAIL_MODEL_NAME') or Path(path).name
+    logger.info('Stronger tail model loaded: %s', app.state.tail_model_name)
     return model
 
 
@@ -411,12 +436,14 @@ def tail_transcription(request: TailTranscriptionRequest) -> TailTranscriptionRe
     if not (request.window_start < request.final_word_end <= request.window_end + 1e-6):
         raise HTTPException(status_code=422, detail='final_word_end must lie inside the tail window')
     with transcription_lock:
-        whisper_model = get_whisper_model()
+        whisper_model = get_whisper_model() if request.model == 'base' else get_tail_model()
+        model_label = 'base' if request.model == 'base' else getattr(app.state, 'tail_model_name', 'strong')
+        started = perf_counter()
         try:
             with TemporaryDirectory(prefix='ai-content-tail-') as directory:
                 audio_path = Path(directory) / 'audio.wav'
                 get_storage_client().fget_object(request.bucket, request.object_key, str(audio_path))
-                audio, rate, actual_start, _ = read_window(str(audio_path), request.window_start, request.window_end)
+                audio, rate, actual_start, audio_total = read_window(str(audio_path), request.window_start, request.window_end)
                 if audio.size < rate // 2:
                     raise HTTPException(status_code=422, detail='Tail window contains no audio')
                 raw_segments, info = whisper_model.transcribe(
@@ -428,11 +455,13 @@ def tail_transcription(request: TailTranscriptionRequest) -> TailTranscriptionRe
                                    confidence=getattr(word, 'probability', None))
                     for segment in raw_segments for word in (segment.words or []) if word.word.strip()
                 ]
+                reaches_eof = (actual_start + audio.size / rate) >= audio_total - EOF_REACH_SEC
                 acoustics = measure_tail(audio, rate, actual_start, request.final_word_end,
-                                         [(w.start, w.end) for w in words])
+                                         [(w.start, w.end) for w in words], reaches_eof)
                 return TailTranscriptionResponse(
                     window_start=actual_start, window_end=actual_start + audio.size / rate, language=info.language,
-                    words=words, acoustics=TailAcousticsModel(**acoustics.__dict__))
+                    words=words, acoustics=TailAcousticsModel(**acoustics.__dict__), model=model_label,
+                    elapsed_ms=round((perf_counter() - started) * 1000, 1))
         except HTTPException:
             raise
         except Exception as error:

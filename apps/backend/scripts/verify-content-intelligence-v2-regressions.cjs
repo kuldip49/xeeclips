@@ -10,7 +10,7 @@ const tests=['test-content-intelligence','test-content-intelligence-v2','test-cl
   'test-quick-reframe-styletwo','test-quick-reframe-post-copy','test-edit-mode-chat','test-edit-mode-presets',
   'test-generated-clip-edit-project','test-generated-clip-edit-plan-reconstruction','test-clip-selection-flow',
   'test-style-readiness','test-clip-export','test-hook-plate-lengths','test-ai-service-http',
-  'test-creative-hook-pipeline','test-ending-asr-uncertainty'];
+  'test-creative-hook-pipeline','test-ending-asr-uncertainty','test-ending-eof-and-strong-tail'];
 async function run(test){
   const started=Date.now();return new Promise(resolveResult=>{
     const p=spawn(process.execPath,[resolve(__dirname,test+'.cjs')],{cwd:root,windowsHide:true,env:{...process.env,

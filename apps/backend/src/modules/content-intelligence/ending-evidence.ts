@@ -24,10 +24,18 @@ export type EndingVerdict = 'NOT_APPLICABLE' | 'COMPLETE' | 'INCOMPLETE' | 'INCO
 export type EndingClosure = 'PAUSE' | 'TURN' | 'SOURCE_END' | 'NONE';
 
 export type TailWord = { text: string; start: number; end: number; confidence: number | null };
-export type TailAcousticsResult = { stopped: boolean; speechContinues: boolean | null; audioEndsMs: number; postSilenceMs: number };
-/** One bounded re-transcription of the last seconds before a clip end, with the audio measured at the cut. */
+/** What the waveform says about the very END of the source audio (only when the tail window reaches it). */
+export type EofClass = 'TRAILING_SILENCE' | 'VOICE_CONTINUING' | 'INDETERMINATE';
+export type TailAcousticsResult = { stopped: boolean; speechContinues: boolean | null; audioEndsMs: number; postSilenceMs: number;
+  eof?: EofClass | null; eofLevelDb?: number | null; eofBodyDropDb?: number | null };
+/** One bounded re-transcription of the last seconds before a clip end, with the audio measured at the cut. `model` names the ASR model. */
 export type TailPass = { version: 1; windowStart: number; windowEnd: number; finalWordEnd: number;
-  words: TailWord[]; acoustics: TailAcousticsResult };
+  words: TailWord[]; acoustics: TailAcousticsResult; model?: string; cacheKey?: string; acousticsVersion?: number };
+/** Provenance of a lexical correction of a clip's last word. The original ASR reading is always kept next to it. */
+export type Correction = { kind: 'ADOPT' | 'CONFIRM'; from: string; to: string; model: string; confidence: number | null;
+  originalConfidence: number | null; agreement: number; wordStart: number; wordEnd: number };
+/** The end-of-source rule is only applied by callers that have the audio (see BoundaryOptions.eofAcoustics). */
+export type EofPolicy = { required: boolean; reviewAvailable?: boolean };
 
 export type EndingEvidence = {
   version: 1; verdict: EndingVerdict; state: AsrState;
@@ -36,6 +44,9 @@ export type EndingEvidence = {
   realSignals: string[]; inferredSignals: string[]; closure: EndingClosure; reasons: string[];
   tail?: { agreement: number; finalOnlyDiffers: boolean; freshFinalToken: string | null; freshFinalConfidence: number | null;
     acoustics: TailAcousticsResult };
+  /** End-of-source classification from the waveform, when a tail pass reached it. */
+  eof?: EofClass;
+  correction?: Correction;
 };
 
 /**
@@ -50,7 +61,8 @@ export const ASR_ENDING_POLICY = {
   minSentenceWords: 4,
   tailAgreement: 0.8,        // share of the words before the last one that two passes must agree on
   tailAlignSec: 0.3,         // a tail pass belongs to this word only if it was taken at the same word end
-  tailFreshMoreSec: 0.12     // fresh speech starting this long after the word end means the speech runs on
+  tailFreshMoreSec: 0.12,    // fresh speech starting this long after the word end means the speech runs on
+  strongAdoptConfidence: 0.6 // a stronger model's reading of the last word replaces the base reading only at or above this
 } as const;
 
 // Words that cannot end a thought. Only consulted on the path that RELAXES punctuation strictness, so a longer
@@ -128,18 +140,48 @@ function tailComparison(words: BoundaryWord[], index: number, pass: TailPass) {
   return { agreement, finalSame, freshFinal, more, freshComplete, freshEllipsis: !!freshFinal && ELLIPSIS.test(freshFinal.text.trim()) };
 }
 
+/** The end-of-source class, from the explicit EOF classification or, for a window that ends before the source does, the post-word audio. */
+export function eofClassOf(a: TailAcousticsResult): EofClass {
+  if (a.eof) return a.eof;
+  if (a.speechContinues === true) return 'VOICE_CONTINUING';
+  return a.stopped ? 'TRAILING_SILENCE' : 'INDETERMINATE';
+}
+
 /**
  * Does the speaker's thought end at `words[index]`, given that the final token's punctuation is not a plain full stop?
  * Cheap to call: a word that is already terminally punctuated is NOT_APPLICABLE and never reaches the evidence logic.
  */
-export function assessEnding(input: { words: BoundaryWord[]; index: number; startIndex: number; sourceEnd: number }): EndingEvidence {
-  const { words, index, startIndex, sourceEnd } = input;
+export function assessEnding(input: { words: BoundaryWord[]; index: number; startIndex: number; sourceEnd: number; eofPolicy?: EofPolicy }): EndingEvidence {
+  const { words, index, startIndex, sourceEnd, eofPolicy } = input;
   const final = words[index], text = final.text.trim(), core = bare(text);
   const conf = typeof final.confidence === 'number' && Number.isFinite(final.confidence) ? final.confidence : null;
   const out: EndingEvidence = { version: 1, verdict: 'INCOMPLETE', state: 'ASR_UNCERTAIN', finalToken: final.text,
     wordStart: final.start, wordEnd: final.end, finalConfidence: conf, confidenceSource: conf === null ? 'NONE' : 'WORD',
     realSignals: [], inferredSignals: [], closure: 'NONE', reasons: [] };
-  if (terminal(text)) return { ...out, verdict: 'NOT_APPLICABLE', state: 'ASR_RELIABLE' };
+  if (terminal(text)) {
+    const plain: EndingEvidence = { ...out, verdict: 'NOT_APPLICABLE', state: 'ASR_RELIABLE' };
+    if (!eofPolicy?.required || words[index + 1]) return plain;
+    // The last word of the source. A full stop from the recogniser is evidence, not proof: Whisper punctuates words it
+    // hallucinated at a cut (a cut-off "oh," came back as "you know." at p = 0.07), so the waveform at the end of the audio decides.
+    const storedEofPass = alignedTail(final);
+    const eofPass = storedEofPass?.acousticsVersion === 2 ? storedEofPass : undefined;
+    if (!eofPass) return { ...plain, verdict: 'INCONCLUSIVE', closure: 'SOURCE_END', reasons: ['NEEDS_EOF_ACOUSTICS'] };
+    const eofClass = eofClassOf(eofPass.acoustics), end: EndingEvidence = { ...plain, closure: 'SOURCE_END', eof: eofClass };
+    if (eofClass === 'VOICE_CONTINUING') return { ...end, verdict: 'INCOMPLETE', reasons: ['VOICE_CONTINUING_AT_EOF'] };
+    if (eofClass === 'INDETERMINATE' && eofPolicy.reviewAvailable === false) return { ...end, verdict: 'INCOMPLETE', reasons: ['EOF_INDETERMINATE_WITHOUT_REVIEW'] };
+    const cmp = tailComparison(words, index, eofPass);
+    if (cmp.more) return { ...end, verdict: 'INCOMPLETE', reasons: ['FRESH_PASS_HEARS_MORE_SPEECH'] };
+    const weak = conf !== null && conf < ASR_ENDING_POLICY.lowConfidence;
+    if (weak && eofClass !== 'TRAILING_SILENCE') return { ...end, verdict: 'INCOMPLETE',
+      reasons: ['LOW_CONFIDENCE_WITHOUT_ACOUSTIC_CLOSURE'] };
+    if (weak && (cmp.agreement < ASR_ENDING_POLICY.tailAgreement || !cmp.finalSame
+      || (cmp.freshFinal?.confidence ?? 0) < ASR_ENDING_POLICY.lowConfidence)) return { ...end, verdict: 'COMPLETE',
+      state: cmp.finalSame ? 'ASR_UNCERTAIN' : 'ASR_CONFLICTING', realSignals: ['FINAL_WORD_CONFIDENCE_LOW'],
+      tail: { agreement: cmp.agreement, finalOnlyDiffers: cmp.agreement >= ASR_ENDING_POLICY.tailAgreement && !cmp.finalSame,
+        freshFinalToken: cmp.freshFinal?.text ?? null, freshFinalConfidence: cmp.freshFinal?.confidence ?? null, acoustics: eofPass.acoustics },
+      reasons: ['TAIL_PASS_CONFIRMS_COMPLETION'] };
+    return end;
+  }
 
   const next = words[index + 1];
   const gap = next ? next.start - final.end : Infinity;
@@ -168,7 +210,8 @@ export function assessEnding(input: { words: BoundaryWord[]; index: number; star
   // An ellipsis is a marker Whisper also emits when unsure; alone it can neither prove nor excuse a trail-off. It is
   // excused by a real weak reading of the word (or a malformed token), or by another pass disagreeing with it.
   const ellipsisOnly = ellipsis && !lowAbs && !lowRel && !malformed;
-  const pass = alignedTail(final);
+  const storedPass = alignedTail(final);
+  const pass = eofPolicy?.required && !next && storedPass?.acousticsVersion !== 2 ? undefined : storedPass;
   const cmp = pass ? tailComparison(words, index, pass) : undefined;
   let stableAcrossPasses = false;
   if (pass && cmp) {
@@ -177,9 +220,13 @@ export function assessEnding(input: { words: BoundaryWord[]; index: number; star
     out.tail = { agreement: cmp.agreement, finalOnlyDiffers: cmp.agreement >= ASR_ENDING_POLICY.tailAgreement && !cmp.finalSame,
       freshFinalToken: cmp.freshFinal?.text ?? null, freshFinalConfidence: cmp.freshFinal?.confidence ?? null, acoustics: pass.acoustics };
   }
+  const eofClass = pass && out.closure === 'SOURCE_END' ? eofClassOf(pass.acoustics) : null;
+  if (eofClass) out.eof = eofClass;
   const fail = (...reasons: string[]): EndingEvidence => ({ ...out, verdict: 'INCOMPLETE', reasons: [...out.reasons, ...reasons] });
 
   if (truncated) return fail('TRUNCATED_FINAL_WORD');
+  // The waveform at the end of the audio outranks every transcript signal: voice still going means the source is cut here.
+  if (eofClass === 'VOICE_CONTINUING') return fail('VOICE_CONTINUING_AT_EOF');
   if (out.closure === 'NONE') return fail(gap < 0.35 ? 'SPEECH_CONTINUES_IMMEDIATELY' : 'NO_PAUSE_OR_TURN_AFTER_FINAL_WORD');
   if (out.state === 'ASR_RELIABLE') return fail('TRAILING_OFF_CONFIRMED');
   // A pause alone does not make a clause a finished utterance. Whisper ends a segment only where it hears the utterance
@@ -208,7 +255,9 @@ export function assessEnding(input: { words: BoundaryWord[]; index: number; star
   }
   // At the very end of the audio a CONFIDENTLY read last word with no full stop is not noise: Whisper punctuates a sentence
   // it heard finish, so the missing stop is itself evidence of a cut. Only doubt about the token itself can excuse it.
-  if (out.closure === 'SOURCE_END' && !(lowAbs || lowRel || malformed || out.state === 'ASR_CONFLICTING')) return fail('SOURCE_END_WITHOUT_TOKEN_DOUBT');
+  if (out.closure === 'SOURCE_END' && eofClass !== 'TRAILING_SILENCE' && !(lowAbs || lowRel || malformed || out.state === 'ASR_CONFLICTING')) return fail('SOURCE_END_WITHOUT_TOKEN_DOUBT');
+  // Without a semantic reviewer to confirm, nothing short of audible trailing silence settles an unreliable last word at the end of the audio.
+  if (eofPolicy && eofPolicy.reviewAvailable === false && out.closure === 'SOURCE_END' && eofClass !== 'TRAILING_SILENCE') return fail('REQUIRES_SEMANTIC_REVIEW');
   if ((out.closure === 'SOURCE_END' || ellipsisOnly) && !pass) {
     // Nothing follows and the audio gives no stop to rely on (or the ellipsis is the only doubt): one bounded tail pass
     // decides, never the token alone.
@@ -230,6 +279,40 @@ export function tailPassFromResponse(value: unknown, finalWordEnd: number): Tail
       confidence: typeof w.confidence === 'number' && Number.isFinite(w.confidence) ? w.confidence : null });
   }
   return { version: 1, windowStart: r.window_start as number, windowEnd: r.window_end as number, finalWordEnd, words,
+    ...(typeof r.model === 'string' ? { model: r.model } : {}),
+    ...(Number.isInteger(r.acoustics_version) ? { acousticsVersion: r.acoustics_version as number } : {}),
     acoustics: { stopped: a.stopped === true, speechContinues: typeof a.speech_continues === 'boolean' ? a.speech_continues : null,
-      audioEndsMs: Math.round((Number(a.audio_ends_ms) || 0) * 10) / 10, postSilenceMs: Math.round((Number(a.post_silence_ms) || 0) * 10) / 10 } };
+      audioEndsMs: Math.round((Number(a.audio_ends_ms) || 0) * 10) / 10, postSilenceMs: Math.round((Number(a.post_silence_ms) || 0) * 10) / 10,
+      ...(typeof a.eof === 'string' && ['TRAILING_SILENCE', 'VOICE_CONTINUING', 'INDETERMINATE'].includes(a.eof)
+        ? { eof: a.eof as EofClass, eofLevelDb: Number.isFinite(a.eof_level_db) ? Math.round((a.eof_level_db as number) * 10) / 10 : null,
+          eofBodyDropDb: Number.isFinite(a.eof_body_drop_db) ? Math.round((a.eof_body_drop_db as number) * 10) / 10 : null } : {}) } };
+}
+
+/**
+ * Should a stronger model's reading of a clip's last word replace the base ASR reading? Only when the stronger pass agrees with the
+ * base transcript on the words before it, hears nothing after it, and is itself confident. Otherwise the word stays unresolved.
+ */
+export function decideTailCorrection(words: BoundaryWord[], index: number, strong: TailPass | null | undefined):
+  { kind: 'ADOPT' | 'CONFIRM' | 'UNRESOLVED'; reason: string; correction?: Correction } {
+  const final = words[index];
+  if (!strong || !Array.isArray(strong.words)) return { kind: 'UNRESOLVED', reason: 'STRONG_TAIL_UNAVAILABLE' };
+  if (strong.acoustics.speechContinues === true || strong.acoustics.eof === 'VOICE_CONTINUING')
+    return { kind: 'UNRESOLVED', reason: 'STRONG_TAIL_HEARS_MORE_SPEECH' };
+  const cmp = tailComparison(words, index, strong);
+  const confidence = cmp.freshFinal?.confidence ?? null;
+  if (!cmp.freshFinal || cmp.agreement < ASR_ENDING_POLICY.tailAgreement) return { kind: 'UNRESOLVED', reason: 'STRONG_TAIL_DISAGREES_BROADLY' };
+  if (cmp.more) return { kind: 'UNRESOLVED', reason: 'STRONG_TAIL_HEARS_MORE_SPEECH' };
+  if (confidence === null || confidence < ASR_ENDING_POLICY.strongAdoptConfidence) return { kind: 'UNRESOLVED', reason: 'STRONG_TAIL_LOW_CONFIDENCE' };
+  const to = cmp.freshFinal.text.trim(), core = bare(to);
+  if (!core || (core.length === 1 && !/^[ai]$/iu.test(core))) return { kind: 'UNRESOLVED', reason: 'STRONG_TAIL_MALFORMED_TOKEN' };
+  const correction: Correction = { kind: cmp.finalSame ? 'CONFIRM' : 'ADOPT', from: final.text, to, model: strong.model ?? 'strong', confidence,
+    originalConfidence: typeof final.confidence === 'number' ? final.confidence : null, agreement: cmp.agreement, wordStart: final.start, wordEnd: final.end };
+  return { kind: correction.kind, reason: correction.kind === 'ADOPT' ? 'STRONG_TAIL_RESOLVES_FINAL_WORD' : 'STRONG_TAIL_CONFIRMS_FINAL_WORD', correction };
+}
+
+/** Apply a decided correction without losing the original reading: `asrText` / `asrConfidence` keep what the base ASR said. */
+export function applyCorrection(words: BoundaryWord[], correction: Correction, strong: TailPass): BoundaryWord[] {
+  return words.map(w => w.start === correction.wordStart && w.end === correction.wordEnd
+    ? { ...w, strongTail: strong, correction, ...(correction.kind === 'ADOPT'
+      ? { asrText: w.asrText ?? w.text, asrConfidence: w.asrConfidence ?? w.confidence ?? null, text: correction.to, confidence: correction.confidence } : {}) } : w);
 }

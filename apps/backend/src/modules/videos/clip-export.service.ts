@@ -1,4 +1,5 @@
 import { ClipBoundaryService, transcriptBoundaryWords } from '../content-intelligence/clip-boundary.service';
+import { EndingTailProbe } from '../processing/ending-tail-probe';
 import { type CreativePackage } from '../content-intelligence/creative-package.service';
 import { normalize } from '../content-intelligence/content-understanding.service';
 import { UsageService } from '../auth/usage.service';
@@ -286,8 +287,15 @@ export class ClipExportService {
     const latestJob = async () => cachedJob !== undefined ? cachedJob : (cachedJob = await this.prisma.processingJob
       .findFirst({ where: { videoId: video.id }, orderBy: { createdAt: 'desc' } }));
     const boundaryMode = normalizeAiProcessingMode((await latestJob())?.aiMode ?? AiProcessingMode.FALLBACK_ONLY);
+    // Same bounded, cached tail checks as analysis. Anything stored there is reused; a fill candidate that never had one gets it now.
+    const storedSegments = transcriptContext.transcript?.segments ?? [];
+    const probe = new EndingTailProbe(this.prisma, this.logger);
     const repaired = await performanceContext.run(createPerformanceTelemetry(boundaryMode), () => new ClipBoundaryService()
-      .repairSemantic(candidate, boundaryWords, this.boundaryRouter, boundaryMode === 'ONLINE', { sourceDuration: video.duration ?? undefined }));
+      .repairSemantic(candidate, boundaryWords, this.boundaryRouter, boundaryMode === 'ONLINE', { sourceDuration: video.duration ?? undefined,
+        verifyTail: probe.verifier(video, storedSegments, boundaryWords, 'base'), verifyStrongTail: probe.verifier(video, storedSegments, boundaryWords, 'strong'),
+        eofAcoustics: { required: true } }));
+    // Persist a lexical correction (with provenance) before the render reloads the transcript, so captions never show the doubtful word.
+    if (repaired.correction) await probe.persistCorrection(storedSegments, boundaryWords, repaired.correction, repaired.strongTail);
     if (!repaired.valid) throw new EditQualityError('Clip rejected before render: incomplete spoken thought',
       { preRenderClassification: 'SKIP_BEFORE_RENDER', candidateSkippedBeforeRender: true, boundaryQa: repaired.qa, reasons: repaired.reasons });
     candidate = { ...candidate, startTime: repaired.startTime, endTime: repaired.endTime,
@@ -715,17 +723,18 @@ export class ClipExportService {
         boundary = applySponsorTrim(decide(true));
         timeline = toTimeline(boundary);
       }
+      const boundaryOpts = { sourceDuration: video.duration ?? undefined, eofAcoustics: { required: true }, reviewAvailable: aiMode === 'ONLINE' };
       let finalBoundaryQa = new ClipBoundaryService().validate({startTime:timeline.editedStart,endTime:timeline.editedEnd,
-        transcriptText:candidate.transcriptText}, transcriptBoundaryWords(segments), {sourceDuration:video.duration??undefined});
+        transcriptText:candidate.transcriptText}, transcriptBoundaryWords(segments), boundaryOpts);
       if (finalBoundaryQa.evidenceAvailable && !finalBoundaryQa.valid && !sponsor.trimmed) {
         const semanticRepair = new ClipBoundaryService().repair({startTime:timeline.editedStart,endTime:timeline.editedEnd,
-          transcriptText:candidate.transcriptText}, transcriptBoundaryWords(segments), {sourceDuration:video.duration??undefined});
+          transcriptText:candidate.transcriptText}, transcriptBoundaryWords(segments), boundaryOpts);
         if (semanticRepair.valid && semanticRepair.startTime >= windowStart && semanticRepair.endTime <= windowEnd) {
           boundary = {...boundary,editedStart:semanticRepair.startTime,editedEnd:semanticRepair.endTime,
             optimizedStartSec:semanticRepair.startTime,optimizedEndSec:semanticRepair.endTime};
           timeline = toTimeline(boundary); loop = {...loop,loopApplied:false};
           finalBoundaryQa = new ClipBoundaryService().validate({startTime:timeline.editedStart,endTime:timeline.editedEnd,
-            transcriptText:semanticRepair.transcriptText},transcriptBoundaryWords(segments),{sourceDuration:video.duration??undefined});
+            transcriptText:semanticRepair.transcriptText},transcriptBoundaryWords(segments), boundaryOpts);
         }
       }
       if (finalBoundaryQa.evidenceAvailable && !finalBoundaryQa.valid) throw new EditQualityError('Edited clip rejected before render: unfinished sentence or context',
@@ -760,7 +769,7 @@ export class ClipExportService {
         const semantic = await performanceContext.run(editMetrics, () => new ClipBoundaryService().repairSemantic({
           startTime: timeline.editedStart, endTime: timeline.editedEnd, transcriptText: finalTranscript },
           transcriptBoundaryWords(segments).filter(w => !boundary.cuts.some(c => w.start < c.end && w.end > c.start)),
-          this.boundaryRouter, aiMode === 'ONLINE', { sourceDuration: video.duration ?? undefined }));
+          this.boundaryRouter, aiMode === 'ONLINE', { sourceDuration: video.duration ?? undefined, eofAcoustics: { required: true } }));
         if (!semantic.valid || Math.abs(semantic.startTime - timeline.editedStart) > .15 || Math.abs(semantic.endTime - timeline.editedEnd) > .15)
           throw new EditQualityError('Edited clip rejected before render: unresolved delivered narrative',
             { boundaryQa: semantic.qa, reasons: semantic.reasons, preRenderClassification: 'SKIP_BEFORE_RENDER' });

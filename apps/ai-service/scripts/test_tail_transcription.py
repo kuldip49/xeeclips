@@ -3,8 +3,10 @@
 Part 1 is pure signal processing (no model). Part 2 runs the real Whisper model on the real Delivery audio,
 with storage stubbed to copy that local file (same pattern as test_whisper_offline.py).
 """
+import os
 import re
 import shutil
+import time
 import sys
 import wave
 from pathlib import Path
@@ -14,7 +16,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from app import main
-from app.tail_analysis import MAX_TAIL_WINDOW_SEC, measure_tail
+from app.tail_analysis import MAX_TAIL_WINDOW_SEC, classify_eof, frame_db, measure_tail
 
 RATE = 16000
 
@@ -47,6 +49,20 @@ for tail in (0.0, 0.11):
     ac = measure_tail(audio, RATE, 0.0, 3.0, [(0.0, 3.0)])
     assert not ac.stopped and ac.speech_continues is None, (tail, ac)
 print('Acoustic decisions on synthetic audio: PASS')
+
+# ---- Part 1b: end-of-file (EOF) classification on synthetic audio ------------------------------------------------
+def fade(seconds, level=0.3, tail=0.12):
+    a = tone(seconds, level); n = int(tail * RATE); a[-n:] *= np.linspace(1, 0.02, n); return a
+
+assert classify_eof(np.concatenate([tone(3.0), silence(0.5)]), RATE)[0] == 'TRAILING_SILENCE'
+for padding in (0.01, 0.02, 0.04, 0.06):
+    # Short silent AAC padding at a hard speech cut is not trailing acoustic closure.
+    a = np.concatenate([tone(3.0), np.zeros(int(padding * RATE), dtype=np.float32)])
+    assert classify_eof(a, RATE)[0] != 'TRAILING_SILENCE', (padding, classify_eof(a, RATE))
+assert classify_eof(fade(3.0), RATE)[0] == 'TRAILING_SILENCE', 'a voice that has faded out has finished'
+assert classify_eof(tone(3.0), RATE)[0] == 'VOICE_CONTINUING', 'a cut through steady voice'
+assert classify_eof(tone(0.1), RATE)[0] == 'INDETERMINATE', 'too little audio to say'
+print('EOF classes on synthetic audio: PASS')
 
 # ---- Part 2: the real model on the real Delivery audio ---------------------------------------------------------
 source = sys.argv[1] if len(sys.argv) > 1 else None
@@ -95,5 +111,27 @@ with patch.object(main, 'get_storage_client', return_value=storage), TestClient(
     ac = cut.json()['acoustics']
     print('continuing-speech acoustics:', ac)
     assert not ac['stopped'], 'speech runs on after the stated end; this must not read as a clean stop'
+
+    # --- EOF on the real Delivery source: it ends INSIDE the word. In the original recording the voice runs on ~160 ms past the point
+    # where the file ends (the speaker says "Manuel"), so no ASR model can read that word from this file.
+    assert body['acoustics']['eof'] == 'VOICE_CONTINUING', body['acoustics']
+
+    # --- The strong model is optional: refused (503) when not installed, used and labelled when it is.
+    missing = client.post('/tail-transcriptions', json={'bucket': 'b', 'object_key': source, 'window_start': 19.65, 'window_end': 27.65,
+                                                        'final_word_end': 27.54, 'model': 'strong'})
+    assert missing.status_code == 503, missing.status_code
+    tail_dir = os.getenv('TEST_TAIL_MODEL_PATH')
+    if tail_dir:
+        os.environ['WHISPER_TAIL_MODEL_PATH'] = tail_dir
+        os.environ['WHISPER_TAIL_MODEL_NAME'] = Path(tail_dir).name
+        t0 = time.time()
+        strong = client.post('/tail-transcriptions', json={'bucket': 'b', 'object_key': source, 'window_start': 19.65, 'window_end': 27.65,
+                                                           'final_word_end': 27.54, 'model': 'strong'})
+        assert strong.status_code == 200, strong.text
+        sj = strong.json()
+        assert sj['model'] == Path(tail_dir).name and sj['acoustics']['eof'] == 'VOICE_CONTINUING', sj['model']
+        print('strong tail words:', ' '.join(w['text'] for w in sj['words'][-6:]), f'| {time.time() - t0:.1f}s incl. model load')
+    else:
+        print('strong-model run skipped (set TEST_TAIL_MODEL_PATH)')
 Path(cut_path).unlink(missing_ok=True)
 print('Tail transcription endpoint on the real Delivery audio: PASS')

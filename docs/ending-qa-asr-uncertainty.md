@@ -1,5 +1,11 @@
 # Ending QA under ASR uncertainty
 
+**2026-10-09 continuation:** the original Delivery excerpt was proved to cut through the final word, and terminal punctuation
+now requires source-EOF acoustics on audio-backed paths. The stronger-tail policy, cache/provenance handling, AAC padding fix,
+model measurements and final isolated results are in [ending-v3-continuation.md](ending-v3-continuation.md).
+The historical terminal-punctuation and source-end assumptions below are superseded by that report. Production is untouched;
+the original truncated fixture is rejected, while an intact-source run passes the handoff's commit/push gate. Production is untouched.
+
 Fixes the Content Intelligence v2 production-acceptance blocker (2026-10-09): the fresh Delivery transcript ended
 "... more like a metal..." (the speaker said "Manuel") and the shared boundary gate refused the clip.
 Scope is **ending-QA robustness only**. Hook thresholds, clickability scoring, the writer/reviewer rubric, hook

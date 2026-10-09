@@ -22,7 +22,15 @@ async function testOutputVariants(source, directory) {
   const {CreativePackageService} = require('../dist/modules/content-intelligence/creative-package.service');
   const transcriptText = 'The experiment showed that the cooling system kept the equipment stable throughout the complete test.';
   const sharedPackage = await new CreativePackageService({generate(){throw Error('local fixture');}}).create({external:false,evidence:{transcript:transcriptText}});
-  let segments = [{start:2,end:18,text:transcriptText}];
+  const tokens = transcriptText.split(' ');
+  const words = tokens.map((text, i) => ({ text, start: 2 + 16 * i / tokens.length,
+    end: 2 + 16 * (i + 1) / tokens.length, confidence: .95 }));
+  // This render-variant fixture contains a completed sentence followed by two seconds of silence.
+  // Stored acoustic evidence avoids contacting a live AI service from this local test.
+  words.at(-1).tailPass = { version: 1, acousticsVersion: 2, windowStart: 10, windowEnd: 20, finalWordEnd: 18,
+    words: words.map(w => ({ ...w })), acoustics: { stopped: true, speechContinues: false,
+      audioEndsMs: 2000, postSilenceMs: 2000, eof: 'TRAILING_SILENCE' } };
+  let segments = [{start:2,end:18,text:transcriptText,words}];
   const rows = new Map();
   let nextId = 0;
   const keyOf = ({ videoId, rangeKey, variantKey }) => `${videoId}|${rangeKey}|${variantKey}`;
@@ -110,6 +118,7 @@ async function main() {
     execFileSync('ffmpeg', [
       '-v', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=25',
       '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=44100', '-t', '20',
+      '-af', 'afade=t=out:st=17.8:d=0.2',
       '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', source
     ]);
     const metadata = await exportClipFile(source, output, 2, 17);
