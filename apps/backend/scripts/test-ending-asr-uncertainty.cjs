@@ -104,6 +104,15 @@ check('2c wrong noun + ellipsis at the END OF THE SOURCE: stored evidence is not
   assert.equal(j.evidence.verdict, 'INCONCLUSIVE'); assert.equal(j.evidence.closure, 'SOURCE_END');
   assert(j.result.reasons.includes('ENDING_NEEDS_TAIL_VERIFICATION'));
 });
+check('2c-ii the margin between the last word and the end of the audio is not evidence (real fresh-ASR run: 30 ms)', () => {
+  // The isolated pipeline run on the real Delivery audio placed the final word's end 30 ms before the end of the audio.
+  for (const pad of [0, .005, .03, .11, .5]) {
+    const j = judge(S(`${PUNCH} metal...`, { p: .32 }), { pad });
+    assert.equal(j.evidence.closure, 'SOURCE_END', `pad ${pad}`); assert.equal(j.evidence.verdict, 'INCONCLUSIVE', `pad ${pad}: needs the tail pass`);
+    const ok = judge(S(`${PUNCH} metal...`, { p: .32 }), { pad, tail: words => tailFor(words, { finalText: 'man' }) });
+    assert(ok.atBoundary, `pad ${pad}: ${JSON.stringify([ok.result.reasons, ok.evidence])}`);
+  }
+});
 check('2d ... and ACCEPTED when a bounded tail pass agrees on everything but the last word', () => {
   const j = judge(S(`${PUNCH} metal...`, { p: .42 }), { tail: words => tailFor(words, { finalText: 'man' }) });
   assert(j.atBoundary, JSON.stringify([j.result.reasons, j.evidence]));

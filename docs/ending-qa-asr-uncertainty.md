@@ -118,3 +118,13 @@ unpunctuated word" acceptance (136 / 190) was not changed by this work.
 
 Not done and why: the live OpenAI semantic reviewer was not run on this fixture (no network or spend in this task), and no
 creative or hook code ran against the fresh-ASR transcript.
+
+## 7. Finding from the isolated full-pipeline run (follow-up fix)
+
+Running the real pipeline from scratch on the Delivery source (fresh ASR, isolated stack) reproduced the production shape
+(`metal...`, word probability 0.32) but placed the final word's end 30 ms before the end of the audio. The first version of the gate
+treated "less than 40 ms of audio after the last word" as a cut and failed the ending before any tail pass. That margin was an
+unjustified line: ASR word ends are only good to about 100 ms (the same audio gave 27.54 s in one run and 27.62 s in another, with
+voice energy continuing to about 27.60 s), so the distance to the end of the audio cannot separate a finished word from a cut one.
+The margin test is removed. With nothing after the word the closure is `SOURCE_END` whatever the margin, and acceptance still needs
+doubt about the token itself, one bounded tail pass, and the semantic reviewer.

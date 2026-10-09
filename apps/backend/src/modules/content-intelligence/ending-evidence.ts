@@ -47,7 +47,6 @@ export const ASR_ENDING_POLICY = {
   lowConfidence: 0.6,        // absolute: below this the final word is a weak reading
   relativeDrop: 0.3,         // or this far under the median of the six words before it (needs >= 3 of them)
   pauseSec: 0.8,             // same natural-break gap the boundary service already uses
-  minAudioAfterWordSec: 0.04, // less than this after the last word and the audio ends inside the word
   minSentenceWords: 4,
   tailAgreement: 0.8,        // share of the words before the last one that two passes must agree on
   tailAlignSec: 0.3,         // a tail pass belongs to this word only if it was taken at the same word end
@@ -146,7 +145,10 @@ export function assessEnding(input: { words: BoundaryWord[]; index: number; star
   const gap = next ? next.start - final.end : Infinity;
   const turn = !!next && !!final.speaker && !!next.speaker && final.speaker !== next.speaker && next.start >= final.end;
   out.closure = turn ? 'TURN' : next ? (gap >= ASR_ENDING_POLICY.pauseSec ? 'PAUSE' : 'NONE')
-    : sourceEnd - final.end >= ASR_ENDING_POLICY.minAudioAfterWordSec ? 'SOURCE_END' : 'NONE';
+    // Nothing follows. No margin test against the end of the audio: ASR word ends are only good to ~100 ms (the same Delivery
+    // audio put its final word's end at 27.54 s in one run and 27.62 s in another, with voice energy running to ~27.60 s), so
+    // "the audio ends N ms after the word" cannot tell a finished word from a cut one. Doubt, tail pass and review decide.
+    : 'SOURCE_END';
 
   const ellipsis = ELLIPSIS.test(text), truncated = TRUNCATED.test(text);
   const previous = words.slice(Math.max(0, index - 6), index).map(w => w.confidence)
@@ -178,8 +180,7 @@ export function assessEnding(input: { words: BoundaryWord[]; index: number; star
   const fail = (...reasons: string[]): EndingEvidence => ({ ...out, verdict: 'INCOMPLETE', reasons: [...out.reasons, ...reasons] });
 
   if (truncated) return fail('TRUNCATED_FINAL_WORD');
-  if (out.closure === 'NONE') return fail(next ? (gap < 0.35 ? 'SPEECH_CONTINUES_IMMEDIATELY' : 'NO_PAUSE_OR_TURN_AFTER_FINAL_WORD')
-    : 'AUDIO_ENDS_WITH_FINAL_WORD');
+  if (out.closure === 'NONE') return fail(gap < 0.35 ? 'SPEECH_CONTINUES_IMMEDIATELY' : 'NO_PAUSE_OR_TURN_AFTER_FINAL_WORD');
   if (out.state === 'ASR_RELIABLE') return fail('TRAILING_OFF_CONFIRMED');
   // A pause alone does not make a clause a finished utterance. Whisper ends a segment only where it hears the utterance
   // end, so an unreliable last word is excused only when the decoder itself closed its segment there (or the speaker changed).
