@@ -21,7 +21,7 @@ import type { ResolvedVisualLayout } from '../styles/resolved-visual-layout';
 /** Typed failure codes surfaced to the UI. */
 export const EDIT_EXPORT_ERROR_CODES = ['SOURCE_MISSING', 'ASSET_MISSING', 'INVALID_TIMELINE',
   'UNSUPPORTED_MEDIA', 'RENDER_FAILED', 'QA_FAILED', 'UPLOAD_FAILED', 'STALE_EXPORT',
-  'EXPORT_ALREADY_RUNNING',
+  'EXPORT_ALREADY_RUNNING', 'HOOK_LANGUAGE_GATE',
   // Phase 7: the backend process died while this export was running, and
   // startup recovery settled it rather than leaving the project EXPORTING.
   'INTERRUPTED'] as const;

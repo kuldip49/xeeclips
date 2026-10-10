@@ -808,6 +808,8 @@ export class ClipExportService {
     const temporaryPreview = templateId === 'AUTOMATIC_2' || templateId === 'AUTOMATIC_3_STYLE_TWO';
     const render = (input: PreparedEdit) => this.executor.execute(windowPath, outputPath,
       input.plan, windowWords, [], [], speakerChangeTimes, { inputOffsetSec: windowStart,
+        xeePro: aiMode === EditAiMode.ONLINE,
+        approvedHook: contentPackaging.sharedPackage?.hooks.find(h => h.text === input.plan.onScreenHook.text),
         timeline: input.timeline, analysis, boundary: input.boundary, loop: input.loop,
         seed: candidate.rangeKey, candidateId: candidate.id, rank,
         avoidMusicTrackIds: this.recentMusicTracks.get(video.id) ?? [],

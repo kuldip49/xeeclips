@@ -39,7 +39,7 @@ import { deterministicHookSuggestions, modelHookSuggestions, type HookMode,
   type HookSuggestion } from './edit-chat-hook';
 import { parseNaturalRequest, unsupportedCapability, type ClauseOutcome,
   type FollowUp } from './edit-chat-intents';
-import { planWithLlm } from './edit-chat-planner';
+import { planWithLlm, chatPlannerAiMode } from './edit-chat-planner';
 import { EditChatProposalStore } from './edit-chat-proposal-store';
 import { resolveChatPlan, type ResolvedChatCommand } from './edit-chat-resolver';
 import {
@@ -420,7 +420,7 @@ export class EditChatService {
         return this.question(outcome.message, 'DETERMINISTIC', 'UNSUPPORTED_EDIT_CAPABILITY');
       }
       if (outcome.type !== 'HOOK') continue;
-      const creative = await this.writeHook(outcome.mode, outcome.target, context);
+      const creative = await this.writeHook(outcome.mode, outcome.target, context, id);
       if ('question' in creative) return this.question(creative.question, creative.route, creative.code);
       route = creative.suggestion.source === 'LLM' ? 'CREATIVE_LLM' : 'CREATIVE_DETERMINISTIC';
       hookOffered = { elementId: outcome.target?.id ?? null, text: creative.suggestion.text };
@@ -461,10 +461,10 @@ export class EditChatService {
    * Step 7 agent seam: grounded hook wording resolved all the way to canonical
    * bundle commands (or an honest question). Same writer, same grounding gate.
    */
-  async agentHookCommands(mode: HookMode, target: ChatElementView | null, context: ChatContext):
+  async agentHookCommands(mode: HookMode, target: ChatElementView | null, context: ChatContext, projectId?: string):
     Promise<{ commands: AssistantBundleCommand[]; line: string; text: string;
       source: 'LLM' | 'DETERMINISTIC' } | { question: string }> {
-    const creative = await this.writeHook(mode, target, context);
+    const creative = await this.writeHook(mode, target, context, projectId);
     if ('question' in creative) return { question: creative.question };
     const text = creative.suggestion.text;
     const resolution = resolveChatPlan(hookCommands(text, target, context), [], context);
@@ -479,7 +479,7 @@ export class EditChatService {
    * candidates always, each through the same grounding gate. OFFLINE never
    * calls a model (the frozen router allows no model for this role offline).
    */
-  private async writeHook(mode: HookMode, target: ChatElementView | null, context: ChatContext):
+  private async writeHook(mode: HookMode, target: ChatElementView | null, context: ChatContext, projectId?: string):
     Promise<{ suggestion: HookSuggestion } |
       { question: string; route: ChatRoute; code: ChatOutcomeCode }> {
     const current = target ? String(target.properties.content ?? '').trim() || null : null;
@@ -495,8 +495,13 @@ export class EditChatService {
       transcript: context.runtime.creativeEvidence?.transcript ?? context.runtime.groundingText,
       evidence: context.runtime.creativeEvidence };
     const model = await modelHookSuggestions({ llm: this.llm, logger: this.logger, ...input });
-    if (model.suggestions.length) return { suggestion: model.suggestions[0] };
-    const local = deterministicHookSuggestions(input);
+    if (model.suggestions.length) {
+      const suggestion = model.suggestions[0];
+      if (suggestion.approvedHook && projectId) await this.editMode.saveCreativeSuggestions(projectId, context.project.revision,
+        { hookLanguageGate: 'XEEPRO_V1', hooks: [suggestion.approvedHook], selectedHook: suggestion.text, status: 'ACCEPTED' });
+      return { suggestion };
+    }
+    const local = chatPlannerAiMode().toUpperCase() === 'ONLINE' ? [] : deterministicHookSuggestions(input);
     if (local.length) return { suggestion: local[0] };
     const why = mode === 'SHORTER'
       ? 'That hook is already about as short as a complete headline can be.'

@@ -10,6 +10,8 @@
 // from an EditElement, and `settings` supplies only the policies.
 
 import { gradingFilter, type GradePreset, type ImageStats } from '../../editing/color-grade';
+import { xeeProHookApproved, xeeProPackage } from '../../content-intelligence/hook-language';
+import { hookMeetsThreshold, type CreativeHook } from '../../content-intelligence/creative-quality.service';
 import { buildSubtitlePhrases } from '../../editing/subtitle-phrases';
 import { readAudioState, speechWindowsFromTranscript } from '../edit-mode-audio';
 import { readTransform } from '../edit-mode-transform';
@@ -218,6 +220,13 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
       // wraps a caption that is within half a pixel of its box onto a second line only in the export.
       let overlay = textOverlay(element, properties, { ...canvas, visualLayout }, startSec, endSec);
       const role = String(properties.templateRole ?? properties.presetRole ?? '');
+      const proPackage = role === 'HOOK' ? xeeProPackage(input.project.settings) : undefined;
+      if (proPackage) {
+        const hook = (proPackage.hooks as CreativeHook[] | undefined)?.find(h => h.text === overlay.content);
+        if (hook?.text !== overlay.content || !xeeProHookApproved(hook) || !hookMeetsThreshold(hook!)) {
+          throw new EditExportError('HOOK_LANGUAGE_GATE', 'This XeePro hook needs grammar and clarity review before export. Regenerate the hook.');
+        }
+      }
       const region = element.type === 'SUBTITLE' ? visualLayout?.captions
         : role === 'HOOK' ? visualLayout?.hook
           : role === 'KEY_POINT' ? visualLayout?.supportingText : null;

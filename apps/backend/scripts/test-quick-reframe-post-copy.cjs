@@ -29,7 +29,10 @@ async function run() {
   assert.deepEqual(local.generatedHashtagSets.map(s => s.label), ['Focused', 'Niche', 'Broad']);
   assert.ok(local.generatedHashtagSets.every(s => s.hashtags.length <= 8));
   const fallback = await generatePostCopy(router, context, true);
-  assert.equal(requests, 3, 'one understanding call and at most two creative calls'); assert.equal(fallback.generatedCaptions.length, 5); assert.match(fallback.warnings.join(' '), /unavailable/);
+  assert.equal(requests, 3, 'one understanding call and at most two creative calls');
+  assert.equal(fallback.generatedCaptions.length, 0, 'unavailable XeePro review cannot publish local transcript filler');
+  assert.deepEqual(fallback.generatedHashtagSets, []); assert.equal(fallback.synopsis, '');
+  assert.match(fallback.warnings.join(' '), /unavailable/);
   const noVideo = await generatePostCopy(router, { ...context, transcript: '', visibleText: '', subtitleText: '' }, true);
   assert.equal(noVideo.generatedCaptions.length, 0); assert.equal(requests, 3, 'original caption alone must never drive copy');
   let sent;

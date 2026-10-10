@@ -15,12 +15,13 @@ import { EditFiltersPanel } from './edit-filters-panel';
 import { EditTemplatesPanel } from './edit-templates-panel';
 import { EditSavedStyles } from './edit-saved-styles';
 import { EditTextPanel } from './edit-text-panel';
+import { MUSIC_FILE_ACCEPT } from '@/lib/edit-mode-audio';
 import type { TemplateApplyResult } from '@/lib/edit-mode-templates';
 
 const ACCEPT = {
   IMAGE: '.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp',
   LOGO: '.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp',
-  AUDIO: '.mp3,.wav,.m4a,.aac,audio/*'
+  AUDIO: MUSIC_FILE_ACCEPT
 } as const;
 
 type UploadRole = keyof typeof ACCEPT;

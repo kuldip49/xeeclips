@@ -22,12 +22,14 @@ const ASPECT_RATIOS: Array<{ id: EditAspectRatio; label: string }> = [
  * two competing spinners, the more specific local action wins and the export
  * phase is shown only when nothing local is in flight.
  */
-function SaveStatus({ busy, exportPhase }: {
-  busy: EditBusyKind; exportPhase: string | null; revision: number;
+function SaveStatus({ busy, exportPhase, uploadPercent }: {
+  busy: EditBusyKind; exportPhase: string | null; revision: number; uploadPercent?: number | null;
 }) {
+  const uploadLabel = uploadPercent == null ? 'Uploading…'
+    : uploadPercent >= 100 ? 'Preparing music…' : `Uploading music ${uploadPercent}%`;
   const label = busy === 'saving' ? 'Saving…'
     : busy === 'analyze' ? 'Analyzing…'
-      : busy === 'upload' ? 'Uploading…'
+      : busy === 'upload' ? uploadLabel
         : busy === 'import' ? 'Importing…'
           : busy ? 'Working…'
             : exportPhase === 'PREPARING' ? 'Preparing export…'
@@ -52,12 +54,13 @@ const iconButton = 'grid h-8 w-8 place-items-center rounded-lg text-soft coarse:
   'transition-colors hover:bg-tint-strong disabled:cursor-not-allowed disabled:opacity-30 ' +
   'disabled:hover:bg-transparent';
 
-export function EditTopBar({ projectName, revision, busy, exportPhase, canUndo, canRedo,
+export function EditTopBar({ projectName, revision, busy, exportPhase, uploadPercent, canUndo, canRedo,
   aspectRatio, onUndo, onRedo, onAspectRatio, onExport, exportDisabled,
   back = { href: '/history', label: 'History' }, title = 'Edit clip', below }: {
   projectName: string;
   revision: number;
   busy: EditBusyKind;
+  uploadPercent?: number | null;
   exportPhase: string | null;
   canUndo: boolean;
   canRedo: boolean;
@@ -82,7 +85,7 @@ export function EditTopBar({ projectName, revision, busy, exportPhase, canUndo, 
     </Link>
     <span className='hidden h-5 w-px shrink-0 bg-tint-strong sm:block' />
     <h1 className='min-w-0 flex-1 truncate text-sm font-semibold tracking-tight'>{title}</h1>
-    <SaveStatus busy={busy} exportPhase={exportPhase} revision={revision} />
+    <SaveStatus busy={busy} exportPhase={exportPhase} revision={revision} uploadPercent={uploadPercent} />
     <span className='hidden h-5 w-px shrink-0 bg-tint-strong sm:block' />
     <div className='flex shrink-0 items-center gap-0.5'>
       <button className={iconButton} aria-label='Undo' title='Undo (Ctrl+Z)'

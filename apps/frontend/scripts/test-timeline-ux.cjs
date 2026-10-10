@@ -467,6 +467,16 @@ ok('the editor opens on a captioned frame of the clip, not frame 0',
 ok('the timeline is a sibling of the preview, never an overlay on it',
   workspace.includes('shrink-0 overflow-hidden border-t'));
 
+const { historyAvailability } = lib('edit-mode-timeline.ts');
+for (const action of ['SET_AUDIO_TRIM', 'SET_AUDIO_DUCKING', 'SET_SOURCE_AUDIO_VOLUME', 'SET_SOURCE_AUDIO_MUTED']) {
+  const saved = { id: 'audio-edit', action, revision: 1 };
+  ok(`${action} alone enables Undo`, historyAvailability([saved]).canUndo);
+  const undone = [saved, { id: 'undo-audio', action: 'UNDO', revision: 2,
+    command: { targetHistoryId: saved.id } }];
+  ok(`${action} undo enables only Redo`, !historyAvailability(undone).canUndo &&
+    historyAvailability(undone).canRedo);
+}
+
 console.log(`\ntimeline UX: ${checks} assertions passed`);
 console.log(`  track rows: ${tracks.TIMELINE_TRACKS.map((track) =>
   `${track.label} ${track.heightPx}px`).join(', ')} = ${tracks.tracksHeightPx()}px`);

@@ -1,4 +1,6 @@
 import { UsageService } from '../auth/usage.service';
+import { xeeProHookApproved } from '../content-intelligence/hook-language';
+import { hookMeetsThreshold, type CreativeHook } from '../content-intelligence/creative-quality.service';
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Queue, Worker } from 'bullmq';
@@ -405,7 +407,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     // Regenerate with nothing new keeps the current list rather than emptying it.
     if(hooks.length||!exclude.length){const saved=await this.prisma.quickReframe.updateMany({where:{id,postCopy:{equals:q.postCopy as Prisma.InputJsonValue},editProject:{revision:q.editProject.revision},status:q.status,operationId:q.operationId},data:{hooks:json(hooks),externalAiAuthorized:external,
       postCopy:json({...emptyPostCopy(),...record(q.postCopy),version:(Number(record(q.postCopy).version)||0)+1,
-        creativePackage:{...record(record(q.postCopy).creativePackage),version:p.version,understanding:p.understanding,hooks:p.hooks,selectedHook:p.selectedHook,status:p.status,boundaryQa:p.boundaryQa},contentUnderstandingVersion:INTELLIGENCE_VERSION,_intelligenceInternal:p.internal})}});if(!saved.count)throw new ConflictException('The video or post copy changed. Refresh and try again.');}
+        creativePackage:{...record(record(q.postCopy).creativePackage),version:p.version,hookLanguageGate:p.hookLanguageGate,understanding:p.understanding,hooks:p.hooks,selectedHook:p.selectedHook,status:p.status,boundaryQa:p.boundaryQa},contentUnderstandingVersion:INTELLIGENCE_VERSION,_intelligenceInternal:p.internal})}});if(!saved.count)throw new ConflictException('The video or post copy changed. Refresh and try again.');}
     return {session:await this.get(id),warnings};
   }
   /** Use only content retained by the confirmed crop and canonical timeline. Original post text is supporting context. */
@@ -494,16 +496,23 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     let hooks=view.hooks;
     // Both styles open with a hook written from the video itself; without consent it is written locally.
     if(typeof body.hookText!=='string'&&!hooks.length&&view.hasTranscript){
-      const context=this.postCopyContext(q,{});const suggestions=await suggestHooks(this.router,context.transcript,false,[],
+      const context=this.postCopyContext(q,{});const suggestions=await suggestHooks(this.router,context.transcript,q.externalAiAuthorized,[],
         {sourceId:context.sourceId,transcriptVersion:context.transcriptVersion,visualVersion:context.visualVersion,
          visibleText:context.visibleText,visualSummary:context.visualSummary,speakerTurns:context.speakerTurns,boundaryQa:context.boundaryQa,template:STYLES[style].template,sourceTitle:context.sourceContext?.sourcePostTitle,sourceCaption:context.sourceContext?.sourcePostText});
       hooks=suggestions.hooks;
       await this.prisma.quickReframe.update({where:{id},data:{hooks:json(hooks),postCopy:json({...emptyPostCopy(),...record(q.postCopy),
         version:(Number(record(q.postCopy).version)||0)+1,contentUnderstandingVersion:INTELLIGENCE_VERSION,
-        creativePackage:{...record(record(q.postCopy).creativePackage),version:suggestions.package.version,understanding:suggestions.package.understanding,hooks,boundaryQa:suggestions.package.boundaryQa,status:suggestions.package.status},
+        creativePackage:{...record(record(q.postCopy).creativePackage),version:suggestions.package.version,understanding:suggestions.package.understanding,hooks,boundaryQa:suggestions.package.boundaryQa,status:suggestions.package.status,hookLanguageGate:suggestions.package.hookLanguageGate},
         _intelligenceInternal:suggestions.package.internal})}});
     }
     const hookText=typeof body.hookText==='string'?body.hookText.slice(0,320):hooks.find(h=>h.recommended)?.text??'';
+    if(q.externalAiAuthorized && hookText){
+      const approved=hooks.find(h=>h.text===hookText) as CreativeHook | undefined;
+      if(!xeeProHookApproved(approved)||!hookMeetsThreshold(approved!))
+        throw new BadRequestException('This XeePro hook needs grammar and clarity review. Regenerate the hook before applying the style.');
+      await this.editor.saveCreativeSuggestions(q.editProjectId,q.editProject.revision,
+        {...record(record(q.postCopy).creativePackage),hooks,selectedHook:hookText,hookLanguageGate:'XEEPRO_V1'});
+    }
     let project=await this.editor.get(q.editProjectId) as unknown as {revision:number;settings:unknown;assets:Asset[];elements:Loaded['editProject']['elements']};
     if(mode==='GENERATE'&&!project.elements.some(e=>e.type==='SUBTITLE')){
       if(!view.hasTranscript)throw new BadRequestException('No speech was found to caption.');

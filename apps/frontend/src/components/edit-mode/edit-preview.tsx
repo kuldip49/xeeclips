@@ -65,8 +65,12 @@ export type PreviewGesture = 'move' | 'resize' | 'rotate';
  * simply state). Both are said plainly in the Audio panel rather than papered
  * over here.
  */
-function AudioLayer({ element, playing, timelineTime }: { element: EditElement; playing: boolean; timelineTime: number }) {
+function AudioLayer({ element, playing, timelineTime, name }: {
+  element: EditElement; playing: boolean; timelineTime: number; name: string;
+}) {
   const ref = useRef<HTMLAudioElement>(null);
+  const pending = useRef(false);
+  const [error, setError] = useState('');
   const properties = element.properties;
   const state = readAudioState(properties);
   const offset = Math.max(0, timelineTime - element.startTime);
@@ -74,14 +78,41 @@ function AudioLayer({ element, playing, timelineTime }: { element: EditElement; 
   if (state.fadeInSec > 0) gain *= Math.min(1, offset / state.fadeInSec);
   if (state.fadeOutSec > 0) gain *= Math.min(1, (element.duration - offset) / state.fadeOutSec);
   const level = previewGain(gain);
-  useEffect(() => {
+  const active = timelineTime >= element.startTime && timelineTime < element.startTime + element.duration;
+  const synchronize = () => {
     const audio = ref.current; if (!audio) return;
-    const sourceTime = element.trimStart + offset;
-    if (Math.abs(audio.currentTime - sourceTime) > 0.2) audio.currentTime = sourceTime;
     audio.volume = level; audio.muted = state.muted;
-    if (playing) void audio.play().catch(() => undefined); else audio.pause();
-  }, [element.trimStart, level, offset, playing, state.muted]);
-  return <audio ref={ref} src={element.assetId ? editAssetPlaybackUrl(element.assetId) : undefined} preload='metadata' />;
+    if (!playing || !active) audio.pause();
+    // Seeking before metadata arrives is lost for some audio containers.
+    // The load handlers below apply the latest timeline position when ready.
+    if (audio.readyState === 0) return;
+    const sourceTime = element.trimStart + offset;
+    if (active && Math.abs(audio.currentTime - sourceTime) > (playing ? 0.35 : 0.04)) {
+      audio.currentTime = sourceTime;
+    }
+    if (playing && active && audio.paused && !pending.current && !error) {
+      pending.current = true;
+      void audio.play().catch((caught: DOMException) => {
+        if (caught.name !== 'AbortError') setError('Music playback failed. Retry, or upload another audio format.');
+      }).finally(() => { pending.current = false; });
+    }
+  };
+  useEffect(synchronize, [element.trimStart, level, offset, active, playing, state.muted, error]);
+  useEffect(() => {
+    const audio = ref.current;
+    setError('');
+    return () => { audio?.pause(); };
+  }, [element.assetId]);
+  return <><audio ref={ref} data-testid='edit-preview-audio' data-element-id={element.id}
+    data-start-time={element.startTime} data-end-time={element.startTime + element.duration}
+    src={element.assetId ? editAssetPlaybackUrl(element.assetId) : undefined} preload='metadata'
+    onLoadedMetadata={synchronize} onCanPlay={synchronize}
+    onError={() => setError('Music could not be loaded. Retry, or upload another audio format.')} />
+    {error && <div role='alert' className='absolute bottom-2 left-2 right-2 z-50 rounded-lg bg-surface p-2 text-xs text-danger-soft'>
+      {name}: {error} <button type='button' className='underline' onClick={() => {
+        setError(''); pending.current = false; ref.current?.load();
+      }}>Retry music</button>
+    </div>}</>;
 }
 
 /** The preview canvas is the export canvas: normalized element boxes only agree
@@ -137,6 +168,8 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   onPreviewElements, onCommitTransform, cropEditor }, forwardedRef) => {
   const video = useRef<HTMLVideoElement>(null); const canvas = useRef<HTMLDivElement>(null);
   const activeId = useRef<string | null>(null); const syncing = useRef(false);
+  const reportedPlayhead = useRef(currentPlayheadSec);
+  const playbackTick = useRef<() => void>(() => undefined);
   const frame = useRef<HTMLDivElement>(null);
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
   const [mediaState, setMediaState] = useState<'LOADING' | 'READY' | 'FAILED'>('LOADING');
@@ -210,14 +243,30 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   const toggle = async () => {
     if (!video.current || !mapping || mediaState === 'FAILED') return;
     if (video.current.paused) {
-      try { await video.current.play(); }
-      catch { setPlaying(false); setMediaState('FAILED'); }
+      try {
+        // Start ready music in the same user gesture as the video. Keeping the
+        // players mounted also preserves this permission across seeks.
+        canvas.current?.querySelectorAll<HTMLAudioElement>('audio').forEach((audio) => {
+          if (currentPlayheadSec >= Number(audio.dataset.startTime) &&
+            currentPlayheadSec < Number(audio.dataset.endTime)) {
+            void audio.play().catch((caught: DOMException) => {
+              if (caught.name !== 'AbortError') audio.dispatchEvent(new Event('error'));
+            });
+          }
+        });
+        await video.current.play();
+      }
+      catch {
+        canvas.current?.querySelectorAll('audio').forEach((audio) => audio.pause());
+        setPlaying(false); setMediaState('FAILED');
+      }
     } else video.current.pause();
   };
   useImperativeHandle(forwardedRef, () => ({ toggle,
     pause: () => { video.current?.pause(); setPlaying(false); } }));
   useEffect(() => { if (!video.current || !mapping) return; const target = mediaTime(mapping.sourceTime);
-    if (activeId.current !== mapping.element.id || (!playing && Math.abs(video.current.currentTime - target) > 0.04)) {
+    const externalSeek = Math.abs(currentPlayheadSec - reportedPlayhead.current) > 0.04;
+    if (activeId.current !== mapping.element.id || ((externalSeek || !playing) && Math.abs(video.current.currentTime - target) > 0.04)) {
       syncing.current = true; video.current.currentTime = target; activeId.current = mapping.element.id;
     } }, [mapping?.element.id, mapping?.sourceTime, mediaOffset, playing]);
   // The canvas is sized from the space the row actually gives it, remeasured
@@ -250,6 +299,16 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     video.current.volume = previewGain(sourceAudio.volume);
     video.current.muted = sourceAudio.muted;
   }, [sourceAudio.muted, sourceAudio.volume]);
+  useEffect(() => {
+    if (!playing) return;
+    let frameId = 0; let last = 0;
+    const tick = (now: number) => {
+      if (now - last >= 32) { last = now; playbackTick.current(); }
+      frameId = requestAnimationFrame(tick);
+    };
+    frameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frameId);
+  }, [playing]);
   // The segment's grade. Drawn on the video element itself and, for fade and
   // vignette, as two layers above it - below the overlays, so a logo or caption
   // is not washed out by a grade that in the export is applied to the footage
@@ -267,15 +326,18 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   const colorLayers = colorOverlayLayers(segmentColor);
   if (!source) return <section className='grid min-h-[360px] place-items-center rounded-2xl border border-dashed border-border bg-black/20 text-center'><div><p className='text-sm font-semibold text-soft'>No source attached</p><p className='mt-2 text-xs text-faint'>Choose one exact video from the media panel.</p></div></section>;
   const timeUpdate = (media: HTMLVideoElement) => {
-    if (syncing.current) { syncing.current = false; return; }
+    if (syncing.current || media.seeking) return;
     const item = videoTrack(elements).find((element) => element.id === activeId.current) ?? mapping?.element; if (!item) return;
     const trimEnd = item.trimEnd ?? item.trimStart + item.duration;
     const canonicalSourceTime = sourceTime(media.currentTime);
-    if (canonicalSourceTime >= trimEnd - 0.025) { const next = videoTrack(elements).find((element) => element.position === item.position + 1); if (!next) { media.pause(); onPlayheadChange(duration); return; } activeId.current = next.id; syncing.current = true; media.currentTime = mediaTime(next.trimStart); onPlayheadChange(next.startTime); return; }
+    if (canonicalSourceTime >= trimEnd - 0.025) { const next = videoTrack(elements).find((element) => element.position === item.position + 1); if (!next) { media.pause(); reportedPlayhead.current = duration; onPlayheadChange(duration); return; } activeId.current = next.id; syncing.current = true; media.currentTime = mediaTime(next.trimStart); reportedPlayhead.current = next.startTime; onPlayheadChange(next.startTime); return; }
     const itemSpeed = Number(item.properties.speed ?? 1) || 1;
-    onPlayheadChange(Math.min(duration, item.startTime +
-      Math.max(0, canonicalSourceTime - item.trimStart) / itemSpeed));
+    const time = Math.min(duration, item.startTime +
+      Math.max(0, canonicalSourceTime - item.trimStart) / itemSpeed);
+    reportedPlayhead.current = time;
+    onPlayheadChange(time);
   };
+  playbackTick.current = () => { if (video.current) timeUpdate(video.current); };
 
   /**
    * Direct manipulation.
@@ -520,6 +582,8 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
         onLoadedMetadata={(event) => {
           if (mapping) event.currentTarget.currentTime = mediaTime(mapping.sourceTime);
         }}
+        onSeeking={() => { syncing.current = true; }}
+        onSeeked={(event) => { syncing.current = false; timeUpdate(event.currentTarget); }}
         onLoadedData={() => setMediaState('READY')} onCanPlay={() => setMediaState('READY')}
         onError={() => { setPlaying(false); setMediaState('FAILED'); }}
         onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
@@ -618,9 +682,10 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
           ? { left: `${guide.at * 100}%`, top: 0, bottom: 0, width: 1 }
           : { top: `${guide.at * 100}%`, left: 0, right: 0, height: 1 }} />)}
 
-      {active.filter((item) => item.type === 'AUDIO').map((element) =>
+      {elements.filter((item) => item.type === 'AUDIO').map((element) =>
         <AudioLayer key={element.id} element={element} playing={playing}
-          timelineTime={currentPlayheadSec} />)}
+          timelineTime={currentPlayheadSec}
+          name={assets.find((asset) => asset.id === element.assetId)?.originalName ?? 'Music'} />)}
     </div>
     </div>
     </div>

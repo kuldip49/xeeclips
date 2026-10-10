@@ -48,6 +48,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       }
       throw error;
     });
+  return readResponse<T>(response);
+}
+
+async function readResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     if (response.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new Event('xeeclip-auth-expired'));
     if (isProcessingServerUnavailableStatus(response.status)) {
@@ -154,7 +158,8 @@ type ManualEditCommandValue =
   | { action: 'split'; elementId: string; playheadSec: number }
   | { action: 'delete'; elementId: string }
   | { action: 'move'; elementId: string; toPosition: number; track: 0 }
-  | { action: 'add-image' | 'add-logo' | 'add-audio'; assetId: string }
+  | { action: 'add-image' | 'add-logo'; assetId: string }
+  | { action: 'add-audio'; assetId: string; startTime?: number }
   | { action: 'move-element'; elementId: string; x: number; y: number }
   | { action: 'resize-element'; elementId: string; width: number; height: number }
   | { action: 'set-element-timing'; elementId: string; startTime: number; duration: number;
@@ -294,11 +299,31 @@ export const redoEdit = (id: string, revision: number) => request<EditProject>(
   });
 
 export const uploadEditAsset = (id: string, revision: number, role: Extract<EditAssetRole,
-  'IMAGE' | 'LOGO' | 'AUDIO'>, file: File) => {
+  'IMAGE' | 'LOGO' | 'AUDIO'>, file: File, onProgress?: (percent: number) => void) => {
   const form = new FormData();
   form.set('revision', String(revision)); form.set('role', role); form.set('file', file);
-  return request<{ asset: EditAsset; revision: number }>(
-    `/edit-mode/projects/${encodeURIComponent(id)}/assets/upload`, { method: 'POST', body: form });
+  const path = `/edit-mode/projects/${encodeURIComponent(id)}/assets/upload`;
+  if (!onProgress) return request<{ asset: EditAsset; revision: number }>(path,
+    { method: 'POST', body: form });
+  return new Promise<{ asset: EditAsset; revision: number }>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${getEditModeApiBaseUrl()}${path}`);
+    xhr.withCredentials = true;
+    xhr.timeout = 5 * 60_000;
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress(Math.round(event.loaded / event.total * 100));
+    };
+    xhr.upload.onload = () => onProgress(100);
+    xhr.onerror = () => reject(new Error('Processing server is currently unavailable.'));
+    xhr.ontimeout = () => reject(new Error('Music upload timed out. Please try again.'));
+    xhr.onabort = () => reject(new Error('Music upload was cancelled.'));
+    xhr.onload = () => {
+      void readResponse<{ asset: EditAsset; revision: number }>(new Response(xhr.responseText,
+        { status: xhr.status })).then(resolve, reject);
+    };
+    onProgress(0);
+    xhr.send(form);
+  });
 };
 
 export const deleteEditAsset = (id: string, revision: number, assetId: string) =>

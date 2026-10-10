@@ -1,8 +1,12 @@
 # Project State
 
-Last updated: 2026-10-09
+Last updated: 2026-10-11
 
 ## Milestones
+
+- Mixed XeePro hook formats (2026-10-11): the user requested committing/pushing all accumulated work and preserving varied options. The writer/reviewer policy now requests a direct question with a specific watch reason, a non-question clickbait statement, and a distinct story/contrast/emotional/bold alternative. Most candidates are non-questions. Approved visible options span formats while the strongest recommendation stays first; the third angle varies by clip/request with stable caching. All existing language, attribution and grounding gates remain required, and XeeFree is unchanged. This final adjustment is covered by offline regression tests; earlier real-media reports describe the preceding question-heavy policy. See `docs/xeepro-hook-variety.md`. The user authorized the push; deployment requires separate verification.
+
+- Editor music fix (2026-10-11, local): music uploads now insert and select a canonical AUDIO clip at the playhead, capped at the video end. Upload progress is visible on desktop and phone. The saved upload response replaces the redundant project GET; history refreshes run in the background and discard stale responses. Uploads, asset deletion, manual edits and undo/redo share the revision queue. MP3/WAV/M4A/AAC/OGG/Opus/FLAC/WebM uploads accept common browser MIME aliases and missing/generic types, verify real audio with a bounded probe, and persist a playback MIME type. Corrupt audio returns 400. Persistent preview players retain their media across seeks, apply the latest trim/offset after metadata loads, report retryable music failures, and follow a 32 ms video clock. Seeking works during playback. Audio trim/ducking and source-level edits now participate in frontend undo availability. Regression coverage: `test-edit-mode-music.cjs` (eight real synthetic formats and canonical editing lifecycle), `e2e/editor-music.spec.ts` (desktop/phone, slow history/media, playback, controls, persisted settings, undo/redo, retry and eight-format Chrome decoding), plus existing phase 3, colour/audio, render/export and timeline suites. No user data, AI service or production deployment involved.
 
 - Ending safety continuation (2026-10-09): resumed Claude's unfinished EOF/strong-tail work after its weekly limit;
   reused its six-model benchmarks and completed the outstanding QA. The prior Delivery source interval 68.97–96.62 s is itself
@@ -1413,3 +1417,18 @@ change. Generated media and the Automatic 1/2 previews keep their own colours an
 - A disposable spoken-video upload completed end to end at progress 100.
 - The transcript endpoint returned the expected text and a persisted segment with start 0 and end 5 seconds.
 - All disposable database records, MinIO objects, and local test media were removed after verification.
+
+## XeePro hook grammar and clarity gate (2026-10-11, local)
+
+- Added eight mandatory semantic language verdicts, structural rejection checks and a single grammar rewrite followed by fresh review. XeePro cannot fall back to unreviewed local hooks when review fails; XeeFree routing remains unchanged.
+- Shared creative generation, editor suggestions, Ask AI/agent, Quick Reframe, presets and History lineage persist the review requirement. Automatic and canonical exports require the matching approved hook immediately before rendering.
+- Both exact downloaded bad-hook videos were transcribed and regenerated with user-authorized OpenAI review. Replacements: “A powerful argument against judging ideas by résumés” and “The real warning sign was surprise at open debate.” Both pass grammar, clarity, grounding and all three template fits. A misleading Kennedy/college-dropout attribution control is rejected.
+- All 15 targeted suites pass, including 39 new grammar/integration cases; backend build, frontend TypeScript checking and diff whitespace checks pass. Six local template typography exports and actual React previews passed overflow/visual checks. These diagnostics use downloaded footage with the burned-in old header cropped out, rather than full production re-exports.
+- Full results, scores, integration paths, verification limits and media links: [docs/xeepro-hook-grammar-acceptance.md](docs/xeepro-hook-grammar-acceptance.md). Changes remain uncommitted and undeployed.
+
+### XeePro question-led hook style (2026-10-11 follow-up)
+
+- User prefers a direct question and specific watch invitation, detailed synopsis and five hashtags. The shared writer/reviewer now use this audience-facing style across XeePro; Engaging captions provide the full social-post hook, while on-screen questions retain template-safe complete wording.
+- Stronger configured shared understanding prevents first-person/guest attribution errors. Full packages require five normalized recommended tags; rejected Pro copy no longer becomes raw-transcript fallback copy. XeeFree remains unchanged.
+- Regenerated both actual clip packages: “Why introduce yourself as a college dropout beside an elite scholar?” and “Does surprise at a campus debate say more than disagreement itself?” Both full packages pass review, grammar/clarity and all template fits. All 15 targeted suites and six new preview/export diagnostics pass.
+- Current copy, scores, samples and limits: [docs/xeepro-question-hook-style.md](docs/xeepro-question-hook-style.md). Earlier editorial replacements are superseded. Changes remain uncommitted and undeployed.

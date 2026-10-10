@@ -10,6 +10,7 @@ import {
   uploadEditAsset, uploadEditSource
 } from '@/lib/edit-mode-api';
 import { historyAvailability, resolvePreviewPosition, timelineDuration, videoTrack } from '@/lib/edit-mode-timeline';
+import { MAX_MUSIC_BYTES, musicInsertTime } from '@/lib/edit-mode-audio';
 import { useIsMobile } from '@/lib/use-media-query';
 import { useTypingFlag } from '@/lib/use-typing';
 import { useVisualViewport } from '@/lib/use-visual-viewport';
@@ -63,6 +64,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
   const savedElements = useRef(initialProject.elements ?? []);
   const [history, setHistory] = useState(initialHistory);
   const [busy, setBusy] = useState<'upload' | 'import' | 'analyze' | 'saving' | null>(null);
+  const [musicUploadPercent, setMusicUploadPercent] = useState<number | null>(null);
   const [error, setError] = useState('');
   const firstVideo = videoTrack(initialProject.elements ?? [])[0];
   const [selectedElementId, setSelectedElementId] = useState<string | null>(firstVideo?.id ?? null);
@@ -210,8 +212,14 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
     setSelectedRange(null);
     setProject(next);
   }, [setProject]);
-  const refreshHistory = useCallback(async () => setHistory(await getEditHistory(initialProject.id)),
-    [initialProject.id]);
+  const historyRequest = useRef(0);
+  const refreshHistory = useCallback(async () => {
+    const request = ++historyRequest.current;
+    try {
+      const next = await getEditHistory(initialProject.id);
+      if (request === historyRequest.current) setHistory(next);
+    } catch { /* A delayed history read must not block or fail an already saved edit. */ }
+  }, [initialProject.id]);
   // An export changes the project's status but never its revision or elements,
   // so it is refreshed on its own rather than through the edit-command path.
   const refreshProject = useCallback(() => {
@@ -288,7 +296,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
       }
       keepSelection(next.elements ?? []);
       setCurrentPlayheadSec((time) => Math.min(time, timelineDuration(next.elements ?? [])));
-      await refreshHistory();
+      void refreshHistory();
     } catch (caught) {
       const latest = caught instanceof EditModeApiError && caught.status === 409
         ? await getEditProject(projectRef.current.id).catch(() => null) : null;
@@ -369,23 +377,27 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
     void applyCommand({ action: 'move', elementId, toPosition, track: 0 }, elements);
   }, [applyCommand]);
 
-  const travelHistory = useCallback(async (direction: 'undo' | 'redo') => {
-    setBusy('saving'); setError('');
-    try {
-      const current = projectRef.current;
-      const next = direction === 'undo' ? await undoEdit(current.id, current.revision)
-        : await redoEdit(current.id, current.revision);
-      acceptServerProject(next);
-      keepSelection(next.elements ?? []);
-      setCurrentPlayheadSec((time) => Math.min(time, timelineDuration(next.elements ?? [])));
-      await refreshHistory();
-    } catch (caught) {
-      if (caught instanceof EditModeApiError && caught.status === 409) {
-        const latest = await getEditProject(projectRef.current.id);
-        acceptServerProject(latest);
-        setError('Undo/redo stopped because a newer revision exists. The latest saved timeline was restored.');
-      } else setError(caught instanceof Error ? caught.message : 'History action failed');
-    } finally { setBusy(null); }
+  const travelHistory = useCallback((direction: 'undo' | 'redo') => {
+    const run = commandQueue.current.then(async () => {
+      setBusy('saving'); setError('');
+      try {
+        const current = projectRef.current;
+        const next = direction === 'undo' ? await undoEdit(current.id, current.revision)
+          : await redoEdit(current.id, current.revision);
+        acceptServerProject(next);
+        keepSelection(next.elements ?? []);
+        setCurrentPlayheadSec((time) => Math.min(time, timelineDuration(next.elements ?? [])));
+        void refreshHistory();
+      } catch (caught) {
+        if (caught instanceof EditModeApiError && caught.status === 409) {
+          const latest = await getEditProject(projectRef.current.id).catch(() => null);
+          if (latest) acceptServerProject(latest);
+          setError('Undo/redo stopped because a newer revision exists. The latest saved timeline was restored.');
+        } else setError(caught instanceof Error ? caught.message : 'History action failed');
+      } finally { setBusy(null); }
+    });
+    commandQueue.current = run.catch(() => undefined);
+    return run;
   }, [acceptServerProject, keepSelection, refreshHistory]);
 
   useEffect(() => {
@@ -478,18 +490,50 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
     autosave.current = setTimeout(() => { autosave.current = null; void applyCommand(command); }, 500);
   }, [applyCommand]);
   const uploadLibraryAsset = async (role: 'IMAGE' | 'LOGO' | 'AUDIO', file: File) => {
+    if (role === 'AUDIO' && (!file.size || file.size > MAX_MUSIC_BYTES)) {
+      setError('Choose a non-empty music file up to 200 MB.'); return;
+    }
+    const startTime = musicInsertTime(currentPlayheadSec, timelineDuration(savedElements.current));
     setBusy('upload'); setError('');
-    try { const current = projectRef.current; await uploadEditAsset(current.id, current.revision, role, file);
-      acceptServerProject(await getEditProject(current.id)); await refreshHistory(); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : 'Asset upload failed'); }
-    finally { setBusy(null); }
+    const run = commandQueue.current.then(async () => {
+      setBusy('upload');
+      try {
+        const current = projectRef.current;
+        const result = await uploadEditAsset(current.id, current.revision, role, file,
+          role === 'AUDIO' ? setMusicUploadPercent : undefined);
+        // The upload response already contains the saved asset and revision.
+        // Avoid another project download before the user can use their music.
+        acceptServerProject({ ...projectRef.current, revision: result.revision,
+          elements: savedElements.current, assets: [...projectRef.current.assets, result.asset] });
+        if (role === 'AUDIO') {
+          await latestApply.current({ action: 'add-audio', assetId: result.asset.id, startTime },
+            savedElements.current);
+        } else void refreshHistory();
+      } catch (caught) {
+        if (caught instanceof EditModeApiError && caught.status === 409) {
+          const latest = await getEditProject(projectRef.current.id).catch(() => null);
+          if (latest) acceptServerProject(latest);
+        }
+        setError(caught instanceof Error ? caught.message : 'Asset upload failed');
+      } finally { setBusy(null); setMusicUploadPercent(null); }
+    });
+    commandQueue.current = run.catch(() => undefined);
+    return run;
   };
-  const deleteLibraryAsset = async (asset: EditAsset) => {
-    setBusy('saving'); setError('');
-    try { const current = projectRef.current; await deleteEditAsset(current.id, current.revision, asset.id);
-      acceptServerProject(await getEditProject(current.id)); await refreshHistory(); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : 'Asset delete failed'); }
-    finally { setBusy(null); }
+  const deleteLibraryAsset = (asset: EditAsset) => {
+    const run = commandQueue.current.then(async () => {
+      setBusy('saving'); setError('');
+      try {
+        const current = projectRef.current;
+        const result = await deleteEditAsset(current.id, current.revision, asset.id);
+        acceptServerProject({ ...projectRef.current, revision: result.revision,
+          elements: savedElements.current, assets: projectRef.current.assets.filter((item) => item.id !== asset.id) });
+        void refreshHistory();
+      } catch (caught) { setError(caught instanceof Error ? caught.message : 'Asset delete failed'); }
+      finally { setBusy(null); }
+    });
+    commandQueue.current = run.catch(() => undefined);
+    return run;
   };
   const presetApplied = useCallback((result: EditPresetApplyResult) => {
     setError('');
@@ -540,8 +584,10 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
   }, [acceptServerProject, keepSelection, refreshHistory]);
 
   const addAsset = (asset: EditAsset) => {
-    const action = asset.role === 'AUDIO' ? 'add-audio' : asset.role === 'LOGO' ? 'add-logo' : 'add-image';
-    void applyCommand({ action, assetId: asset.id });
+    void applyCommand(asset.role === 'AUDIO'
+      ? { action: 'add-audio', assetId: asset.id,
+          startTime: musicInsertTime(currentPlayheadSec, timelineDuration(savedElements.current)) }
+      : { action: asset.role === 'LOGO' ? 'add-logo' : 'add-image', assetId: asset.id });
   };
 
   const panelProps: EditPanelContentProps = { project, source, selected, style, history, busy: !!busy,
@@ -635,6 +681,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
   return <div className='flex h-[100dvh] min-h-0 flex-col overflow-hidden overscroll-none bg-background text-foreground'
     style={keyboardFrame} data-mobile-layout={isMobile ? 'true' : 'false'}>
     <EditTopBar projectName={project.name} revision={project.revision} busy={busy}
+      uploadPercent={musicUploadPercent}
       exportPhase={exportPhase} canUndo={availability.canUndo} canRedo={availability.canRedo}
       aspectRatio={style?.aspectRatio ?? 'SOURCE'}
       onUndo={() => void travelHistory('undo')} onRedo={() => void travelHistory('redo')}
@@ -644,6 +691,10 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
         below: <StepIndicator className='border-t border-border px-1.5 py-1 sm:px-3' active='edit'
           reachable={(step) => step !== 'edit'} onSelect={(step) => router.push(quickReframeUrl(reframe.id, step))} /> } : {})} />
 
+    {busy === 'upload' && musicUploadPercent !== null && <div role='status'
+      className='shrink-0 border-b border-border bg-surface px-4 py-1.5 text-xs text-soft md:hidden'>
+      {musicUploadPercent >= 100 ? 'Preparing music…' : `Uploading music ${musicUploadPercent}%`}
+    </div>}
     {error && <div role='alert'
       className='flex shrink-0 items-start gap-2 border-b border-danger/20 bg-danger/10 py-1 pl-4 pr-1 text-xs text-danger-soft'>
       <span className='min-w-0 flex-1 break-words py-1 [overflow-wrap:anywhere] max-md:line-clamp-3'>{error}</span>

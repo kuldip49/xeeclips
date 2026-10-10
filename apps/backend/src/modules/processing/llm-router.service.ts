@@ -139,8 +139,12 @@ export class LlmRouterService {
       throw new LlmProviderError('AI_MODE_FALLBACK_ONLY',
         'Generative model routing is disabled for FALLBACK_ONLY');
     }
-    const creativeModel = CREATIVE_ROLES.has(input.role) && input.creativeTier
-      ? process.env[input.creativeTier === 'ESCALATION' ? 'CREATIVE_ESCALATION_MODEL' : 'CREATIVE_PRIMARY_MODEL']?.trim() : undefined;
+    const hookLanguageReview = input.role === 'critic' && ['shared_hook_review_v2', 'shared_creative_review_v2'].includes(input.request.schemaName);
+    const hookUnderstanding = input.role === 'clipUnderstanding' && input.request.schemaName === 'shared_content_understanding_v1';
+    const creativeModel = hookLanguageReview || hookUnderstanding
+      ? (process.env.XEEPRO_HOOK_REVIEW_MODEL?.trim() || process.env.CREATIVE_ESCALATION_MODEL?.trim())
+      : CREATIVE_ROLES.has(input.role) && input.creativeTier
+        ? process.env[input.creativeTier === 'ESCALATION' ? 'CREATIVE_ESCALATION_MODEL' : 'CREATIVE_PRIMARY_MODEL']?.trim() : undefined;
     const cacheKey = this.cacheKey(input.role, { ...input.request,
       cacheKey: (input.request.cacheKey ?? '') + ':' + (input.creativeTier ?? '') + ':' + (creativeModel ?? '') }, aiMode);
     const cachedRouteKey = this.successfulRouteKeys.get(cacheKey);
@@ -189,7 +193,11 @@ export class LlmRouterService {
         continue;
       }
       const started = Date.now();
-      const timeoutMs = effectiveRoleTimeoutMs(AiProcessingMode.ONLINE, input.role, route.timeoutMs);
+      // The XeePro reviewer now returns eight mandatory language verdicts per hook as well as meaning scores.
+      // Its bounded budget is scoped to these schemas; other critics and XeeFree routing retain their policy.
+      const timeoutMs = hookLanguageReview
+        ? Math.min(route.timeoutMs, numberSetting('XEEPRO_HOOK_REVIEW_TIMEOUT_MS', 40000, 1000, 40000))
+        : effectiveRoleTimeoutMs(AiProcessingMode.ONLINE, input.role, route.timeoutMs);
       // Interactive cloud roles fail over after one attempt per provider.
       const boundedRoute = { ...route, timeoutMs,
         maxRetries: 0 };

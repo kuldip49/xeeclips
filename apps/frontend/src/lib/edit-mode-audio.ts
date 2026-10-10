@@ -13,6 +13,12 @@ export const MAX_VOLUME = 2;
 export const DEFAULT_VOLUME = 1;
 export const DEFAULT_MUSIC_VOLUME = 0.25;
 export const MAX_FADE_SEC = 30;
+export const MUSIC_FILE_ACCEPT = '.mp3,.wav,.m4a,.aac,.ogg,.opus,.flac,.webm';
+export const MAX_MUSIC_BYTES = 200 * 1024 * 1024;
+
+/** Adding at the end means starting a new background track for the whole clip. */
+export const musicInsertTime = (playhead: number, duration: number) =>
+  Number.isFinite(playhead) && playhead >= 0 && playhead < duration - 0.05 ? playhead : 0;
 
 export const DUCK_STRENGTHS = { SUBTLE: 0.6, MEDIUM: 0.35, STRONG: 0.15 } as const;
 export type DuckStrengthId = keyof typeof DUCK_STRENGTHS;

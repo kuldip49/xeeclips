@@ -158,7 +158,7 @@ export class EditAgentService {
         project.revision, started);
     }
 
-    const units = await this.plan(runId, message, normalized, clauses, clauseText, context, autonomy);
+    const units = await this.plan(runId, message, normalized, clauses, clauseText, context, autonomy, id);
     return this.executeAndReport({ id, runId, message, input, units, constraints, autonomy,
       context, startedRevision: project.revision, started });
   }
@@ -168,7 +168,7 @@ export class EditAgentService {
   // ===========================================================================
 
   private async plan(runId: string, message: string, normalized: string, clauses: string[],
-    clauseText: (index: number) => string, context: ChatContext, autonomy: AgentAutonomy) {
+    clauseText: (index: number) => string, context: ChatContext, autonomy: AgentAutonomy, projectId: string) {
     const units: Unit[] = clauses.map((_clause, index) => ({ entry: this.entry(index,
       clauseText(index)), commands: [], via: [], toolCalls: [], results: [] }));
 
@@ -218,7 +218,7 @@ export class EditAgentService {
       if (fp && 'calls' in fp) {
         unit.entry.intent = fp.intent;
         unit.entry.planSource = 'DETERMINISTIC_FAST_PATH';
-        await this.applyCalls(unit, fp.calls, context);
+        await this.applyCalls(unit, fp.calls, context, projectId);
         continue;
       }
       if (fp) { // FINISH/CONFIRM mixed into a longer request
@@ -252,7 +252,7 @@ export class EditAgentService {
           unit.entry.intent = outcome.summary || clause;
           this.addCommands(unit, resolution.commands.map(toBundle), resolution.plannedChanges);
         } else if (outcome.type === 'HOOK') {
-          const hook = await this.chat.agentHookCommands(outcome.mode, outcome.target, context);
+          const hook = await this.chat.agentHookCommands(outcome.mode, outcome.target, context, projectId);
           if ('question' in hook) { this.settle(unit, 'NEEDS_INPUT', hook.question); break; }
           unit.entry.intent = `Hook: ${outcome.mode.toLowerCase()}`;
           unit.entry.planSource = hook.source === 'LLM' ? 'CREATIVE_OPENAI' : 'CREATIVE_DETERMINISTIC';
@@ -288,7 +288,7 @@ export class EditAgentService {
         unit.entry.intent = plan.intent || pending.clause;
         if (plan.unsupported) { this.settle(unit, 'UNSUPPORTED', plan.unsupported); continue; }
         if (plan.question && !plan.calls.length) { this.settle(unit, 'NEEDS_INPUT', plan.question); continue; }
-        await this.applyCalls(unit, plan.calls, context);
+        await this.applyCalls(unit, plan.calls, context, projectId);
         if (!unit.commands.length && !unit.via.length && unit.entry.status === 'DONE') {
           this.settle(unit, 'UNSUPPORTED', 'Nothing supported was planned for this clause.');
         }
@@ -314,14 +314,14 @@ export class EditAgentService {
   }
 
   /** Registry calls, with creative hook wording routed through the grounded writer. */
-  private async applyCalls(unit: Unit, calls: AgentToolCall[], context: ChatContext) {
+  private async applyCalls(unit: Unit, calls: AgentToolCall[], context: ChatContext, projectId: string) {
     for (const call of calls) {
       if (unit.entry.status !== 'DONE') return;
       if (call.tool !== 'hook.write') { this.addToolCalls(unit, [call], context); continue; }
       const mode = String(call.args.mode ?? 'NEW').toUpperCase();
       const target = context.elements.find((view) => view.semantic === 'HOOK') ?? null;
       const hook = await this.chat.agentHookCommands(mode === 'SHORTER' && target ? 'SHORTER'
-        : target ? 'ANOTHER' : 'NEW', target, context);
+        : target ? 'ANOTHER' : 'NEW', target, context, projectId);
       if ('question' in hook) { this.settle(unit, 'NEEDS_INPUT', hook.question); return; }
       unit.entry.planSource = hook.source === 'LLM' ? 'CREATIVE_OPENAI' : unit.entry.planSource;
       unit.entry.toolCalls.push(call);
@@ -681,7 +681,7 @@ export class EditAgentService {
     }
     // Re-plan each held clause against the CURRENT project (persisted state
     // wins), then execute it now that the user said yes.
-    const units = await this.replanEntries(held, runId, context);
+    const units = await this.replanEntries(held, runId, context, id);
     return this.executeAndReport({ id, runId, message, input, units, constraints, autonomy,
       context, startedRevision: project.revision, started: Date.now() });
   }
@@ -692,7 +692,7 @@ export class EditAgentService {
    * from the natural-language layer (ids, times) is re-derived from its words,
    * never replayed with stale ids.
    */
-  private async replanEntries(entries: LedgerEntry[], runId: string, context: ChatContext) {
+  private async replanEntries(entries: LedgerEntry[], runId: string, context: ChatContext, id: string) {
     const units: Unit[] = [];
     for (const previous of entries) {
       const registryOnly = previous.toolCalls.length > 0 &&
@@ -707,7 +707,7 @@ export class EditAgentService {
       }
       const normalized = normalizeRequest(previous.clause);
       const [unit] = await this.plan(runId, previous.clause, normalized, [normalized],
-        () => previous.clause, context, 'AI_AUTONOMOUS');
+        () => previous.clause, context, 'AI_AUTONOMOUS', id);
       unit.entry.index = units.length;
       units.push(unit);
     }
@@ -721,10 +721,10 @@ export class EditAgentService {
     // 1. What the last run could not complete for a transient reason.
     const retryable = last?.ledger.filter((entry) => entry.status === 'FAILED' ||
       (entry.status === 'DONE' && entry.verification === 'FAILED')) ?? [];
-    const units = await this.replanEntries(retryable, runId, context);
+    const units = await this.replanEntries(retryable, runId, context, id);
     // 2. Held destructive work stays held unless autonomy allows it.
     for (const entry of last?.ledger.filter((item) => item.status === 'NEEDS_CONFIRMATION') ?? []) {
-      const [unit] = await this.replanEntries([entry], runId, context);
+      const [unit] = await this.replanEntries([entry], runId, context, id);
       unit.entry.index = units.length;
       if (autonomy !== 'AI_AUTONOMOUS') {
         this.settle(unit, 'NEEDS_CONFIRMATION', 'Still waiting for your OK - say "yes, do it".', true);
@@ -738,7 +738,7 @@ export class EditAgentService {
       const normalized = instructions.map(normalizeRequest);
       const planned = await this.plan(runId, instructions.join(', '), normalized.join(', '),
         normalized, (index) => instructions[index], context, autonomy === 'AI_AUTONOMOUS'
-          ? autonomy : 'AI_ASSISTED');
+          ? autonomy : 'AI_ASSISTED', id);
       for (const unit of planned) { unit.entry.index = units.length; units.push(unit); }
     }
     if (!units.length) {

@@ -15,6 +15,8 @@ import { BadRequestException, Injectable, Logger, NotFoundException } from '@nes
 import { randomUUID } from 'crypto';
 import { LlmRouterService } from '../processing/llm-router.service';
 import { creativeService } from '../content-intelligence/creative-package.service';
+import { xeeProHookApproved } from '../content-intelligence/hook-language';
+import { chatPlannerAiMode } from './chat/edit-chat-planner';
 import { createPerformanceTelemetry, performanceContext } from '../processing/performance-telemetry';
 import { PrismaService } from '../database/prisma.service';
 import { EditModeService } from './edit-mode.service';
@@ -63,12 +65,13 @@ export class EditModePresetService {
   /** APPLY: the validated plan is executed atomically by the canonical layer. */
   async apply(id: string, input: { presetId?: unknown; revision?: unknown }) {
     const started = Date.now();
-    const { plan, revision } = await this.buildPlan(id, input.presetId, input.revision);
+    const { plan, revision, hookPackage } = await this.buildPlan(id, input.presetId, input.revision);
     const presetRunId = randomUUID();
     const project = await this.editMode.applyPresetBundle(id, revision, {
       presetId: plan.presetId, presetRunId, summary: plan.summary, commands: plan.commands,
       plannedZoomMoments: plan.plannedZoomMoments
     });
+    if (hookPackage) await this.editMode.saveCreativeSuggestions(id, project.revision, hookPackage);
     this.logger.log(JSON.stringify({ event: 'edit_mode_preset_apply', editProjectId: id,
       presetId: plan.presetId, presetRunId, commandCount: plan.commands.length,
       warningCount: plan.warnings?.length ?? 0, revision: project.revision,
@@ -126,7 +129,7 @@ export class EditModePresetService {
     const hookOverride = await this.llmHook(policy.hookPolicy, evidence.transcriptText,
       policy.automatic, currentHook ? String(currentHook.properties.content ?? '') : '');
     const proposal = planPreset({ policy, evidence, elements, assets, currentStyle, previousRun,
-      hookOverride });
+      hookOverride, requireLanguageReview: chatPlannerAiMode().toUpperCase() === 'ONLINE' });
     // A generated plan is validated before it can reach the canonical layer,
     // whichever path produced it.
     const commands = validatePresetCommands(proposal.commands);
@@ -136,17 +139,15 @@ export class EditModePresetService {
         'content-aware edit; the preset can only set project policy until then.');
     }
     const plan: PresetPlan = { ...proposal, commands, warnings };
-    return { revision: project.revision, plan };
+    return { revision: project.revision, plan, hookPackage: hookOverride?.approvedHook
+      ? { hookLanguageGate: 'XEEPRO_V1', hooks: [hookOverride.approvedHook], selectedHook: hookOverride.text, status: 'ACCEPTED' } : undefined };
   }
 
   /**
    * Optional semantic judgement: headline wording.
    *
-   * Deterministic logic is preferred and is always the fallback. When a
-   * provider is configured for the current AI mode, candidates are requested
-   * under a strict schema and then scored by the SAME grounding rules the
-   * deterministic path uses, so an ungrounded or clickbait line is discarded
-   * rather than written to the timeline. FALLBACK_ONLY skips this entirely.
+   * XeePro candidates require the shared per-hook language and grounding review.
+   * An unavailable reviewer supplies no headline; FALLBACK_ONLY retains local wording.
    */
   private async llmHook(hookPolicy: string, transcript: string, automatic: boolean, currentHook = '') {
     if (!automatic || hookPolicy === 'OFF' || !transcript.trim()) return null;
@@ -158,9 +159,9 @@ export class EditModePresetService {
         .create({ external: true, hooksOnly: true, evidence: { transcript: excerpt }, direction: hookPolicy,
           existingHook: currentHook ? {text:currentHook} : undefined }));
       const best = result.status === 'ACCEPTED' ? result.hooks.find(h => h.recommended && h.source === 'OPENAI') : undefined;
-      return best ? { text: best.text, source: 'LLM_ASSISTED' as const } : null;
+      return best && xeeProHookApproved(best) ? { text: best.text, source: 'LLM_ASSISTED' as const, approvedHook: best } : null;
     } catch (error) {
-      this.logger.warn(`Preset headline routing unavailable, using deterministic hook: ${
+      this.logger.warn(`Preset headline routing unavailable: ${
         error instanceof Error ? error.message : String(error)}`);
       return null;
     }

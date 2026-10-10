@@ -210,9 +210,15 @@ const ELEMENT_ORIGINS = new Set(['USER', 'PRESET', 'ASSISTANT']);
 const PRESET_ROLES = new Set(['HOOK', 'SUBTITLE', 'KEY_POINT', 'CTA', 'PRODUCT', 'LOGO', 'MUSIC']);
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const AUDIO_MIMES = new Set(['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav',
-  'audio/mp4', 'audio/x-m4a', 'audio/aac']);
+  'audio/x-mpeg', 'audio/wave', 'audio/vnd.wave', 'audio/mp4', 'audio/x-m4a',
+  'audio/aac', 'audio/x-aac', 'audio/aacp', 'audio/ogg', 'application/ogg',
+  'audio/opus', 'audio/flac', 'audio/x-flac', 'audio/webm', 'video/mp4', 'video/webm',
+  'application/octet-stream', '']);
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
-const AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.m4a', '.aac']);
+const AUDIO_CONTENT_TYPES: Record<string, string> = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.opus': 'audio/ogg',
+  '.flac': 'audio/flac', '.webm': 'audio/webm' };
+const AUDIO_EXTENSIONS = new Set(Object.keys(AUDIO_CONTENT_TYPES));
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
 
@@ -363,7 +369,8 @@ export class EditModeService {
     const project=await this.prisma.editProject.findUniqueOrThrow({where:{id},select:{settings:true}});
     const previous=settingsRecord(settingsRecord(project.settings).contentIntelligence), incoming=settingsRecord(creativePackage);
     const saved=hooksOnly ? {...previous,version:incoming.version,understanding:incoming.understanding,hooks:incoming.hooks,selectedHook:incoming.selectedHook,
-      status:incoming.status,boundaryQa:incoming.boundaryQa,contextRevision:revision} : {...incoming,contextRevision:revision,copyRevision:revision};
+      status:incoming.status,hookLanguageGate:incoming.hookLanguageGate ?? previous.hookLanguageGate,boundaryQa:incoming.boundaryQa,contextRevision:revision}
+      : {...incoming,hookLanguageGate:incoming.hookLanguageGate ?? previous.hookLanguageGate,contextRevision:revision,copyRevision:revision};
     const result=await this.prisma.editProject.updateMany({where:{id,revision,settings:{equals:project.settings as Prisma.InputJsonValue}},data:{settings:
       {...settingsRecord(project.settings),contentIntelligence:saved} as Prisma.InputJsonValue}});
     if (!result.count) throw new ConflictException('Your edits changed. Refresh before generating suggestions.');
@@ -474,7 +481,8 @@ export class EditModeService {
       if (!image && (!media.hasAudio || !media.durationSec || media.durationSec <= 0)) {
         throw new BadRequestException('Audio file is not readable or has no audio stream');
       }
-      stored = await this.storage.uploadBuffer({ buffer: file.buffer, objectKey, mimeType: file.mimetype });
+      const mimeType = image ? file.mimetype : AUDIO_CONTENT_TYPES[extension];
+      stored = await this.storage.uploadBuffer({ buffer: file.buffer, objectKey, mimeType });
       const result = await this.prisma.$transaction(async (tx) => {
         const latest = await tx.editProject.findUnique({ where: { id } });
         if (!latest) throw new NotFoundException('EditProject not found');
@@ -482,7 +490,7 @@ export class EditModeService {
         const asset = await tx.editAsset.create({ data: {
           id: assetId, editProjectId: id, role: role as EditAssetRole,
           originalName: file.originalname, bucket: stored!.bucket, objectKey: stored!.objectKey,
-          mimeType: file.mimetype, sizeBytes: BigInt(file.size), duration: media.durationSec,
+          mimeType, sizeBytes: BigInt(file.size), duration: media.durationSec,
           width: media.width, height: media.height, fps: media.fps ?? null,
           metadata: { hasVideo: media.hasVideo, hasAudio: media.hasAudio,
             videoCodec: media.videoCodec, audioCodec: media.audioCodec, formatName: media.formatName }
@@ -590,7 +598,9 @@ export class EditModeService {
   }
 
   private probeAssetMedia(path: string) {
-    return probeMedia(path);
+    return probeMedia(path, { timeoutMs: 15_000 }).catch(() => {
+      throw new BadRequestException('This file could not be read. Upload a valid image or audio file.');
+    });
   }
 
   private async assertAttachable(id: string, revision: number) {
@@ -1171,9 +1181,12 @@ export class EditModeService {
       if (action === 'ADD_AUDIO') {
         if (!asset || asset.role !== 'AUDIO' || !asset.duration) throw new BadRequestException({
           code: 'INVALID_ASSET', message: 'A readable AUDIO asset must belong to this EditProject' });
-        const duration = normalizedDuration(Math.min(asset.duration, projectDuration));
+        const startTime = input.startTime === undefined ? 0 : this.finiteNumber(input.startTime, 'startTime');
+        if (startTime < 0 || projectDuration - startTime < MIN_VIDEO_DURATION_SEC) throw new BadRequestException({
+          code: 'INVALID_AUDIO_TIMING', message: 'Music must start within the video timeline' });
+        const duration = normalizedDuration(Math.min(asset.duration, projectDuration - startTime));
         return add({ id: randomUUID(), assetId, type: 'AUDIO', track: 3,
-          position: nextPosition(3), startTime: 0, duration, trimStart: 0, trimEnd: duration,
+          position: nextPosition(3), startTime, duration, trimStart: 0, trimEnd: duration,
           properties: { volume: DEFAULT_MUSIC_VOLUME, muted: false, fadeInSec: 0, fadeOutSec: 0,
             duckUnderSpeech: false, duckLevel: DUCK_STRENGTHS[DEFAULT_DUCK_STRENGTH],
             duckStrength: DEFAULT_DUCK_STRENGTH, attackMs: DEFAULT_ATTACK_MS,

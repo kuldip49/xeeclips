@@ -1,5 +1,7 @@
 'use client';
 
+import { MUSIC_FILE_ACCEPT } from '@/lib/edit-mode-audio';
+
 import { useEffect, useRef, useState } from 'react';
 import { FileAudio, FileImage, FileUp, Library, Plus, Trash2 } from 'lucide-react';
 import { listSourceVideos } from '@/lib/edit-mode-api';
@@ -23,7 +25,7 @@ export function EditAssetPicker({ assets, busy, onUploadSource, onImport, onUplo
   const choose = (role: 'IMAGE' | 'LOGO' | 'AUDIO') => {
     pendingRole.current = role;
     if (assetInput.current) assetInput.current.accept = role === 'AUDIO'
-      ? '.mp3,.wav,.m4a,.aac,audio/*' : '.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp';
+      ? MUSIC_FILE_ACCEPT : '.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp';
     assetInput.current?.click();
   };
   return <section className='grid min-w-0 gap-3'>

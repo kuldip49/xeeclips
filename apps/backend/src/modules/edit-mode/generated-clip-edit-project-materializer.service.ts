@@ -31,7 +31,7 @@ export class GeneratedClipEditProjectMaterializerService {
   async materialize(generatedClipId: string) {
     const clip = await this.prisma.generatedClip.findUnique({
       where: { id: generatedClipId },
-      include: { video: { include: { transcript: { include: {
+      include: { video: { include: { processingJobs: { orderBy: { createdAt: 'desc' as const }, take: 1, select: { aiMode: true } }, transcript: { include: {
         segments: { orderBy: { position: 'asc' as const } }
       } } } }, editProject: { select: { id: true } } }
     });
@@ -123,6 +123,7 @@ export class GeneratedClipEditProjectMaterializerService {
         // Compatibility aliases retained for already-shipped Step 2 readers.
         fullVideoSourceStart: clip.startTime, fullVideoSourceEnd: clip.endTime,
         generatedDuration: duration, processingType: clip.processingType,
+        aiMode: clip.video.processingJobs?.[0]?.aiMode,
         ...(clip.templateId === 'AUTOMATIC_3_STYLE_TWO' ? { templateId: clip.templateId } : {}),
         aspectRatio: clip.aspectRatio, targetPlatform: clip.targetPlatform,
         variantKey: clip.variantKey, editPlan: clip.editPlan,

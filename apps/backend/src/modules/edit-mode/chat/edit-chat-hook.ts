@@ -1,6 +1,6 @@
 import { creativeService, deterministicCreative } from '../../content-intelligence/creative-package.service';
 import { localUnderstanding, type ContentEvidence } from '../../content-intelligence/content-understanding.service';
-import { sharedQuality, hookMeetsThreshold } from '../../content-intelligence/creative-quality.service';
+import { sharedQuality, hookMeetsThreshold, type CreativeHook } from '../../content-intelligence/creative-quality.service';
 // Workstream G: creative hook rewriting, grounded.
 //
 // "Change the hook", "make it shorter", "more curiosity based", "try another".
@@ -38,7 +38,7 @@ const MODE_BRIEF: Record<HookMode, string> = {
 };
 
 export type HookSuggestion = { text: string; source: 'DETERMINISTIC' | 'LLM';
-  mechanism: string; score: number };
+  mechanism: string; score: number; approvedHook?: CreativeHook };
 
 const normalized = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const wordCount = (text: string) => text.split(/\s+/u).filter(Boolean).length;
@@ -209,7 +209,8 @@ export async function modelHookSuggestions(input: { llm: LlmRouterService; logge
     // "Shorter" means fewer words, as in the deterministic path; fewer characters alone is not shorter.
     const words = (text: string) => text.trim().split(/\s+/u).length;
     const suggestions = p.hooks.filter(h => hookMeetsThreshold(h) && (input.mode !== 'SHORTER' || !input.current || words(h.text) < words(input.current)))
-      .map(h => ({ text: h.text, source: h.source === 'OPENAI' ? 'LLM' as const : 'DETERMINISTIC' as const, mechanism: h.category, score: h.score / 10 }));
+      .map(h => ({ text: h.text, source: h.source === 'OPENAI' ? 'LLM' as const : 'DETERMINISTIC' as const, mechanism: h.category, score: h.score / 10,
+        ...(mode === 'ONLINE' ? { approvedHook: h } : {}) }));
     return { suggestions, attempted: p.internal.routes.length > 0, latencyMs: Date.now() - started };
   } catch { return { suggestions: [], attempted: true, latencyMs: Date.now() - started, error: 'Creative suggestions unavailable' }; }
 }

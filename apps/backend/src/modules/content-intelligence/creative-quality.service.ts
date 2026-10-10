@@ -1,9 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { evidenceText, normalize, terms, type ContentEvidence, type ContentUnderstanding } from './content-understanding.service';
 import { hookFitsTemplates } from './hook-fit';
+import { hookLanguageProblems, languageApproved, languageComplete, HOOK_LANGUAGE_CHECKS, type HookLanguage } from './hook-language';
 export const HOOK_CATEGORIES = ['BOLD', 'CURIOSITY', 'CONTRARIAN', 'SARCASTIC', 'HUMOROUS', 'EMOTIONAL', 'QUESTION', 'AUTHORITY', 'STORY', 'WARNING', 'PROFESSIONAL',
   'HIDDEN_TRUTH', 'UNEXPECTED_RESULT', 'TENSION', 'CHALLENGE', 'CONFLICT', 'MISTAKE', 'WAIT_UNTIL', 'MYTH_REALITY', 'BEFORE_AFTER', 'REVEAL'] as const;
-export const HOOK_POLICY = { minWords: 4, normalMin: 8, normalMax: 14, longMax: 22, maxWords: 26, maxCharacters: 320,
+export const HOOK_POLICY = { minWords: 4, normalMin: 6, normalMax: 16, longMax: 22, maxWords: 26, maxCharacters: 320,
   clickabilityThreshold: 70, contextThreshold: 65, specificityThreshold: 45, noveltyThreshold: 60,
   groundingThreshold: 70, misleadingRiskMax: 30, naturalnessThreshold: 70,
   /** A generated rewrite replaces an existing, already-acceptable hook only when it is better by at least this many composite points. */
@@ -11,7 +12,8 @@ export const HOOK_POLICY = { minWords: 4, normalMin: 8, normalMax: 14, longMax: 
 export type HookCategory = typeof HOOK_CATEGORIES[number];
 /** The semantic reviewer's verdict on one hook. Present only when a model judged meaning, not word overlap. */
 export type HookReview = { approved: boolean; clickability: number; context: number; grounding: number;
-  misleadingRisk: number; specificity: number; naturalness: number; summaryLike: boolean; unclearReference: boolean; issue: string; why: string };
+  misleadingRisk: number; specificity: number; naturalness: number; summaryLike: boolean; unclearReference: boolean; issue: string; why: string;
+  language?: HookLanguage };
 export type CreativeHook = { text: string; category: HookCategory; score: number; recommended: boolean; source: 'OPENAI' | 'LOCAL';
   components?: Record<string, number>; CLICKABILITY_SCORE?: number; CONTEXT_SCORE?: number;
   directQuote?: boolean; support?: string; review?: HookReview; existing?: boolean };
@@ -115,6 +117,7 @@ export function inventedNames(text: string, e: ContentEvidence): string[] {
 }
 /** Hard (objective) screen applied to every hook before any quality judgement. */
 export type HookRejectionCode = 'SCHEMA_INVALID' | 'DUPLICATE_OR_EXCLUDED' | 'LENGTH_POLICY' | 'FACTUAL_FILTER' | 'INVENTED_NAME'
+  | 'GRAMMAR_OK' | 'MEANING_CLEAR' | 'NATURAL_LANGUAGE' | 'CONTEXT_COMPLETE' | 'NO_BROKEN_PHRASE' | 'NO_WORD_SALAD' | 'NO_DANGLING_PRONOUN' | 'NO_STITCHED_TRANSCRIPT_FRAGMENT'
   | 'SUMMARY_STYLE' | 'TRANSCRIPT_COPY' | 'HUMOR_NOT_SUPPORTED' | 'LEXICAL_UNGROUNDED' | 'LOW_CONTEXT_LEXICAL' | 'NEAR_DUPLICATE'
   | 'CATEGORY_CAP' | 'NOT_REVIEWED' | 'REVIEW_NOT_APPROVED' | 'LOW_CLICKABILITY' | 'LOW_CONTEXT' | 'LOW_SPECIFICITY'
   | 'GENERIC_SUMMARY' | 'LOW_NOVELTY' | 'LOW_GROUNDING' | 'MISLEADING' | 'UNRESOLVED_PRONOUN' | 'UNCLEAR_REFERENCE' | 'LOW_NATURALNESS' | 'UNSUPPORTED_DETAIL';
@@ -130,6 +133,7 @@ const summaryHook = /^(?:how .+ works?|they (?:talk|discuss)|.+ is important|thi
 const leadingPronoun = /^[^\p{L}]*(?:they|them|their|theirs|he|him|his|she|her|hers)(?![\p{L}])/iu;
 const pct = (v: number | undefined) => Math.round((v ?? 0) * 100);
 export const hookMeetsThreshold = (h: CreativeHook) => (h.CLICKABILITY_SCORE ?? 0) >= HOOK_POLICY.clickabilityThreshold
+  && (!h.review || languageApproved(h.review.language))
   && (h.CONTEXT_SCORE ?? 0) >= HOOK_POLICY.contextThreshold && pct(h.components?.specificity) >= HOOK_POLICY.specificityThreshold
   && pct(h.components?.novelty) >= HOOK_POLICY.noveltyThreshold
   && (h.components?.factualGrounding === undefined || pct(h.components.factualGrounding) >= HOOK_POLICY.groundingThreshold)
@@ -159,14 +163,17 @@ export function parseHookReview(raw: unknown): HookReview | undefined {
   if (!r || typeof r !== 'object') return undefined;
   const [clickability, context, grounding, misleadingRisk, specificity, naturalness] =
     ['clickability', 'context', 'grounding', 'misleadingRisk', 'specificity', 'naturalness'].map(k => score100(r[k]));
-  if ([clickability, context, grounding, misleadingRisk, specificity, naturalness].some(v => v === undefined) || typeof r.approved !== 'boolean') return undefined;
+  if ([clickability, context, grounding, misleadingRisk, specificity, naturalness].some(v => v === undefined) || typeof r.approved !== 'boolean'
+    || !languageComplete(r.language) || typeof r.summaryLike !== 'boolean' || typeof r.unclearReference !== 'boolean') return undefined;
   return { approved: r.approved, clickability: clickability!, context: context!, grounding: grounding!, misleadingRisk: misleadingRisk!,
     specificity: specificity!, naturalness: naturalness!, summaryLike: r.summaryLike === true, unclearReference: r.unclearReference === true,
-    issue: typeof r.issue === 'string' ? r.issue.slice(0, 300) : '', why: typeof r.why === 'string' ? r.why.slice(0, 300) : '' };
+    language: r.language, issue: typeof r.issue === 'string' ? r.issue.slice(0, 300) : '', why: typeof r.why === 'string' ? r.why.slice(0, 300) : '' };
 }
 /** Which numeric bars a reviewed hook misses. Empty means every bar is met. */
 export function reviewMisses(r: HookReview, novelty: number): Array<{ code: HookRejectionCode; detail: string }> {
   const out: Array<{ code: HookRejectionCode; detail: string }> = [];
+  for (const key of HOOK_LANGUAGE_CHECKS) if (r.language?.[key] !== true)
+    out.push({ code: key, detail: `mandatory language check failed: ${key}` });
   if (r.grounding < HOOK_POLICY.groundingThreshold) out.push({ code: 'LOW_GROUNDING', detail: `grounding ${r.grounding}<${HOOK_POLICY.groundingThreshold}` });
   if (r.misleadingRisk > HOOK_POLICY.misleadingRiskMax) out.push({ code: 'MISLEADING', detail: `misleading risk ${r.misleadingRisk}>${HOOK_POLICY.misleadingRiskMax}` });
   if (r.summaryLike) out.push({ code: 'GENERIC_SUMMARY', detail: 'reads as a topic summary, not a hook' });
@@ -218,7 +225,7 @@ export class CreativeQualityService {
    * whether a paraphrased claim is supported is a question of meaning.
    */
   screen(candidates: Array<Partial<HookCandidate>> | undefined, evidence: ContentEvidence, u: ContentUnderstanding, exclude: string[] = [],
-    options: { strictReference?: boolean } = {}) {
+    options: { strictReference?: boolean; strictLanguage?: boolean } = {}) {
     const seen = new Set(exclude.map(normalize)), passed: ScreenedHook[] = [], rejected: HookRejection[] = [];
     for (const candidate of candidates ?? []) {
       const raw = typeof candidate?.text === 'string' ? candidate.text : '';
@@ -228,6 +235,11 @@ export class CreativeQualityService {
       const text = candidate.text.replace(/\s+/gu, ' ').trim(), count = text.split(' ').length, reject = (code: HookRejectionCode, detail: string) =>
         void rejected.push({ text, category, code, detail });
       if (seen.has(normalize(text))) { reject('DUPLICATE_OR_EXCLUDED', 'already used or excluded'); continue; }
+      if (options.strictReference && leadingPronoun.test(text)) { reject('UNRESOLVED_PRONOUN', 'opens with a pronoun that has no antecedent'); continue; }
+      if (options.strictLanguage) {
+        const problems = hookLanguageProblems(text);
+        if (problems.length) { for (const problem of problems) reject(problem as HookRejectionCode, `mandatory language check failed: ${problem}`); continue; }
+      }
       if (text.length > HOOK_POLICY.maxCharacters || count < HOOK_POLICY.minWords || count > HOOK_POLICY.maxWords) { reject('LENGTH_POLICY', `${count} words`); continue; }
       if (!factual(text, evidence)) { reject('FACTUAL_FILTER', 'unsupported number, quote, attributed name or filler claim'); continue; }
       // Speed/intensity adverbs ("instantly", "in seconds") are claims about HOW FAST or HOW MUCH; the reviewer misses them, so check objectively.
@@ -237,9 +249,6 @@ export class CreativeQualityService {
       const invented = inventedNames(text, evidence);
       if (invented.length) { reject('INVENTED_NAME', invented.join(', ')); continue; }
       if (summaryHook.test(text)) { reject('SUMMARY_STYLE', 'topic-description wording'); continue; }
-      // A model-written hook that opens with a third-person pronoun has no antecedent for a viewer who has not heard the clip.
-      // (Not applied to locally shortened user wording, which may legitimately keep the user's own opening.)
-      if (options.strictReference && leadingPronoun.test(text)) { reject('UNRESOLVED_PRONOUN', 'opens with a pronoun that has no antecedent'); continue; }
       const copy = transcriptSimilarity(text, evidence.transcript);
       // Quotes are opt-in and require a strong, exact, supported line; ordinary copied subtitles are refused.
       const directQuote = candidate.directQuote === true && normalize(evidence.transcript).includes(normalize(text))

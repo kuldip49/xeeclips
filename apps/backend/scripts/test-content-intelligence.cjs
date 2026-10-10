@@ -6,6 +6,7 @@ const { CreativePackageService, publicCreativePackage } = require('../dist/modul
 const { LlmRouterService } = require('../dist/modules/processing/llm-router.service');
 const { createPerformanceTelemetry, performanceContext } = require('../dist/modules/processing/performance-telemetry');
 const fixtures = require('./fixtures/content-intelligence.cjs');
+const hookReview = require('./fixtures/hook-review.cjs');
 const boundary = new ClipBoundaryService(), quality = new CreativeQualityService();
 function timing(turns, step = .65) {
   let t = 0; return turns.flatMap(([speaker,text]) => text.split(/\s+/u).map(text => {
@@ -23,7 +24,7 @@ const good = { hooks: [
   captions:[{style:'Concise',text:'Approval should leave room for your boundaries.'},
     {style:'Engaging',text:'Every yes asks something of your boundaries. How do you decide which requests deserve it?'},
     {style:'Professional',text:'Decisions based on approval leave little room for sustainable boundaries.'}],
-  hashtagSets:[{label:'Focused',hashtags:['#Approval','#Boundaries']},{label:'Niche',hashtags:['#SustainableBoundaries']},{label:'Broad',hashtags:['#Decisions']}],supportingLine:'' };
+  hashtagSets:[{label:'Focused',hashtags:['#Approval','#Boundaries','#ApprovalSeeking','#HealthyBoundaries','#SustainableBoundaries']},{label:'Niche',hashtags:['#SustainableBoundaries']},{label:'Broad',hashtags:['#Decisions']}],supportingLine:'' };
 async function main() {
   const repaired = [];
   const localService=new CreativePackageService({generate(){throw Error('fixture analysis must remain local');}});
@@ -82,7 +83,7 @@ async function main() {
   let analysisCalls=0,creativeCalls=0,reviewCalls=0;const tiers=[];
   const fake={async generate(input){
     if(input.role==='clipUnderstanding'){analysisCalls++; return {data:{},metadata:{role:input.role,provider:'test',model:'analysis',attempts:[]}};}
-    if(input.role==='critic'){reviewCalls++;return {data:{supported:true,failures:[]},metadata:{role:input.role,provider:'test',model:'review',attempts:[]}};}
+    if(input.role==='critic'){reviewCalls++;return {data:hookReview(input),metadata:{role:input.role,provider:'test',model:'review',attempts:[]}};}
     creativeCalls++; tiers.push(input.creativeTier); return {data:creativeCalls===1?{...good,hooks:[{text:'Chasing approval makes every decision depend on someone else',category:'BOLD'}]}:good,
       metadata:{role:input.role,provider:'test',model:input.creativeTier,attempts:[]}};
   }};
@@ -103,7 +104,7 @@ async function main() {
   const failTiers=[];let failedOnce=false;
   const flaky=await new CreativePackageService({async generate(i){
     if(i.role==='clipUnderstanding')return{data:{},metadata:{role:i.role,provider:'test',model:'analysis',attempts:[]}};
-    if(i.role==='critic')return{data:{supported:true,failures:[]},metadata:{role:i.role,provider:'test',model:'review',attempts:[]}};
+    if(i.role==='critic')return{data:hookReview(i),metadata:{role:i.role,provider:'test',model:'review',attempts:[]}};
     failTiers.push(i.creativeTier);if(!failedOnce){failedOnce=true;throw Error('TIMEOUT_FAILURE');}
     return{data:good,metadata:{role:i.role,provider:'test',model:i.creativeTier,attempts:[]}};}})
     .create({evidence:{...evidence,sourceId:'flaky-provider'},external:true});
@@ -123,7 +124,7 @@ async function main() {
   // Paraphrase-only copy (low word overlap) is judged by meaning; hard factual failures never reach review.
   const { SEMANTIC_REVIEWABLE_FAILURES } = require('../dist/modules/content-intelligence/creative-quality.service');
   const paraphrased={...good,captions:[...good.captions,{style:'Bold',text:'Think about the commitment you accepted despite knowing you could not keep up.'}],
-    hashtagSets:[{label:'Focused',hashtags:['#Boundaries','#PeoplePleasing']},{label:'Niche',hashtags:['#Overcommitment']},{label:'Broad',hashtags:['#PersonalGrowth']}]};
+    hashtagSets:[{label:'Focused',hashtags:['#Boundaries','#PeoplePleasing','#Approval','#Decisions','#Disagreement']},{label:'Niche',hashtags:['#Overcommitment']},{label:'Broad',hashtags:['#PersonalGrowth']}]};
   const softHooks=quality.rank(paraphrased.hooks,evidence,u);
   const soft=quality.evaluate(paraphrased,softHooks,evidence);
   assert.equal(soft.passed,false);assert.ok(soft.failures.length&&soft.failures.every(f=>SEMANTIC_REVIEWABLE_FAILURES.has(f)),'paraphrase-only failures are soft: '+soft.failures);
@@ -133,14 +134,14 @@ async function main() {
   assert.ok(hard.failures.includes('CAPTION_UNGROUNDED_OR_REPEATED'));assert.equal(quality.afterSemanticReview(hard,softHooks).passed,false,'review cannot clear hard failures');
   let softReviews=0;
   const reviewedSoft=await new CreativePackageService({async generate(i){if(i.role==='critic')softReviews++;
-    return{data:i.role==='clipUnderstanding'?{}:i.role==='critic'?{supported:true,failures:[]}:paraphrased,metadata:{role:i.role,provider:'test',model:'test',attempts:[]}};}})
+    return{data:i.role==='clipUnderstanding'?{}:i.role==='critic'?hookReview(i):paraphrased,metadata:{role:i.role,provider:'test',model:'test',attempts:[]}};}})
     .create({external:true,evidence:{...evidence,sourceId:'paraphrased-soft'}});
   assert.equal(reviewedSoft.status,'ACCEPTED');assert.equal(reviewedSoft.internal.escalations,0);assert.equal(softReviews,1);
   assert.ok(reviewedSoft.captions.some(c=>c.text.startsWith('Think about the commitment')),'reviewed paraphrase is kept');
   assert.ok(reviewedSoft.hashtagSets.flatMap(x=>x.hashtags).includes('#Overcommitment'));
   let hardReviews=0;
   const hardPkg=await new CreativePackageService({async generate(i){if(i.role==='critic')hardReviews++;
-    return{data:i.role==='clipUnderstanding'?{}:i.role==='critic'?{supported:true,failures:[]}:invented,metadata:{role:i.role,provider:'test',model:'test',attempts:[]}};}})
+    return{data:i.role==='clipUnderstanding'?{}:i.role==='critic'?hookReview(i):invented,metadata:{role:i.role,provider:'test',model:'test',attempts:[]}};}})
     .create({external:true,evidence:{...evidence,sourceId:'invented-hard'}});
   assert.equal(hardPkg.status,'NEEDS_REVIEW');assert.equal(hardReviews,0,'hard failures skip review');
   assert.ok(!JSON.stringify(hardPkg.captions).includes('300 hours'));

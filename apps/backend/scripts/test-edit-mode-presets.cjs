@@ -717,17 +717,14 @@ async function testNoPromptAndFallback() {
     {text:'Why Does Compound Interest Beat Timing The Market?',category:'QUESTION'},
     {text:'Why missing the best trading days costs investment returns',category:'HIDDEN_TRUTH'},
     {text:'Investing discipline beats the forecast — can you stay invested?',category:'CHALLENGE'}];
-  const {sharedQuality}=require('../dist/modules/content-intelligence/creative-quality.service');
-  const {localUnderstanding}=require('../dist/modules/content-intelligence/content-understanding.service');
-  const fixtureEvidence={transcript:SPEECH.join(' ')};
-  const grounded = sharedQuality.rank(choices,fixtureEvidence,localUnderstanding(fixtureEvidence))[0].text;
   const assisted = await seed(talkingHeadAnalysis(), { llm: { calls: 0,
     isAnyConfigured() { return true; },
-    async generate(input) { this.calls++; return { data: input.role==='critic'?{supported:true,failures:[]}:input.role==='clipUnderstanding'?{}:{ hooks: choices },
+    async generate(input) { this.calls++; return { data: input.role==='critic'?require('./fixtures/hook-review.cjs')(input):input.role==='clipUnderstanding'?{}:{ hooks: choices },
       metadata: {} }; } } });
   const assistedPlan = await assisted.presets.preview(assisted.projectId,
     { presetId: 'MOTIVATIONAL' });
-  assert.equal(assistedPlan.style.hookText, grounded, 'a grounded headline is used verbatim');
+  const grounded = assistedPlan.style.hookText;
+  assert(choices.some(hook => hook.text === grounded), 'a reviewed headline is used verbatim');
   assert.equal(assistedPlan.generation, 'LLM_ASSISTED');
   const assistedApplied = await assisted.presets.apply(assisted.projectId,
     { presetId: 'MOTIVATIONAL' });

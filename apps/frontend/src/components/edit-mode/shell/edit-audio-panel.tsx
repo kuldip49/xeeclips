@@ -2,7 +2,7 @@
 
 import { Music, Volume2, VolumeX } from 'lucide-react';
 import type { ManualEditCommand } from '@/lib/edit-mode-api';
-import { DUCK_STRENGTH_IDS, DUCK_STRENGTH_LABELS, MAX_VOLUME, exceedsPreviewGain,
+import { DUCK_STRENGTH_IDS, DUCK_STRENGTH_LABELS, MAX_VOLUME, MUSIC_FILE_ACCEPT, exceedsPreviewGain,
   readAudioState, readSourceAudio, type DuckStrengthId } from '@/lib/edit-mode-audio';
 import type { EditAsset, EditElement } from '@/lib/edit-mode-types';
 
@@ -101,7 +101,7 @@ export function EditAudioPanel({ assets, elements, busy, hasSource, selectedElem
         Music and audio</p>
       <label className='flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-border py-2 text-[11px] font-medium text-soft hover:bg-tint'>
         <Music size={12} />Upload music
-        <input className='hidden' type='file' accept='.mp3,.wav,.m4a,.aac,audio/*'
+        <input className='hidden' type='file' accept={MUSIC_FILE_ACCEPT}
           disabled={busy || !hasSource}
           onChange={(event) => {
             const file = event.target.files?.[0];
@@ -109,6 +109,7 @@ export function EditAudioPanel({ assets, elements, busy, hasSource, selectedElem
             event.target.value = '';
           }} />
       </label>
+      <p className='text-[10px] leading-4 text-faint'>Music is added at the playhead after upload. Up to 200 MB.</p>
       <p className='text-[10px] leading-4 text-warning-soft/70'>
         Only upload audio you own or are licensed to use.</p>
       {library.map((asset) => <div key={asset.id} className='min-w-0 rounded-lg bg-tint-subtle p-2'>
@@ -124,8 +125,9 @@ export function EditAudioPanel({ assets, elements, busy, hasSource, selectedElem
           <button type='button' disabled={busy || !hasSource} onClick={() => onAdd(asset)}
             className='rounded-md bg-tint py-1 text-[10px] font-semibold hover:bg-tint-strong disabled:opacity-30'>
             Add to timeline</button>
-          <button type='button' disabled={busy} onClick={() => onDelete(asset)}
+          <button type='button' disabled={busy || usedAssetIds.has(asset.id)} onClick={() => onDelete(asset)}
             aria-label={`Delete ${asset.originalName}`}
+            title={usedAssetIds.has(asset.id) ? 'Remove this music from the timeline before deleting the file' : undefined}
             className='rounded-md border border-border px-2 text-[10px] text-faint hover:text-danger'>
             Delete</button>
         </div>

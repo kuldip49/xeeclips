@@ -23,6 +23,8 @@ import { loadSfxLibrary, selectSfx, sfxGainDb, sfxPolicy, SfxAsset, SfxType } fr
 import { measureSubjectSafety } from './subject-safety';
 import { chooseThumbnailTime, ThumbnailChoice } from './thumbnail-frame';
 import { hookAccentBudget } from './hook-accent';
+import { xeeProHookApproved } from '../content-intelligence/hook-language';
+import { hookMeetsThreshold, type CreativeHook } from '../content-intelligence/creative-quality.service';
 import { HOOK_LENGTH } from './hook-generator';
 import { HOOK_TYPE } from './text-layout';
 import { INLINE_FALLBACK_TRACK, loadMusicLibrary, musicGainDb, musicPolicy, MusicMood, MusicTrack,
@@ -320,6 +322,8 @@ export type LoopDecision = { loopSuitable: boolean; loopApplied: boolean; loopRe
   loopVisualSimilarity: number | null };
 
 export type ExecuteContext = {
+  xeePro?: boolean;
+  approvedHook?: CreativeHook;
   // Source time of the first frame of `inputPath`. Defaults to plan.clipStartSec.
   inputOffsetSec?: number;
   timeline?: EditedTimeline;
@@ -493,6 +497,12 @@ export class VideoEditExecutorService {
     speakerChangeTimes: number[] = [], context: ExecuteContext = {}) {
     const started = Date.now();
     const directory = dirname(outputPath);
+    if (context.xeePro && (plan.hookRequired || plan.onScreenHook.enabled) &&
+      (!xeeProHookApproved(context.approvedHook) || !hookMeetsThreshold(context.approvedHook!) ||
+        context.approvedHook?.text !== plan.onScreenHook.text)) {
+      throw new EditQualityError('XeePro hook rejected before render: grammar/clarity review required',
+        { preRenderRejectReason: 'HOOK_LANGUAGE_GATE', candidateSkippedBeforeRender: true, fullRenderAttempts: 0 });
+    }
     const inputProbe = await probe(inputPath);
     const hasAudio = inputProbe.streams.some((stream) => stream.codec_type === 'audio');
     const sourceVideo = inputProbe.streams.find((stream) => stream.codec_type === 'video');

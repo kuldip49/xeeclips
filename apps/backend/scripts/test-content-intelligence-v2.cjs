@@ -73,7 +73,7 @@ async function main() {
   assert(!q.evaluate({hooks:[],synopsis:'',captions:[],hashtagSets:[],supportingLine:''},weak,e,true).passed,'flat headline triggers regeneration');
   const tiers=[];
   const pkg=await new CreativePackageService({async generate(i){
-    if(i.role==='critic')return{data:{supported:true,failures:[]}};
+    if(i.role==='critic')return{data:require('./fixtures/hook-review.cjs')(i)};
     tiers.push(i.creativeTier);
     assert.equal(i.request.schema.properties.hooks.minItems,8);assert.equal(i.request.schema.properties.hooks.maxItems,15);
     assert(!i.request.systemPrompt.includes('3-12 words'));

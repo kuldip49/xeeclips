@@ -12,7 +12,9 @@ const evidence = { transcript: 'I kept saying yes to everything until I realized
   analysis: { mainClaim: 'Saying yes to everything costs the speaker their own time.', conclusion: 'Protecting priorities means accepting some disapproval.' } };
 const u = localUnderstanding(evidence);
 const meta = { role: 'x', provider: 'test', model: 'test', attempts: [] };
-const good = (over = {}) => ({ approved: true, clickability: 85, context: 90, grounding: 92, misleadingRisk: 6, specificity: 80, naturalness: 90, summaryLike: false, issue: '', why: 'supported by the clip', ...over });
+const { HOOK_LANGUAGE_CHECKS } = require(dist + 'hook-language');
+const good = (over = {}) => ({ approved: true, clickability: 85, context: 90, grounding: 92, misleadingRisk: 6, specificity: 80, naturalness: 90, summaryLike: false, unclearReference: false,
+  language: Object.fromEntries(HOOK_LANGUAGE_CHECKS.map(k => [k, true])), issue: '', why: 'supported by the clip', ...over });
 const hook = (text, category = 'CURIOSITY') => ({ text, category, support: 'the speaker describes having no time left for themselves' });
 const pool = [
   hook("The hidden cost of always being the 'nice' one", 'HIDDEN_TRUTH'),
@@ -58,6 +60,35 @@ const seq = [];
   // 3. Writer and reviewer share ONE definition of a strong hook, and the writer plans the wider pool.
   const gen = r2.calls.find(c => c.role === 'creativeGeneration').request.systemPrompt, crit = r2.calls.find(c => c.role === 'critic').request.systemPrompt;
   assert(gen.includes(HOOK_RUBRIC) && crit.includes(HOOK_RUBRIC), 'identical rubric in generator and reviewer');
+  const { XEEPRO_HOOK_STYLE } = require(dist + 'creative-package.service');
+  assert(gen.includes(XEEPRO_HOOK_STYLE) && crit.includes(XEEPRO_HOOK_STYLE), 'requested audience-facing style is shared by writer and reviewer');
+  assert(gen.includes('non-question CURIOSITY or HIDDEN_TRUTH clickbait hook'));
+  assert(gen.includes('Make most candidates non-questions'));
+  assert(!gen.includes('At least half the candidates should be direct questions'));
+  const { variedHookOptions } = require(dist + 'creative-package.service');
+  const varietyPool = [
+    { ...hook('Is your yes costing you the work that matters?', 'QUESTION'), score: 95, recommended: true },
+    { ...hook('Are your priorities losing to every request?', 'QUESTION'), score: 94, recommended: false },
+    { ...hook('Can boundaries survive the need for approval?', 'TENSION'), score: 93, recommended: false },
+    { ...hook('The hidden price of saying yes to everyone', 'CURIOSITY'), score: 90, recommended: false },
+    { ...hook('One more yes left no time for focused work', 'STORY'), score: 87, recommended: false },
+    { ...hook('Disappointing someone can protect your priorities', 'CONTRARIAN'), score: 86, recommended: false },
+    { ...hook('Approval can cost the time you need most', 'EMOTIONAL'), score: 85, recommended: false }
+  ];
+  const varied = variedHookOptions(varietyPool, 'clip-a');
+  assert.equal(varied[0].text, varietyPool[0].text, 'variety preserves the strongest recommendation');
+  assert.equal(varied[1].category, 'CURIOSITY', 'a statement-led clickbait option is visible alongside the question');
+  assert(['STORY', 'CONTRARIAN', 'EMOTIONAL'].includes(varied[2].category));
+  assert.equal(varied.length, varietyPool.length, 'variety never adds or removes a reviewed hook');
+  assert.equal(varied.filter(h => h.recommended).length, 1);
+  assert.deepEqual(variedHookOptions(varietyPool, 'clip-a'), varied, 'cached results remain stable');
+  assert(new Set(Array.from({length:20}, (_, i) => variedHookOptions(varietyPool, `clip-${i}`)[2].category)).size > 1,
+    'the third angle varies between clips');
+  assert.deepEqual(variedHookOptions(varietyPool.slice(0,2), 'small'), varietyPool.slice(0,2),
+    'a small approved pool never gets fabricated variety');
+  assert.equal(p2.hooks[0].text, p2.selectedHook, 'the shared service keeps its selected recommendation first');
+  assert(p2.hooks.slice(0,3).some(h => /\?/u.test(h.text)), 'shared service includes a question in the visible alternatives');
+  assert(p2.hooks.slice(0,3).some(h => !/\?/u.test(h.text) && ['TENSION','CONTRARIAN','STORY','EMOTIONAL'].includes(h.category)));
   for (const mix of ['3 CURIOSITY', '2 CONTRARIAN', '2 HIDDEN_TRUTH', '2 TENSION', '2 QUESTION', '2 STORY', '1 EMOTIONAL', '1 BOLD', 'exactly 15']) assert(gen.includes(mix), mix);
   assert(HOOK_RUBRIC.includes('does NOT mean the hook reuses') && HOOK_RUBRIC.includes('Inference is allowed, invention is not'));
   const schema = r2.calls.find(c => c.role === 'creativeGeneration').request.schema.properties.hooks;
@@ -148,10 +179,19 @@ const seq = [];
   // 10. Full package: ONE reviewer call judges hooks and copy; copy that hard-fails spends no reviewer call.
   const copy = { hooks: pool, synopsis: 'The speaker explains that saying yes to everyone left no time for focused work and that protecting priorities means accepting disapproval.',
     supportingLine: '', captions: [{ style: 'Concise', text: 'Saying yes to everyone left no time for focused work.' }, { style: 'Engaging', text: 'Protecting your priorities means accepting that some people will be unhappy.' }, { style: 'Professional', text: 'Constant agreement costs focused work; priorities need protecting.' }],
-    hashtagSets: [{ label: 'Focused', hashtags: ['#priorities', '#focusedwork'] }, { label: 'Niche', hashtags: ['#boundaries'] }, { label: 'Broad', hashtags: ['#time'] }] };
+    hashtagSets: [{ label: 'Focused', hashtags: ['#priorities', '#focusedwork', '#boundaries', '#time', '#agreement'] }, { label: 'Niche', hashtags: ['#boundaries'] }, { label: 'Broad', hashtags: ['#time'] }] };
   const r10 = router({ clipUnderstanding: () => ({}), creativeGeneration: () => copy, critic: () => ({ ...reviewsFor(5), copy: { supported: true, failures: [] } }) });
   const p10 = await new CreativePackageService(r10).create({ external: true, evidence: { ...evidence, sourceId: 'full' } });
   assert.equal(p10.status, 'ACCEPTED'); assert.equal(r10.calls.filter(c => c.role === 'critic').length, 1);
+  const fullRequest = r10.calls.find(c => c.role === 'creativeGeneration').request;
+  assert(fullRequest.systemPrompt.includes('Detailed synopsis:') && fullRequest.systemPrompt.includes('Engaging caption:'));
+  const tagSchema = fullRequest.schema.properties.hashtagSets.items.properties.hashtags;
+  assert.equal(tagSchema.minItems, 5); assert.equal(tagSchema.maxItems, 5, 'five recommended tags, not variable-size lists');
+  const fewerTags = {...copy,hashtagSets:copy.hashtagSets.map(s=>s.label==='Focused'?{...s,hashtags:s.hashtags.slice(0,4)}:s)};
+  const rTags = router({clipUnderstanding:()=>({}),creativeGeneration:()=>fewerTags,critic:()=>({...reviewsFor(5),copy:{supported:true,failures:[]}})});
+  const pTags = await new CreativePackageService(rTags).create({external:true,evidence:{...evidence,sourceId:'four-tags'}});
+  assert.equal(pTags.status,'NEEDS_REVIEW');assert(pTags.quality.failures.includes('FIVE_RELEVANT_HASHTAGS_REQUIRED'));
+  assert.equal(pTags.synopsis,'');assert.deepEqual(pTags.hashtagSets,[], 'failed Pro copy never becomes raw-transcript fallback copy');
   assert.equal(r10.calls.find(c => c.role === 'critic').request.schemaName, 'shared_creative_review_v2');
   const r10b = router({ clipUnderstanding: () => ({}), creativeGeneration: () => ({ ...copy, captions: [{ style: 'Concise', text: 'Boundaries saved 300 hours of work.' }, ...copy.captions] }), critic: () => ({ ...reviewsFor(5), copy: { supported: true, failures: [] } }) });
   const p10b = await new CreativePackageService(r10b).create({ external: true, evidence: { ...evidence, sourceId: 'full-hard' } });

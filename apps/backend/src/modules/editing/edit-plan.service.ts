@@ -1,5 +1,6 @@
 import { creativeService } from '../content-intelligence/creative-package.service';
 import { sharedQuality } from '../content-intelligence/creative-quality.service';
+import { xeeProHookApproved } from '../content-intelligence/hook-language';
 import { Injectable } from '@nestjs/common';
 import { AiProcessingMode } from '../processing/ai-processing-mode';
 import { LlmRouterService } from '../processing/llm-router.service';
@@ -109,9 +110,10 @@ export class EditPlanService {
       const p = context.packaging.sharedPackage;
       const evidence = { transcript: context.transcript, sourceTitle: context.title, visibleText: context.packaging.sharedPackage.understanding.visibleText };
       const ranked = sharedQuality.rank(p.hooks, evidence, p.understanding, p.hooks.some(h=>h.source==='OPENAI') ? 'OPENAI' : 'LOCAL', context.usedHookTexts);
-      const selected = ranked.find(h => h.text === p.selectedHook) ?? ranked[0];
+      const eligible = context.aiMode === AiProcessingMode.ONLINE ? ranked.filter(xeeProHookApproved) : ranked;
+      const selected = eligible.find(h => h.text === p.selectedHook) ?? eligible[0];
       const text = selected?.text ?? '';
-      return { plan: { ...plan, hookRequired: Boolean(text), onScreenHook: { ...plan.onScreenHook,
+      return { plan: { ...plan, hookRequired: context.aiMode === AiProcessingMode.ONLINE || Boolean(text), onScreenHook: { ...plan.onScreenHook,
         enabled: Boolean(text), text, startSec: context.start, endSec: context.end } },
         hookSource: (selected?.source==='OPENAI' ? 'LUNA_CANDIDATE' : text ? 'DETERMINISTIC' : 'NONE') as HookSource,
         hookScore: selected ? selected.score / 10 : null, hookMechanism: selected?.category ?? '', hookFinalText: text,

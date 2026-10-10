@@ -15,6 +15,7 @@
 // There is no "podcast always gets five zooms" anywhere in here, by design.
 
 import { deterministicCreative } from '../../content-intelligence/creative-package.service';
+import type { CreativeHook } from '../../content-intelligence/creative-quality.service';
 import { localUnderstanding } from '../../content-intelligence/content-understanding.service';
 import { sharedQuality } from '../../content-intelligence/creative-quality.service';
 import type { EditElementType } from '@prisma/client';
@@ -62,7 +63,8 @@ export type PlannerInput = {
   currentStyle: EditProjectStyle;
   previousRun: EditPresetRun | null;
   /** Grounded headline supplied by the LLM path; rejected upstream if unusable. */
-  hookOverride?: { text: string; source: 'LLM_ASSISTED' } | null;
+  hookOverride?: { text: string; source: 'LLM_ASSISTED'; approvedHook?: CreativeHook } | null;
+  requireLanguageReview?: boolean;
 };
 
 const round = (value: number) => Number(value.toFixed(3));
@@ -228,7 +230,8 @@ export function planPreset(input: PlannerInput): PresetPlan {
   const reframePolicy = resolveReframe(policy, evidence, aspectRatio, warnings);
   const zoomPolicy = resolveZoom(policy, evidence, warnings);
   const subtitlePolicy = resolveSubtitles(policy, evidence, warnings);
-  const hook = resolveHook(policy, evidence, input.hookOverride, warnings);
+  const hook = input.requireLanguageReview && !input.hookOverride?.approvedHook
+    ? { policy: 'OFF' as const, text: null } : resolveHook(policy, evidence, input.hookOverride, warnings);
   const musicPolicy: EditProjectStyle['musicPolicy'] = audioElements.length
     ? 'KEEP_EXISTING' : policy.audioPolicy;
   const overlayPolicy: EditProjectStyle['overlayPolicy'] =
