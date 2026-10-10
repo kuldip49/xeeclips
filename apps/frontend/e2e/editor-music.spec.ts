@@ -31,7 +31,7 @@ test.beforeAll(() => {
 });
 test.afterAll(() => { if (directory) rmSync(directory, { recursive: true, force: true }); });
 
-async function editor(page: Page) {
+async function editor(page: Page, tool = 'Audio') {
   const state = await seedAnalyzedProject(createHarness());
   const objects = new Map<string, Buffer>();
   state.storage.uploadBuffer = async (input: { objectKey: string; buffer: Buffer }) => {
@@ -45,7 +45,7 @@ async function editor(page: Page) {
   const commands: string[] = [];
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await page.route(/https?:\/\/(localhost|127\.0\.0\.1):4000\//, async (route: Route) => {
+  await page.route(/https?:\/\/(?:(?:localhost|127\.0\.0\.1):4000|api\.xeeclip\.me)\//, async (route: Route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
     const headers = { 'access-control-allow-origin': new URL(page.url()).origin,
@@ -111,7 +111,7 @@ async function editor(page: Page) {
   await page.goto(`/edit-mode/${state.project.id}`);
   await expect.poll(() => page.getByTestId('edit-preview-video').evaluate(
     (video: HTMLVideoElement) => video.readyState)).toBeGreaterThanOrEqual(2);
-  await page.getByRole('button', { name: 'Audio', exact: true }).click();
+  await page.getByRole('button', { name: tool, exact: true }).click();
   return { state, commands, errors, projectReads: () => projectReads,
     delayHistory: () => { delayHistory = true; },
     failMedia: (value: boolean) => { failMedia = value; },
@@ -256,5 +256,33 @@ test('all supported music formats decode and play in Chrome', async ({ page }) =
   await expect.poll(() => audio.evaluateAll((nodes) => nodes.every((node) =>
     !(node as HTMLAudioElement).paused && (node as HTMLAudioElement).currentTime > 0.1))).toBe(true);
   await expect(page.getByRole('alert').filter({ hasText: /Music (could not|playback failed)/u })).toHaveCount(0);
+  expect(fixture.errors).toEqual([]);
+});
+
+test('phone Media + Music accepts mobile MP3 metadata, inserts immediately and plays after reload', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const fixture = await editor(page, 'Media');
+  await page.getByLabel('Seek edited timeline').fill('0');
+  const reads = fixture.projectReads();
+  fixture.delayHistory();
+  for (const [index, mimeType] of ['application/octet-stream', 'audio/mpeg3', ''].entries()) {
+    // Exercise the exact + Music entry point in the reported screenshot.
+    const chooser = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: '+ Music', exact: true }).click();
+    await (await chooser).setFiles({ name: `phone-${index}.MP3`, mimeType, buffer: musicFormats.get('mp3')! });
+    await expect(page.getByTestId('edit-preview-audio')).toHaveCount(index + 1);
+    await expect(page.getByRole('button', { name: '+ Music', exact: true })).toBeEnabled({ timeout: 2000 });
+    expect(fixture.projectReads()).toBe(reads);
+  }
+  await expect(page.getByRole('alert').filter({ hasText: /Unsupported|upload failed/i })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Close Media', exact: true }).click();
+  await page.getByRole('button', { name: 'Play preview' }).click();
+  await expect.poll(() => page.getByTestId('edit-preview-audio').evaluateAll((nodes) => nodes.every((node) =>
+    !(node as HTMLAudioElement).paused && (node as HTMLAudioElement).currentTime > 0.1))).toBe(true);
+  await page.getByRole('button', { name: 'Pause preview' }).click();
+  await page.reload();
+  await expect(page.getByTestId('edit-preview-audio')).toHaveCount(3);
+  await expect(page.getByTestId('edit-preview-audio').first()).toHaveAttribute('data-start-time', '0');
   expect(fixture.errors).toEqual([]);
 });

@@ -47,6 +47,20 @@ async function main() {
       project = await state.service.redo(project.id, project.revision);
       assert(project.elements.some((item) => item.id === music.id));
     }
+    // Reproduce MP3s returned by Android Downloads / document providers.
+    const mp3 = fs.readFileSync(path.join(dir, 'tone.mp3'));
+    for (const [name, mimetype] of [
+      ['phone.MP3', 'audio/mpeg3'], ['phone.mp3', 'audio/x-mpeg-3'],
+      ['phone.mp3', 'application/mp3'], ['phone.mp3', 'audio/mpeg; charset=binary'],
+      ['phone.mp3', 'application/octet-stream'], ['phone.mp3', 'text/plain'],
+      ['phone.mp3', ''], ['phone', 'application/octet-stream'], ['phone.MP3 ', 'audio/mp3'],
+      ['phone.wav', 'audio/wav']
+    ]) {
+      const result = await state.service.uploadAsset(project.id,
+        { originalname: name, mimetype, size: mp3.length, buffer: mp3 }, 'AUDIO', project.revision);
+      assert.equal(result.asset.mimeType, 'audio/mpeg', 'actual audio controls playback, not phone metadata');
+      project = { ...project, revision: result.revision };
+    }
     const beforeBad = uploads.length;
     const bad = Buffer.from('This is not an audio file');
     await assert.rejects(state.service.uploadAsset(project.id,
@@ -70,7 +84,7 @@ async function main() {
     assert(!project.elements.some((item) => item.id === music.id));
     await state.service.deleteAsset(project.id, music.assetId, project.revision);
     assert(!state.rows.editAssets.has(music.assetId));
-    console.log('PASS: eight real audio formats, MIME aliases, corrupt file rejection, insertion, trim, levels, fades, undo/redo and removal');
+    console.log('PASS: eight audio formats, ten mobile MIME/name variants, actual-format playback MIME, corrupt file rejection and canonical editing lifecycle');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 if (require.main === module) main().catch((error) => { console.error(error); process.exitCode = 1; });

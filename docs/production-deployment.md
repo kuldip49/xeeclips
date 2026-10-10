@@ -18,6 +18,15 @@ See [accounts and credits](authentication-and-credits.md) for policy and recover
 
 ## Start the laptop services
 
+As of 2026-10-11, production runs the focused music update on the previously
+verified `f9ad75c` baseline. See [mobile music release](mobile-music-upload-fix.md)
+for its exact images, static version, verification and rollback. For a restart
+that preserves this release, use the ignored
+`storage/mobile-music-release/release-compose.json` override with
+`docker compose -f docker-compose.yml -f storage/mobile-music-release/release-compose.json up -d --no-deps --no-build backend`.
+A full source build of `main` includes the broader Content Intelligence/ending/hook
+release and requires its own production acceptance.
+
 The ignored root `.env` holds production secrets. Its `FRONTEND_ORIGIN` should
 contain `https://xeeclip.me,http://localhost:3000`. Keep
 `NEXT_PUBLIC_API_URL=http://localhost:4000` for local Compose development;

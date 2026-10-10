@@ -209,16 +209,24 @@ const MANUAL_ACTIONS = new Set(['TRIM_ELEMENT', 'SPLIT_ELEMENT', 'DELETE_ELEMENT
 const ELEMENT_ORIGINS = new Set(['USER', 'PRESET', 'ASSISTANT']);
 const PRESET_ROLES = new Set(['HOOK', 'SUBTITLE', 'KEY_POINT', 'CTA', 'PRODUCT', 'LOGO', 'MUSIC']);
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
-const AUDIO_MIMES = new Set(['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav',
-  'audio/x-mpeg', 'audio/wave', 'audio/vnd.wave', 'audio/mp4', 'audio/x-m4a',
-  'audio/aac', 'audio/x-aac', 'audio/aacp', 'audio/ogg', 'application/ogg',
-  'audio/opus', 'audio/flac', 'audio/x-flac', 'audio/webm', 'video/mp4', 'video/webm',
-  'application/octet-stream', '']);
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 const AUDIO_CONTENT_TYPES: Record<string, string> = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
   '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.opus': 'audio/ogg',
   '.flac': 'audio/flac', '.webm': 'audio/webm' };
 const AUDIO_EXTENSIONS = new Set(Object.keys(AUDIO_CONTENT_TYPES));
+// Android file providers may supply a generic, non-standard or empty MIME label.
+// Only the actual probed container decides the audio playback Content-Type.
+const probedAudioContentType = (formatName: string | null | undefined) => {
+  const formats = new Set((formatName ?? '').toLowerCase().split(','));
+  if (formats.has('mp3')) return 'audio/mpeg';
+  if (formats.has('wav')) return 'audio/wav';
+  if (formats.has('mp4') || formats.has('mov')) return 'audio/mp4';
+  if (formats.has('aac')) return 'audio/aac';
+  if (formats.has('ogg')) return 'audio/ogg';
+  if (formats.has('flac')) return 'audio/flac';
+  if (formats.has('webm')) return 'audio/webm';
+  return null;
+};
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const MAX_AUDIO_BYTES = 200 * 1024 * 1024;
 
@@ -451,13 +459,14 @@ export class EditModeService {
     if (!['IMAGE', 'LOGO', 'AUDIO'].includes(role)) {
       throw new BadRequestException('role must be IMAGE, LOGO, or AUDIO');
     }
-    const extension = extname(file.originalname).toLowerCase();
+    const extension = extname(file.originalname.trim()).toLowerCase();
     const image = role === 'IMAGE' || role === 'LOGO';
-    const allowedMime = image ? IMAGE_MIMES : AUDIO_MIMES;
-    const allowedExtension = image ? IMAGE_EXTENSIONS : AUDIO_EXTENSIONS;
     const maxBytes = image ? MAX_IMAGE_BYTES : MAX_AUDIO_BYTES;
-    if (!allowedMime.has(file.mimetype.toLowerCase()) || !allowedExtension.has(extension)) {
-      throw new BadRequestException(`Unsupported ${image ? 'image' : 'audio'} MIME type or extension`);
+    if (image && (!IMAGE_MIMES.has(file.mimetype.toLowerCase()) || !IMAGE_EXTENSIONS.has(extension))) {
+      throw new BadRequestException('Unsupported image MIME type or extension');
+    }
+    if (!image && extension && !AUDIO_EXTENSIONS.has(extension)) {
+      throw new BadRequestException('Choose MP3, WAV, M4A, AAC, OGG, Opus, FLAC or WebM music.');
     }
     if (!file.size || file.size > maxBytes) {
       throw new BadRequestException(`${image ? 'Image' : 'Audio'} file exceeds the size limit`);
@@ -481,7 +490,8 @@ export class EditModeService {
       if (!image && (!media.hasAudio || !media.durationSec || media.durationSec <= 0)) {
         throw new BadRequestException('Audio file is not readable or has no audio stream');
       }
-      const mimeType = image ? file.mimetype : AUDIO_CONTENT_TYPES[extension];
+      const mimeType = image ? file.mimetype : probedAudioContentType(media.formatName);
+      if (!mimeType) throw new BadRequestException('This audio format is not supported. Choose MP3, WAV, M4A, AAC, OGG, Opus, FLAC or WebM.');
       stored = await this.storage.uploadBuffer({ buffer: file.buffer, objectKey, mimeType });
       const result = await this.prisma.$transaction(async (tx) => {
         const latest = await tx.editProject.findUnique({ where: { id } });
