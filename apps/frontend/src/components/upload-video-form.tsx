@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { CheckCircle2, ChevronDown, Circle, ClipboardPaste, FileVideo, FolderOpen, Link2, Loader2, Minus, Plus,
   SlidersHorizontal, Sparkles, Upload, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { TemplateThumb, TemplateThumbEnlarge } from '@/components/generation/template-thumb';
 import { TARGET_PLATFORM_LABELS, uploadVideo, importYouTubeVideo, getVideoImportCapabilities,
   type OutputAspectRatio, type TargetPlatform } from '@/lib/api';
 import { CLIP_LIMIT_HINT, DEFAULT_ENTRY_SETTINGS, ENTRY_MAX_CLIPS, entryGenerationRequest, maxClipsForDuration,
@@ -282,7 +283,7 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
 
     <fieldset className='grid gap-2.5' disabled={busy}>
       <legend className='mb-2 text-sm font-medium'>Style</legend>
-      <div className='grid gap-2 sm:grid-cols-3 sm:gap-3'>
+      <div className='grid gap-2 sm:grid-cols-4 sm:gap-3'>
         {templates.map((option) => {
           const selected = settings.template === option.value;
           const Indicator = selected ? CheckCircle2 : Circle;
@@ -292,6 +293,9 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
             <input type='radio' className='sr-only' name={`entry-template-${formKey}`} value={option.value}
               checked={selected} onChange={() => update({ template: option.value })} />
             <Indicator size={20} className={cn('mt-0.5 shrink-0 sm:hidden', selected ? 'text-primary-soft' : 'text-faint')} aria-hidden />
+            <span className='relative block w-11 shrink-0 sm:mb-3 sm:w-full'>
+              <TemplateThumb look={option.value} className='w-full' />
+              <span className='hidden sm:block'><TemplateThumbEnlarge look={option.value} title={option.title} /></span></span>
             <span className='min-w-0 flex-1'>
               <span className='flex items-center justify-between gap-2 font-display text-sm font-semibold'>{option.title}
                 <Indicator size={16} className={cn('hidden sm:block', selected ? 'text-primary-soft' : 'text-faint')} aria-hidden /></span>

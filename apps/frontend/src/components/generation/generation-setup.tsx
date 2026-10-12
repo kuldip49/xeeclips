@@ -5,6 +5,7 @@ import { RAW_LOOK } from '@/lib/automatic-looks';
 import { CheckCircle2, Circle, Link2, Loader2, Upload, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { StylePreview } from '@/components/generation/style-preview';
+import { TemplateThumb, TemplateThumbEnlarge } from '@/components/generation/template-thumb';
 import { MobileDisclosure } from '@/components/ui/mobile-disclosure';
 import {
   CATEGORY_LABELS, getReference, referenceFromUrl, SOURCE_LABELS, sourceFileUrl, sourcePosterUrl, STYLE_CATEGORIES, uploadReference,
@@ -87,7 +88,7 @@ export function GenerationSetup({ videoId, catalog, savedStyles, choices, onChan
       {/* Native radios: the whole card is the label, so clicks, Enter/Space and arrow keys all work. */}
       <fieldset className='grid gap-3' disabled={disabled}>
         <legend className='mb-2 text-sm font-medium'>Style</legend>
-        <div className='grid gap-2 sm:grid-cols-3 sm:gap-3'>
+        <div className='grid gap-2 sm:grid-cols-2 sm:gap-3 xl:grid-cols-4'>
           {looks.map((option) => {
             const selected = choices.look === option.value;
             const Indicator = selected ? CheckCircle2 : Circle;
@@ -96,6 +97,9 @@ export function GenerationSetup({ videoId, catalog, savedStyles, choices, onChan
                 selected ? 'border-primary bg-primary/10' : 'border-border bg-surface hover:border-border-strong')}>
               <input type='radio' className='sr-only' name={`look-${videoId}`} value={option.value}
                 checked={selected} onChange={() => onChange({ ...choices, look: option.value })} />
+              <span className='relative mb-3 block'>
+                <TemplateThumb look={option.value} />
+                <TemplateThumbEnlarge look={option.value} title={option.title} /></span>
               <span className='flex items-center justify-between gap-2 text-sm font-semibold'>{option.title}
                 <Indicator size={16} className={selected ? 'text-primary-soft' : 'text-faint'} aria-hidden /></span>
               <span className='mt-1 block text-xs leading-5 text-muted-foreground'>{option.description}</span>
