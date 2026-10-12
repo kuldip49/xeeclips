@@ -122,7 +122,7 @@ export type EditHistory = {
   action: string;
   command?: Record<string, unknown> | null;
   beforeState?: Record<string, unknown> | null;
-  afterState: Record<string, unknown>;
+  afterState?: Record<string, unknown>;
   createdAt: string;
 };
 

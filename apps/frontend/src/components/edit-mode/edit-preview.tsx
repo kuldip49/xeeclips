@@ -3,6 +3,7 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { styleTwoCropTransform, styleTwoBakedCropTransform, styleTwoCropCamera, type StyleTwoCropTransform } from '@ai-content-platform/shared/style-two-crop.cjs';
+import { clampPan, isManualZoom, readManualZoom } from '@ai-content-platform/shared/manual-zoom.cjs';
 import { Pause, Play, RotateCw } from 'lucide-react';
 import type { EditAspectRatio, EditAsset, EditElement,
   VisualElementProperties } from '@/lib/edit-mode-types';
@@ -51,7 +52,7 @@ export type CropEditorState = { rect: CropRect; preset: CropAspectPreset; source
   onChange: (rect: CropRect) => void };
 
 /** What a pointer gesture on a selected element is doing. */
-export type PreviewGesture = 'move' | 'resize' | 'rotate';
+export type PreviewGesture = 'move' | 'resize' | 'rotate' | 'pan';
 
 /**
  * One music clip, played against the edited timeline.
@@ -361,6 +362,7 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     const centreY = bounds.top + (origin.y + origin.height / 2) * bounds.height;
     const startAngle = Math.atan2(startY - centreY, startX - centreX) * 180 / Math.PI;
     const startRotation = Number(origin.rotation ?? 0);
+    const startZoom = readManualZoom(element.properties);
     let latest = element;
     const apply = (next: Record<string, unknown>) => {
       latest = { ...element, properties: { ...element.properties, ...next } };
@@ -371,6 +373,13 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
       moved = true;
       const dx = (pointer.clientX - startX) / bounds.width;
       const dy = (pointer.clientY - startY) / bounds.height;
+      if (kind === 'pan') {
+        // Pan is a fraction of the framed window (the canvas, or a card layout's video window).
+        const pan = clampPan(startZoom.scale, startZoom.x + (pointer.clientX - startX) / zoomWindow.width,
+          startZoom.y + (pointer.clientY - startY) / zoomWindow.height);
+        apply({ offsetX: pan.x, offsetY: pan.y });
+        return;
+      }
       if (kind === 'rotate') {
         const angle = Math.atan2(pointer.clientY - centreY, pointer.clientX - centreX) *
           180 / Math.PI;
@@ -402,6 +411,14 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up, { once: true });
+  };
+
+  /** Drag the zoomed picture to pan it - the same gesture machinery as moving a caption: local while
+   * dragging, one command on release, and limited so the picture always covers its window. */
+  const panGesture = (event: React.PointerEvent) => {
+    if (!mapping || cropEditor || mapping.element.id !== selectedElementId) return;
+    if (readManualZoom(mapping.element.properties).scale <= 1.0001 || !zoomWindow.width) return;
+    interaction(event, mapping.element, 'pan');
   };
 
   const visible = (cropEditor ? [] : active).filter((item) => (item.type === 'IMAGE' || item.type === 'TEXT' ||
@@ -466,7 +483,10 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   })();
   const cameraCrop = rawCameraCrop && cropGeometry && !cardFit
     ? styleTwoCropCamera(rawCameraCrop, cropGeometry) : rawCameraCrop;
-  const zoom = elements.find((element) => element.type === 'EFFECT' &&
+  // A manual zoom/pan of the segment IS the zoom for its region: automatic/template zoom stands
+  // aside instead of stacking on it (the export applies the identical rule when it plans zoom).
+  const manualZoomActive = !!mapping && isManualZoom(mapping.element.properties);
+  const zoom = manualZoomActive ? undefined : elements.find((element) => element.type === 'EFFECT' &&
     element.properties.effect === 'ZOOM' && element.properties.enabled !== false &&
     currentPlayheadSec >= element.startTime &&
     currentPlayheadSec <= element.startTime + element.duration);
@@ -486,8 +506,25 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     return { scale: 1 + (peak - 1) * Math.min(rise, fall),
       x: Number(zoom.properties.focusX) || .5, y: Number(zoom.properties.focusY) || .5 };
   })();
+  // The manual zoom acts on the framed picture's window: the whole canvas, or a card layout's video
+  // window. Pan is a fraction of that window, exactly the unit the export uses.
+  const zoomWindow = card && canvasSize.width && canvasSize.height
+    ? { width: card.width * canvasSize.width, height: card.height * canvasSize.height }
+    : { width: canvasSize.width, height: canvasSize.height };
   const segmentTransform = mapping
-    ? transformStyle(mapping.element.properties, { includeScaleAndOffset: true }) : {};
+    ? transformStyle(mapping.element.properties, { includeScaleAndOffset: true, zoomWindow }) : {};
+  // Inside a card the video element is wider than its window (the camera crop), so the zoom has to
+  // pivot on the WINDOW centre in the element's own coordinates, not on the camera focus.
+  const cameraElementBox = card && cameraCrop && pictureRect(cameraCrop)
+    ? (({ x, y, width, height }) => ({ left: x - cameraCrop.x / cameraCrop.w * width,
+      top: y - cameraCrop.y / cameraCrop.h * height, width: width / cameraCrop.w,
+      height: height / cameraCrop.h }))(pictureRect(cameraCrop)!) : null;
+  const manualOrigin = manualZoomActive && card ? (cameraElementBox
+    ? `${(card.x + card.width / 2 - cameraElementBox.left) / cameraElementBox.width * 100}% ` +
+      `${(card.y + card.height / 2 - cameraElementBox.top) / cameraElementBox.height * 100}%`
+    : '50% 50%') : null;
+  const cameraOrigin = cameraCrop ? manualOrigin ?? `${(cameraCrop.x + zoomState.x * cameraCrop.w) * 100}% ` +
+    `${(cameraCrop.y + zoomState.y * cameraCrop.h) * 100}%` : '';
   const combinedTransform = [zoomState.scale > 1.0001
     ? `scale(${zoomState.scale.toFixed(5)})` : '', segmentTransform.transform ?? '']
     .filter(Boolean).join(' ') || undefined;
@@ -547,7 +584,8 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
         src={mediaAsset ? `${editAssetPlaybackUrl(mediaAsset.id)}${mediaAttempt ? `?retry=${mediaAttempt}` : ''}` : undefined}
         poster={source.sourceVideoId ? editSourcePosterUrl(source.sourceVideoId) : undefined}
         data-testid='edit-preview-video' data-media-state={mediaState}
-        className={`absolute ${cropEditor ? 'max-w-none object-fill' : `${card ? '' : 'inset-0 h-full w-full'} ${
+        onPointerDown={panGesture}
+        className={`absolute ${manualZoomActive && !cropEditor && mapping?.element.id === selectedElementId ? 'touch-none cursor-grab active:cursor-grabbing' : ''} ${cropEditor ? 'max-w-none object-fill' : `${card ? '' : 'inset-0 h-full w-full'} ${
           previewFill(aspectRatio, reframePolicy, mapping?.element.properties)
             ? 'object-cover' : 'object-contain'}`}`} preload='metadata'
         style={canonicalCrop ? {
@@ -568,15 +606,11 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
             ...(card && cameraCrop ? {
             // The camera crop makes the element wider than the canvas; without this the base
             // `video { max-width: 100% }` rule squeezes it and the preview stops matching the export.
-            maxWidth: 'none', maxHeight: 'none',
-            transformOrigin: `${(cameraCrop.x + zoomState.x * cameraCrop.w) * 100}% ` +
-              `${(cameraCrop.y + zoomState.y * cameraCrop.h) * 100}%`
+            maxWidth: 'none', maxHeight: 'none', transformOrigin: cameraOrigin
           } : card ? { left: `${card.x * 100}%`, top: `${card.y * 100}%`,
             width: `${card.width * 100}%`, height: `${card.height * 100}%`, objectFit: cardFit ? 'contain' as const : 'cover' as const }
             : {}), ...segmentTransform,
-            ...(card && cameraCrop ? { transformOrigin:
-              `${(cameraCrop.x + zoomState.x * cameraCrop.w) * 100}% ` +
-              `${(cameraCrop.y + zoomState.y * cameraCrop.h) * 100}%` } : {}),
+            ...(card && cameraCrop ? { transformOrigin: cameraOrigin } : {}),
             ...(combinedTransform ? { transform: combinedTransform } : {}),
             ...colorStyle } : colorStyle}
         onLoadedMetadata={(event) => {

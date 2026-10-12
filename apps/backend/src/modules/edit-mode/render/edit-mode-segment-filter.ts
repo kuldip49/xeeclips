@@ -8,7 +8,14 @@
 //
 // Order is fixed and deliberate:
 //
-//   crop -> flip -> rotate -> normalize -> scale/position
+//   crop -> flip -> rotate -> normalize
+//
+// Manual zoom/pan (`scale`, `offsetX`, `offsetY`) is deliberately NOT part of this chain. It is
+// one canonical transform of the FRAMED picture, applied by the filtergraph after the camera and
+// fitted layers have produced the picture the viewer sees (see `manualZoomFilter` in
+// packages/shared/manual-zoom.cjs). Doing it here, on the raw source frame, made the offsets mean
+// "fractions of the source file" - a different distance on screen for every source/canvas
+// aspect pair - and let the camera crop slide the zoom around. Keep it out of this function.
 //
 // Crop selects the source region first, so rotation spins what the user framed
 // rather than framing what rotation produced. The normalize step puts every
@@ -28,6 +35,7 @@ export type SegmentTransform = {
   rotation: number;
   flipH: boolean;
   flipV: boolean;
+  /** Manual zoom/pan - carried with the segment, applied by `manualZoomFilter`, not here. */
   scale: number;
   offsetX: number;
   offsetY: number;
@@ -41,8 +49,7 @@ const even = (value: number) => {
 const isNeutral = (transform: SegmentTransform) =>
   transform.crop.left === 0 && transform.crop.right === 0 &&
   transform.crop.top === 0 && transform.crop.bottom === 0 &&
-  transform.rotation === 0 && !transform.flipH && !transform.flipV &&
-  transform.scale === 1 && transform.offsetX === 0 && transform.offsetY === 0;
+  transform.rotation === 0 && !transform.flipH && !transform.flipV;
 
 /**
  * The filter chain for one segment's manual transform.
@@ -94,31 +101,6 @@ export function segmentTransformFilter(transform: SegmentTransform,
   parts.push(`scale=${width}:${height}:force_original_aspect_ratio=decrease`,
     `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:black`, 'setsar=1');
 
-  // 5. Scale and position on that frame. Scaling up crops back to size around
-  //    the offset; scaling down pads. Both land on exactly width x height.
-  if (transform.scale !== 1 || transform.offsetX !== 0 || transform.offsetY !== 0) {
-    const scaledWidth = Math.max(2, even(width * transform.scale));
-    const scaledHeight = Math.max(2, even(height * transform.scale));
-    parts.push(`scale=${scaledWidth}:${scaledHeight}`);
-    if (transform.scale >= 1) {
-      const slackX = scaledWidth - width;
-      const slackY = scaledHeight - height;
-      const x = Math.max(0, Math.min(slackX,
-        Math.round(slackX / 2 - transform.offsetX * width)));
-      const y = Math.max(0, Math.min(slackY,
-        Math.round(slackY / 2 - transform.offsetY * height)));
-      parts.push(`crop=${width}:${height}:${x}:${y}`);
-    } else {
-      const slackX = width - scaledWidth;
-      const slackY = height - scaledHeight;
-      const x = Math.max(0, Math.min(slackX,
-        Math.round(slackX / 2 + transform.offsetX * width)));
-      const y = Math.max(0, Math.min(slackY,
-        Math.round(slackY / 2 + transform.offsetY * height)));
-      parts.push(`pad=${width}:${height}:${x}:${y}:black`);
-    }
-    parts.push('setsar=1');
-  }
   return parts.join(',');
 }
 
@@ -142,8 +124,11 @@ export function overlayTransformFilter(transform: {
   if (transform.rotation !== 0) {
     const radians = (transform.rotation * Math.PI / 180).toFixed(6);
     // An overlay rotates inside its own alpha, so the corners it opens stay
-    // transparent rather than becoming black boxes over the video.
-    parts.push(`rotate=${radians}:ow=iw:oh=ih:c=black@0`);
+    // transparent rather than becoming black boxes over the video. The frame GROWS to the rotated
+    // extent (rotw/roth): keeping it at iw x ih clipped the corners of every rotated image, while the
+    // preview (a CSS rotation about the box centre) shows the whole picture. The graph then centres
+    // the grown frame on the overlay's box centre.
+    parts.push(`rotate=${radians}:ow=rotw(${radians}):oh=roth(${radians}):c=black@0`);
   }
   return parts.join(',');
 }

@@ -112,6 +112,8 @@ export type ZoomPlanInput = {
   fps: number;
   durationSec: number;
   /** Event ids a QA repair suppressed, and reduced scale ceilings, on re-render. */
+  /** Timeline ranges the user zoomed/panned by hand: automatic zoom stands aside there (never stacks). */
+  manualZoomRanges?: Array<{ startSec: number; endSec: number }>;
   suppressed?: string[];
   scaleCeilings?: Record<string, number>;
   /**
@@ -201,6 +203,12 @@ export function planEditModeZoom(input: ZoomPlanInput): ZoomPlanResult {
     const reject = (reason: string) => rejections.push({ triggerText: candidate.triggerText,
       startSec: round(candidate.startSec), reason });
     if (suppressed.has(id)) { reject('QA_REPAIR_SUPPRESSED'); continue; }
+    // A manual zoom/pan of the segment IS the zoom for that region. Stacking an automatic
+    // punch-in on top would zoom twice and move the user's own framing.
+    if ((input.manualZoomRanges ?? []).some((range) => candidate.startSec < range.endSec - 1e-6 &&
+      candidate.startSec + candidate.holdSec + 0.8 > range.startSec + 1e-6)) {
+      reject('MANUAL_ZOOM_OVERRIDES'); continue;
+    }
     if (events.length >= (input.maxEvents ?? EDIT_MODE_ZOOM.maxEvents)) {
       reject('ZOOM_BUDGET_REACHED'); continue;
     }

@@ -1,5 +1,6 @@
 'use client';
 
+import { useRef } from 'react';
 import { Music, Volume2, VolumeX } from 'lucide-react';
 import type { ManualEditCommand } from '@/lib/edit-mode-api';
 import { DUCK_STRENGTH_IDS, DUCK_STRENGTH_LABELS, MAX_VOLUME, MUSIC_FILE_ACCEPT, exceedsPreviewGain,
@@ -17,6 +18,10 @@ function VolumeSlider({ id, label, value, disabled, onPreview, onCommit }: {
   id: string; label: string; value: number; disabled: boolean;
   onPreview: (value: number) => void; onCommit: (value: number) => void;
 }) {
+  // Only a slider that actually moved commits: releasing it, tabbing past it or a stray key press
+  // must not write an empty undo step.
+  const moved = useRef(false);
+  const commit = () => { if (!moved.current) return; moved.current = false; onCommit(value); };
   return <div className='grid gap-1'>
     <div className='flex items-baseline justify-between'>
       <label htmlFor={id} className='text-[11px] text-soft'>{label}</label>
@@ -24,8 +29,8 @@ function VolumeSlider({ id, label, value, disabled, onPreview, onCommit }: {
     </div>
     <input id={id} type='range' min={0} max={MAX_VOLUME} step={0.01} value={value}
       disabled={disabled} className='w-full accent-success'
-      onChange={(event) => onPreview(Number(event.target.value))}
-      onPointerUp={() => onCommit(value)} onKeyUp={() => onCommit(value)} />
+      onChange={(event) => { moved.current = true; onPreview(Number(event.target.value)); }}
+      onPointerUp={commit} onKeyUp={commit} onBlur={commit} />
     {exceedsPreviewGain(value) && <p className='text-[9px] leading-3 text-faint'>
       Above 100% the preview plays at 100%; the export is at the level you set.</p>}
   </div>;
@@ -110,6 +115,8 @@ export function EditAudioPanel({ assets, elements, busy, hasSource, selectedElem
           }} />
       </label>
       <p className='text-[10px] leading-4 text-faint'>Music is added at the playhead after upload. Up to 200 MB.</p>
+      <p className='text-[10px] leading-4 text-faint'>
+        Music plays once: it stops at the end of its file or of the video, and never loops.</p>
       <p className='text-[10px] leading-4 text-warning-soft/70'>
         Only upload audio you own or are licensed to use.</p>
       {library.map((asset) => <div key={asset.id} className='min-w-0 rounded-lg bg-tint-subtle p-2'>

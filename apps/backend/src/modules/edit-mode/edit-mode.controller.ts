@@ -533,7 +533,7 @@ export class EditModeController {
 
   @Get('projects/:id/history')
   history(@Param('id') id: string) {
-    return this.editMode.history(id);
+    return this.editMode.history(id, true);
   }
 
   @Get('assets/:assetId/file')

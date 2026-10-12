@@ -1,0 +1,13 @@
+export type ManualZoom = { scale: number; x: number; y: number };
+export type ManualZoomGeometry = { mode: 'CROP' | 'PAD'; width: number; height: number;
+  scaledWidth: number; scaledHeight: number; x: number; y: number };
+export const MIN_MANUAL_ZOOM: number;
+export const MAX_MANUAL_ZOOM: number;
+export function maxPan(scale: number): number;
+export function clampScale(scale: number): number;
+export function clampPan(scale: number, x: number, y: number): { x: number; y: number };
+export function readManualZoom(properties: Record<string, unknown> | null | undefined): ManualZoom;
+export function isManualZoom(properties: Record<string, unknown> | null | undefined): boolean;
+export function manualZoomGeometry(zoom: ManualZoom, width: number, height: number): ManualZoomGeometry;
+export function manualZoomFilter(zoom: ManualZoom, width: number, height: number): string;
+export function manualZoomCss(zoom: ManualZoom, width: number, height: number): string;

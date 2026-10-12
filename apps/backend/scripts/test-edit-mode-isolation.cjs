@@ -71,6 +71,9 @@ function createHarness() {
         if (!row) return null;
         return include ? { ...row, _count: { elements: [...rows.editElements.values()]
           .filter((item) => item.assetId === row.id).length } } : { ...row }; },
+      findMany: async ({ where }) => [...rows.editAssets.values()]
+        .filter((asset) => asset.editProjectId === where.editProjectId && (!where.role || asset.role === where.role))
+        .map((asset) => ({ ...asset })),
       delete: async ({ where }) => { const row = rows.editAssets.get(where.id);
         rows.editAssets.delete(where.id); return row; },
       update: async ({ where, data }) => { const row = { ...rows.editAssets.get(where.id), ...data,
@@ -81,7 +84,12 @@ function createHarness() {
       create: async ({ data }) => { const now = new Date(); const row = { id: id('element'), ...data,
         createdAt: now, updatedAt: now }; rows.editElements.set(row.id, row); return row; },
       deleteMany: async ({ where }) => { for (const [key, value] of rows.editElements)
-        if (value.editProjectId === where.editProjectId) rows.editElements.delete(key); },
+        if (value.editProjectId === where.editProjectId && (!where.id?.in || where.id.in.includes(key))) rows.editElements.delete(key); },
+      updateMany: async ({ where, data }) => {
+        const row = rows.editElements.get(where.id);
+        if (!row || row.editProjectId !== where.editProjectId) return { count: 0 };
+        rows.editElements.set(where.id, { ...row, ...data }); return { count: 1 };
+      },
       createMany: async ({ data }) => { for (const value of data) rows.editElements.set(value.id, { ...value }); }
     },
     // Workstream F: user-saved style templates. Deliberately unrelated to
@@ -147,9 +155,10 @@ function createHarness() {
         assert(!rows.editHistory.has(key), 'history revisions must be unique');
         const row = { id: id('history'), ...data, createdAt: new Date() };
         rows.editHistory.set(key, row); return row; },
-      findMany: async ({ where, orderBy }) => [...rows.editHistory.values()]
+      findMany: async ({ where, orderBy, select }) => [...rows.editHistory.values()]
         .filter((item) => item.editProjectId === where.editProjectId)
         .sort((a, b) => orderBy?.revision === 'asc' ? a.revision - b.revision : b.revision - a.revision)
+        .map(row => select ? Object.fromEntries(Object.keys(select).filter(key => select[key]).map(key => [key, row[key]])) : row)
     }
   };
   const storage = {

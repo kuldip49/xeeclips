@@ -64,6 +64,8 @@
     "db:push": "prisma db push",
     "test:edit-mode-color": "npm run build && node scripts/test-edit-mode-color.cjs",
     "test:edit-mode-music": "npm run build && node scripts/test-edit-mode-music.cjs",
+    "test:editor-trim-zoom-media": "npm run build && node scripts/test-editor-trim.cjs && node scripts/test-editor-zoom-media.cjs && node scripts/test-editor-timing.cjs",
+    "verify:editor-trim-zoom-media": "npm run build && node scripts/verify-editor-trim-zoom-media.cjs && node scripts/verify-editor-real-clip.cjs",
     "verify:edit-mode-color": "npm run build && node scripts/verify-edit-mode-color.cjs",
     "test:edit-mode-track-state": "npm run build && node scripts/test-edit-mode-track-state.cjs",
     "test:edit-mode-templates": "npm run build && node scripts/test-edit-mode-templates.cjs",

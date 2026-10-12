@@ -301,9 +301,10 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
       const latest = caught instanceof EditModeApiError && caught.status === 409
         ? await getEditProject(projectRef.current.id).catch(() => null) : null;
       if (latest) acceptServerProject(latest);
+      else setProject((current) => ({ ...current, elements: savedElements.current }));
       setError(editFailureMessage('EDIT_COMMAND_FAILED', caught));
     } finally { setBusy(null); }
-  }, [acceptServerProject, keepSelection, refreshHistory]);
+  }, [acceptServerProject, keepSelection, refreshHistory, setProject]);
   const latestApply = useRef(applyCommandNow); latestApply.current = applyCommandNow;
   const applyCommand = useCallback((command: ManualEditCommand, base?: EditElement[]) => {
     const run = commandQueue.current.then(() => latestApply.current(command, base ?? savedElements.current));
@@ -467,9 +468,14 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
    * release. Rotation reuses the existing SET_VIDEO_ROTATION command, which now
    * accepts TEXT and captions too, rather than adding a parallel one.
    */
-  const commitTransform = useCallback((kind: 'move' | 'resize' | 'rotate', element: EditElement,
+  const commitTransform = useCallback((kind: 'move' | 'resize' | 'rotate' | 'pan', element: EditElement,
     before: EditElement[]) => {
     const properties = element.properties;
+    if (kind === 'pan') {
+      void applyCommand({ action: 'set-video-position', elementId: element.id,
+        x: Number(properties.offsetX ?? 0), y: Number(properties.offsetY ?? 0) }, before);
+      return;
+    }
     if (kind === 'rotate') {
       void applyCommand({ action: 'set-video-rotation', elementId: element.id,
         rotation: Number(properties.rotation ?? 0) }, before);

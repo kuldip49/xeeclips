@@ -125,8 +125,10 @@ async function commandSuite() {
   // --- lock ------------------------------------------------------------------
   before = project.revision;
   await run('set-element-locked', { elementType: 'SUBTITLE', locked: true });
-  ok('locking an EMPTY track is accepted and changes nothing',
-    project.revision === before + 1 && byType('SUBTITLE').length === 0);
+  // A command that changes nothing is accepted but is not an edit: it takes no revision and leaves
+  // no empty step in Undo.
+  ok('locking an EMPTY track is accepted and changes nothing, and records no empty undo step',
+    project.revision === before && byType('SUBTITLE').length === 0);
 
   await run('set-element-locked', { elementId: videoId, locked: true });
   ok('footage CAN be locked, unlike hidden', locked(byType('VIDEO')[0]));

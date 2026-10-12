@@ -57,18 +57,23 @@ export function trimVideo(element: EditElement, edge: TrimEdge, targetSec: numbe
  * have no source to window, so their trim fields are left alone.
  */
 export function trimSpan(element: EditElement, edge: TrimEdge, targetSec: number,
-  timelineDurationSec: number): EditElement {
+  timelineDurationSec: number, sourceDurationSec?: number | null): EditElement {
   const end = element.startTime + element.duration;
   const audio = element.type === 'AUDIO';
+  const minimum = Math.min(MIN_SPAN_SEC, element.duration);
   if (edge === 'left') {
-    const nextStart = Math.max(0, Math.min(end - MIN_SPAN_SEC, targetSec));
+    const earliest = audio ? Math.max(0, element.startTime - element.trimStart) : 0;
+    const nextStart = Math.max(earliest, Math.min(end - minimum, targetSec));
     const removed = nextStart - element.startTime;
     return { ...element, startTime: nextStart, duration: end - nextStart,
       trimStart: audio ? Math.max(0, element.trimStart + removed) : element.trimStart,
-      trimEnd: element.trimEnd };
+      trimEnd: audio ? element.trimEnd ?? element.trimStart + element.duration : element.trimEnd };
   }
-  const nextEnd = Math.max(element.startTime + MIN_SPAN_SEC,
-    Math.min(timelineDurationSec, targetSec));
+  const sourceEnd = sourceDurationSec != null && sourceDurationSec > 0
+    ? sourceDurationSec : element.trimEnd ?? element.trimStart + element.duration;
+  const latestEnd = audio ? Math.min(timelineDurationSec,
+    element.startTime + sourceEnd - element.trimStart) : timelineDurationSec;
+  const nextEnd = Math.max(element.startTime + minimum, Math.min(latestEnd, targetSec));
   const duration = nextEnd - element.startTime;
   return { ...element, duration,
     trimEnd: audio ? element.trimStart + duration : element.trimEnd };

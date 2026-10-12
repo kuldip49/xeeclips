@@ -43,6 +43,16 @@ import type { EditExportErrorCode, EditExportProgress, EditExportResult, QaRepai
 
 const execFileAsync = promisify(execFile);
 
+/** Channel count of a file's first audio stream, or undefined when it has none / cannot be read. */
+async function probeAudioChannels(path: string): Promise<number | undefined> {
+  try {
+    const { stdout } = await execFileAsync('ffprobe', ['-v', 'error', '-select_streams', 'a:0',
+      '-show_entries', 'stream=channels', '-of', 'csv=p=0', path], { timeout: 30_000 });
+    const channels = Number(String(stdout).trim().split(/\s+/u)[0]);
+    return Number.isInteger(channels) && channels > 0 ? channels : undefined;
+  } catch { return undefined; }
+}
+
 /** A normal export gets one render plus at most one repair re-render. */
 export const MAX_RENDER_ATTEMPTS = Math.min(3,
   Math.max(1, Number(process.env.EDIT_MODE_MAX_RENDER_ATTEMPTS) || 2));
@@ -280,6 +290,14 @@ export class EditModeRenderService {
       target[element.id] = path;
     }
 
+    // Channel counts decide how mono audio is brought to stereo without a level change.
+    const audioChannels: { source?: number; tracks: Record<string, number> } = { tracks: {} };
+    audioChannels.source = await probeAudioChannels(sourcePath);
+    for (const [elementId, path] of Object.entries(audioPaths)) {
+      const channels = await probeAudioChannels(path);
+      if (channels) audioChannels.tracks[elementId] = channels;
+    }
+
     // --- Render, QA and at most one local repair ---------------------------
     const repairs: RenderRepairLog[] = [];
     const suppressedZoomIds: string[] = [];
@@ -344,7 +362,7 @@ export class EditModeRenderService {
       // StyleTwo's licensed font fallback available on hosts without system fonts.
       const fontsDir = plan.canvas.visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO'
         ? await prepareStyleTwoFonts(directory) : undefined;
-      const args = buildFfmpegArgs({ plan, sourcePath, overlayPaths, audioPaths, assFileName,
+      const args = buildFfmpegArgs({ plan, sourcePath, overlayPaths, audioPaths, audioChannels, assFileName,
         outputPath, fontsDir, informationCrop: built.evidence.informationCrop,
         fitExpression: built.evidence.fitExpression,
         informationFitExpression: built.evidence.informationFitExpression,
@@ -490,8 +508,13 @@ export class EditModeRenderService {
     try {
       await this.storage.downloadToFile(bucket, objectKey, path);
     } catch (error) {
-      throw new EditExportError(code, `A file this export needs is missing from storage: ${
-        error instanceof Error ? error.message : String(error)}`, { objectKey });
+      // The reader sees what to DO; the storage error and object key stay in the details/log.
+      this.logger.warn(JSON.stringify({ event: 'edit_mode_export_media_missing', code, objectKey,
+        reason: error instanceof Error ? error.message : String(error) }));
+      throw new EditExportError(code, code === 'SOURCE_MISSING'
+        ? 'The source video for this edit is no longer available. Re-attach the video and export again.'
+        : 'A music or image file used in this edit is no longer available. Remove it from the ' +
+          'timeline (or upload it again) and export again.', { objectKey });
     }
   }
 

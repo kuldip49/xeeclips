@@ -1,4 +1,5 @@
 import type { CSSProperties } from 'react';
+import { manualZoomCss, readManualZoom } from '@ai-content-platform/shared/manual-zoom.cjs';
 import { NEUTRAL_CROP, type CropInsets } from './edit-mode-types';
 
 /**
@@ -32,9 +33,13 @@ export function readCropInsets(properties: Record<string, unknown>): CropInsets 
 }
 
 export type TransformStyleOptions = {
-  /** VIDEO carries its own canvas scale and offset; an overlay is placed by its
+  /** VIDEO carries its own manual zoom/pan; an overlay is placed by its
    * box instead, so those two steps are skipped for one. */
   includeScaleAndOffset?: boolean;
+  /** The framed picture's window in CSS pixels (the canvas, or a card layout's video window).
+   * The pan is a fraction of this window - the same unit the export uses - so pass it whenever
+   * the element being transformed is not itself exactly that window. */
+  zoomWindow?: { width: number; height: number };
 };
 
 export function transformStyle(properties: Record<string, unknown>,
@@ -46,13 +51,16 @@ export function transformStyle(properties: Record<string, unknown>,
   const parts: string[] = [];
 
   if (options.includeScaleAndOffset) {
-    const offsetX = num(properties.offsetX, 0);
-    const offsetY = num(properties.offsetY, 0);
-    const scale = num(properties.scale, 1);
-    if (offsetX !== 0 || offsetY !== 0) {
-      parts.push(`translate(${percent(offsetX)}, ${percent(offsetY)})`);
+    // The ONE manual zoom (packages/shared/manual-zoom.cjs): the export reads the same function,
+    // including the pan limit that keeps the picture covering its window.
+    const zoom = readManualZoom(properties);
+    if (options.zoomWindow) {
+      const css = manualZoomCss(zoom, options.zoomWindow.width, options.zoomWindow.height);
+      if (css) parts.push(css);
+    } else {
+      if (zoom.x !== 0 || zoom.y !== 0) parts.push(`translate(${percent(zoom.x)}, ${percent(zoom.y)})`);
+      if (zoom.scale !== 1) parts.push(`scale(${zoom.scale})`);
     }
-    if (scale !== 1) parts.push(`scale(${scale})`);
   }
   if (rotation !== 0) parts.push(`rotate(${rotation}deg)`);
   if (flipH) parts.push('scaleX(-1)');

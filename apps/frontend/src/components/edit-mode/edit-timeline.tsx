@@ -184,11 +184,11 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
   // lets every handler below stay referentially stable across re-renders, which
   // is in turn what lets the memoized blocks skip playhead ticks entirely.
   const live = useRef({ elements, viewport, disabled, tool, snapEnabled, currentPlayheadSec,
-    duration, sourceDuration, selectionSet, selectedElementId,
+    duration, sourceDuration, assets, selectionSet, selectedElementId,
     onSeek, onSelect, onSelectMany, onSelectRange, onPreviewElements, onCommitTrim,
     onCommitTiming, onSplitAt, onMoveTo });
   live.current = { elements, viewport, disabled, tool, snapEnabled, currentPlayheadSec,
-    duration, sourceDuration, selectionSet, selectedElementId,
+    duration, sourceDuration, assets, selectionSet, selectedElementId,
     onSeek, onSelect, onSelectMany, onSelectRange, onPreviewElements, onCommitTrim,
     onCommitTiming, onSplitAt, onMoveTo };
 
@@ -506,7 +506,8 @@ export function EditTimeline({ elements, assets, selectedElementId, selectedIds,
       const snapped = snapTo(at, candidates, pointer.shiftKey);
       latest = trim
         ? trimVideo(element, edge, snapped.seconds, live.current.sourceDuration)
-        : trimSpan(element, edge, snapped.seconds, live.current.duration);
+        : trimSpan(element, edge, snapped.seconds, live.current.duration,
+          live.current.assets.find((asset) => asset.id === element.assetId)?.duration);
       pushOverlay({ guide: snapped.guide, dropSec: null,
         readout: `${stamp(latest.startTime)} → ${stamp(latest.startTime + latest.duration)} · ${stamp(latest.duration)}` });
       const next = live.current.elements.map((item) => item.id === element.id ? latest : item);

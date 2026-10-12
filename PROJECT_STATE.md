@@ -1426,11 +1426,19 @@ change. Generated media and the Automatic 1/2 previews keep their own colours an
 - Shared creative generation, editor suggestions, Ask AI/agent, Quick Reframe, presets and History lineage persist the review requirement. Automatic and canonical exports require the matching approved hook immediately before rendering.
 - Both exact downloaded bad-hook videos were transcribed and regenerated with user-authorized OpenAI review. Replacements: “A powerful argument against judging ideas by résumés” and “The real warning sign was surprise at open debate.” Both pass grammar, clarity, grounding and all three template fits. A misleading Kennedy/college-dropout attribution control is rejected.
 - All 15 targeted suites pass, including 39 new grammar/integration cases; backend build, frontend TypeScript checking and diff whitespace checks pass. Six local template typography exports and actual React previews passed overflow/visual checks. These diagnostics use downloaded footage with the burned-in old header cropped out, rather than full production re-exports.
-- Full results, scores, integration paths, verification limits and media links: [docs/xeepro-hook-grammar-acceptance.md](docs/xeepro-hook-grammar-acceptance.md). Changes remain uncommitted and undeployed.
+- Full results, scores, integration paths, verification limits and media links: [docs/xeepro-hook-grammar-acceptance.md](docs/xeepro-hook-grammar-acceptance.md). Committed to main; not deployed to production.
 
 ### XeePro question-led hook style (2026-10-11 follow-up)
 
 - User prefers a direct question and specific watch invitation, detailed synopsis and five hashtags. The shared writer/reviewer now use this audience-facing style across XeePro; Engaging captions provide the full social-post hook, while on-screen questions retain template-safe complete wording.
 - Stronger configured shared understanding prevents first-person/guest attribution errors. Full packages require five normalized recommended tags; rejected Pro copy no longer becomes raw-transcript fallback copy. XeeFree remains unchanged.
 - Regenerated both actual clip packages: “Why introduce yourself as a college dropout beside an elite scholar?” and “Does surprise at a campus debate say more than disagreement itself?” Both full packages pass review, grammar/clarity and all template fits. All 15 targeted suites and six new preview/export diagnostics pass.
-- Current copy, scores, samples and limits: [docs/xeepro-question-hook-style.md](docs/xeepro-question-hook-style.md). Earlier editorial replacements are superseded. Changes remain uncommitted and undeployed.
+- Current copy, scores, samples and limits: [docs/xeepro-question-hook-style.md](docs/xeepro-question-hook-style.md). Earlier editorial replacements are superseded. Committed to main; not deployed to production.
+
+## Editor trim, zoom/pan, music and media pass (2026-10-12, local)
+
+- One canonical trim (the VIDEO source range). A trim now moves captions, text, overlays, zooms and music with the footage instead of rescaling them (they drifted before); `origin.currentSourceStart/End` follows every video-track edit while `generatedStart/End` stays as the audit record; styled projects re-plan `resolvedVisualLayout.cameraPath` / `frameSegments` so the preview follows the same camera the export computes on the trimmed timeline.
+- One canonical manual zoom (`packages/shared/manual-zoom.cjs`): window-relative scale + pan, clamped so the picture always covers its window, applied once to the framed picture in the export and by the same math in the preview; manual zoom owns its region over automatic/template zoom; new Inspector Zoom/Pan controls and drag-to-pan in the preview.
+- Export audio: alimiter auto-level removed (hot mixes no longer clip; 100 % means as recorded) and mono sources/music no longer export 3 dB quieter than the preview. Missing media fails with a readable message.
+- No-op commands no longer create revisions/Undo steps; range sliders commit on keyboard/blur too.
+- Details, rules and the verification commands: [docs/editor-trim-zoom-media.md](docs/editor-trim-zoom-media.md). Committed to main; not deployed to production.

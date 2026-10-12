@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { clampPan, clampScale, maxPan } from '@ai-content-platform/shared/manual-zoom.cjs';
 import { FlipHorizontal, FlipVertical, RotateCcw, RotateCw } from 'lucide-react';
 import type { ManualEditCommand } from '@/lib/edit-mode-api';
 import { NEUTRAL_CROP, SPEED_PRESETS, TRANSFORM_BOUNDS, type CropInsets,
@@ -20,6 +21,7 @@ export const readCrop = (properties: Record<string, unknown>): CropInsets => {
 const field = 'w-full rounded-lg border border-border bg-inset px-2 py-1 text-xs text-soft';
 const chip = 'rounded-md border border-border py-1 text-[10px] text-soft hover:bg-tint-strong';
 const label = 'text-[10px] text-faint';
+const ZOOM_STEP = 0.05;
 
 const CROP_EDGES = [['left', 'Left'], ['right', 'Right'], ['top', 'Top'], ['bottom', 'Bottom']] as const;
 
@@ -66,6 +68,10 @@ export function EditTransformControls({ selected, sourceAspect, onPreview, onCom
   const scale = num(p.scale, 1);
   const offsetX = num(p.offsetX, 0);
   const offsetY = num(p.offsetY, 0);
+  const panLimit = maxPan(scale);
+  /** Set by a slider change, cleared by the single commit - so a key press or a release that
+   * changed nothing never creates an empty undo step. */
+  const dirty = useRef(false);
 
   const patch = (next: Record<string, unknown>) =>
     onPreview({ ...selected, properties: { ...p, ...next } });
@@ -73,6 +79,28 @@ export function EditTransformControls({ selected, sourceAspect, onPreview, onCom
     elementId: selected.id, cropLeft: next.left, cropRight: next.right,
     cropTop: next.top, cropBottom: next.bottom,
     scope: isVideo ? cropScope : 'SELECTED_ELEMENT' });
+  const setZoom = (value: number, commitNow: boolean) => {
+    const next = clampScale(Number(value.toFixed(2)));
+    const pan = clampPan(next, offsetX, offsetY);
+    patch({ scale: next, offsetX: pan.x, offsetY: pan.y });
+    if (commitNow) { dirty.current = false;
+      onCommit({ action: 'set-video-scale', elementId: selected.id, scale: next }); }
+    else dirty.current = true;
+  };
+  const commitZoom = () => {
+    if (!dirty.current) return; dirty.current = false;
+    onCommit({ action: 'set-video-scale', elementId: selected.id,
+      scale: num(selected.properties.scale, 1) });
+  };
+  const setPan = (axis: 'x' | 'y', value: number) => {
+    const pan = clampPan(scale, axis === 'x' ? value : offsetX, axis === 'y' ? value : offsetY);
+    patch({ offsetX: pan.x, offsetY: pan.y }); dirty.current = true;
+  };
+  const commitPan = () => {
+    if (!dirty.current) return; dirty.current = false;
+    onCommit({ action: 'set-video-position', elementId: selected.id,
+      x: num(selected.properties.offsetX, 0), y: num(selected.properties.offsetY, 0) });
+  };
   const commitRotation = (value: number) =>
     onCommit({ action: 'set-video-rotation', elementId: selected.id, rotation: value });
 
@@ -176,31 +204,43 @@ export function EditTransformControls({ selected, sourceAspect, onPreview, onCom
     </div>
 
     {isVideo && <>
-      {/* --- Scale and position (VIDEO uses its own transform; an overlay uses
-             its box, so these are deliberately not shown for one.) --- */}
-      <div className='grid gap-1.5'>
+      {/* --- Zoom and pan: ONE manual transform of the framed picture. It is stored per
+             segment, previewed and exported from the same values (shared/manual-zoom.cjs),
+             and the pan is limited so the picture always covers the frame. --- */}
+      <div className='grid gap-1.5' role='group' aria-label='Zoom and pan'>
         <div className='flex items-baseline justify-between'>
-          <span className={label}>Scale</span>
+          <span className={label}>Zoom</span>
           <span className='text-[10px] tabular-nums text-muted-foreground'>{scale.toFixed(2)}×</span>
         </div>
-        <input className='w-full accent-secondary' type='range' aria-label='Scale'
-          min={TRANSFORM_BOUNDS.minScale} max={TRANSFORM_BOUNDS.maxScale} step='.01' value={scale}
-          onChange={(event) => patch({ scale: num(event.target.value, 1) })}
-          onPointerUp={() => onCommit({ action: 'set-video-scale', elementId: selected.id,
-            scale: num(selected.properties.scale, 1) })} />
-      </div>
-      <div className='grid gap-1.5'>
-        <span className={label}>Position</span>
-        <div className='grid grid-cols-2 gap-1'>
-          {(['offsetX', 'offsetY'] as const).map((key) => <label key={key} className={label}>
-            {key === 'offsetX' ? 'X' : 'Y'}
-            <input className={field} type='number' min={-1} max={1} step='.01'
-              value={key === 'offsetX' ? offsetX : offsetY}
-              onChange={(event) => patch({ [key]: num(event.target.value) })}
-              onBlur={() => onCommit({ action: 'set-video-position', elementId: selected.id,
-                x: num(selected.properties.offsetX, 0), y: num(selected.properties.offsetY, 0) })} />
+        <div className='flex items-center gap-1.5'>
+          <button type='button' aria-label='Zoom picture out' className={`${chip} h-7 w-7 shrink-0 text-sm`}
+            disabled={scale <= TRANSFORM_BOUNDS.minScale + 1e-6}
+            onClick={() => setZoom(scale - ZOOM_STEP, true)}>−</button>
+          <input className='min-w-0 flex-1 accent-secondary' type='range' aria-label='Scale'
+            min={TRANSFORM_BOUNDS.minScale} max={TRANSFORM_BOUNDS.maxScale} step='.01' value={scale}
+            onChange={(event) => setZoom(num(event.target.value, 1), false)}
+            onPointerUp={commitZoom} onKeyUp={commitZoom} onBlur={commitZoom} />
+          <button type='button' aria-label='Zoom picture in' className={`${chip} h-7 w-7 shrink-0 text-sm`}
+            disabled={scale >= TRANSFORM_BOUNDS.maxScale - 1e-6}
+            onClick={() => setZoom(scale + ZOOM_STEP, true)}>+</button>
+        </div>
+        <div className='grid grid-cols-2 gap-2'>
+          {(['x', 'y'] as const).map((axis) => <label key={axis} className={label}>
+            Pan {axis === 'x' ? 'left / right' : 'up / down'}
+            <input className='mt-1 w-full accent-secondary' type='range' aria-label={`Pan ${axis.toUpperCase()}`}
+              min={-panLimit} max={panLimit} step='.001' disabled={panLimit === 0}
+              value={axis === 'x' ? offsetX : offsetY}
+              onChange={(event) => setPan(axis, num(event.target.value))}
+              onPointerUp={commitPan} onKeyUp={commitPan} onBlur={commitPan} />
           </label>)}
         </div>
+        <p className='text-[10px] leading-4 text-faint'>
+          {panLimit === 0 ? 'Zoom in to pan. Zooming replaces any automatic zoom on this clip.'
+            : 'Drag the picture in the preview, or use the sliders. The frame always stays covered.'}</p>
+        <button type='button' className={`${chip} py-1.5`} disabled={scale === 1 && offsetX === 0 && offsetY === 0}
+          onClick={() => { patch({ scale: 1, offsetX: 0, offsetY: 0 }); dirty.current = false;
+            onCommit({ action: 'set-video-scale', elementId: selected.id, scale: 1 }); }}>
+          Reset zoom</button>
       </div>
 
       {/* --- Speed --- */}
@@ -229,8 +269,8 @@ export function EditTransformControls({ selected, sourceAspect, onPreview, onCom
       commitRotation(0);
       onCommit({ action: 'set-video-flip', elementId: selected.id, flipH: false, flipV: false });
       if (isVideo) {
+        // Setting the zoom back to 1x also brings the pan back to centre, in the same revision.
         onCommit({ action: 'set-video-scale', elementId: selected.id, scale: 1 });
-        onCommit({ action: 'set-video-position', elementId: selected.id, x: 0, y: 0 });
       }
     }} className='flex items-center justify-center gap-1 rounded-lg border border-border py-1.5 text-[10px] text-soft hover:bg-tint'>
       <RotateCw size={11} />Reset transform</button>

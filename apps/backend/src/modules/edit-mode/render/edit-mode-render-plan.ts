@@ -16,6 +16,7 @@ import { buildSubtitlePhrases } from '../../editing/subtitle-phrases';
 import { readAudioState, speechWindowsFromTranscript } from '../edit-mode-audio';
 import { readTransform } from '../edit-mode-transform';
 import { readZoomEffect } from '../edit-mode-zoom-events';
+import { isManualZoom } from '@ai-content-platform/shared/manual-zoom.cjs';
 import { analysisFramesFromCache, wordsFromCache } from '../presets/edit-preset-evidence';
 import { readEditPresetRun, readEditProjectStyle,
   type GradingPolicy } from '../presets/edit-preset-policy';
@@ -153,6 +154,9 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
     shots: camera.shots, frameSegments: camera.frameSegments, frames,
     cropAt: camera.cropAt, focalAt: camera.focalAt, fps, durationSec: map.durationSec,
     suppressed: input.suppressedZoomIds, scaleCeilings: input.zoomScaleCeilings,
+    manualZoomRanges: map.segments.filter((segment) => isManualZoom({ scale: segment.scale,
+      offsetX: segment.offsetX, offsetY: segment.offsetY }))
+      .map((segment) => ({ startSec: segment.timelineStart, endSec: segment.timelineEnd })),
     minGapSec: phraseZoom ? phraseZoomLimits(map.durationSec).minGapSec : undefined,
     maxEvents: phraseZoom ? phraseZoomLimits(map.durationSec).maxEvents : undefined,
     switchTimes: phraseZoom ? camera.speakerSegments.slice(1).map((segment) => segment.startSec) : undefined,

@@ -178,6 +178,18 @@ ok('...so the music does not restart from a different place', shortened.duration
 ok('shortening it from the right shortens the read window instead',
   gestures.trimSpan(music, 'right', 7, 20).trimEnd === 12);
 const caption = element('c', 5, 2, 'SUBTITLE');
+const phoneMusic = element('phone', 0.69, 20.33, 'AUDIO', {}, { trimStart: 0, trimEnd: 20.33 });
+const headBound = gestures.trimSpan(phoneMusic, 'left', 0, 21.02, 185.28);
+ok('music cannot extend left beyond the beginning of its source',
+  headBound.startTime === 0.69 && headBound.trimStart === 0 && Math.abs(headBound.duration - 20.33) < 1e-8);
+const tailBound = gestures.trimSpan(music, 'right', 999, 20, 15);
+const fractional = element('fractional', 2.743, 4, 'AUDIO', {}, { trimStart: 0.119, trimEnd: 4.119 });
+ok('fractional source-head trims never produce a negative floating-point offset',
+  gestures.trimSpan(fractional, 'left', 0, 20, 15).trimStart >= 0);
+ok('music cannot extend right beyond its source duration', tailBound.duration === 5 && tailBound.trimEnd === 15);
+const tinyMusic = element('tiny', 0, 0.05, 'AUDIO', {}, { trimStart: 0, trimEnd: 0.05 });
+ok('the drag minimum never lengthens a very short source past its end',
+  gestures.trimSpan(tinyMusic, 'right', 20, 20, 0.05).duration === 0.05);
 ok('a caption has no source, so a trim leaves its trim fields alone',
   gestures.trimSpan(caption, 'left', 6, 20).trimStart === 0);
 ok('an element cannot be trimmed below the minimum span',

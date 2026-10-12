@@ -21,9 +21,11 @@ import type { PresetCommand } from './presets/edit-preset-commands';
 import type { TemplateCommand, TemplateImprint } from './templates/edit-template-plan';
 import { EDIT_PRESET_IDS, readEditProjectStyle,
   type EditPresetRun } from './presets/edit-preset-policy';
-import { retimeOverlays, timelineDurationFor, TransformRangeError, validateCrop,
+import { clampPan } from '@ai-content-platform/shared/manual-zoom.cjs';
+import { refreshStyledLayout } from './edit-mode-layout-retime';
+import { retimeForVideoTrim, retimeOverlays, timelineDurationFor, TransformRangeError, validateCrop,
   validateOffset, validateRotation, validateScale, validateSpeed, videoLayout,
-  readSpeed, readCrop, NEUTRAL_CROP, MIN_CROP_REMAINDER } from './edit-mode-transform';
+  readSpeed, readScale, readCrop, NEUTRAL_CROP, MIN_CROP_REMAINDER } from './edit-mode-transform';
 import { AudioRangeError, DEFAULT_ATTACK_MS, DEFAULT_DUCK_STRENGTH, DEFAULT_MUSIC_VOLUME,
   DEFAULT_RELEASE_MS, DUCK_STRENGTHS, readAudioState, validateAudioTrim, validateBoolean,
   validateDuckStrength, validateDuckTiming, validateFades,
@@ -158,6 +160,38 @@ const manualContext = (settings: Record<string, unknown> = {}): CommandContext =
   ({ actor: 'MANUAL_USER_ACTION', settings, settingsPatch: {} });
 const settingsRecord = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+/** True when two timelines hold exactly the same elements (order-insensitive). */
+const sameTimeline = (left: TimelineElement[], right: TimelineElement[]) => {
+  if (left.length !== right.length) return false;
+  const key = (element: TimelineElement) => JSON.stringify([element.id, element.type, element.track,
+    element.position, element.assetId ?? null, element.startTime, element.duration,
+    element.trimStart ?? 0, element.trimEnd ?? null, element.properties ?? {}]);
+  const seen = new Map<string, number>();
+  for (const element of left) seen.set(element.id, (seen.get(element.id) ?? 0) + 1);
+  const rightById = new Map(right.map((element) => [element.id, key(element)]));
+  return left.every((element) => rightById.get(element.id) === key(element));
+};
+/**
+ * `origin.currentSourceStart/End` is the generated clip's CURRENT range in the original video.
+ * It must follow the canonical VIDEO trim whichever command moved it (a handle drag, a split, a
+ * ripple delete, a speed change, an assistant edit) or the inspector keeps showing boundaries
+ * the export no longer uses. `generatedStart/End` is never touched: it is the audit record of
+ * what the generator originally chose.
+ */
+export function originBoundaryPatch(settings: Record<string, unknown>,
+  elements: Array<{ type: string; track: number; trimStart?: number | null; trimEnd?: number | null }>) {
+  const lineage = readGeneratedClipLineage(settings);
+  if (!lineage || lineage.sourceMode !== 'ORIGINAL_VIDEO') return null;
+  const videos = elements.filter((element) => element.type === 'VIDEO' && element.track === 0 &&
+    element.trimEnd != null);
+  if (!videos.length) return null;
+  const start = Math.min(...videos.map((element) => element.trimStart ?? 0));
+  const end = Math.max(...videos.map((element) => Number(element.trimEnd)));
+  if (Math.abs(start - lineage.currentSourceStart) < 1e-6 &&
+    Math.abs(end - lineage.currentSourceEnd) < 1e-6) return null;
+  return { origin: { ...lineage, currentSourceStart: Number(start.toFixed(6)),
+    currentSourceEnd: Number(end.toFixed(6)) } };
+}
 const statusForError = (caught: unknown): EditCommandResultStatus => {
   const response = caught instanceof BadRequestException || caught instanceof NotFoundException
     ? caught.getResponse() : null;
@@ -463,7 +497,7 @@ export class EditModeService {
     const image = role === 'IMAGE' || role === 'LOGO';
     const maxBytes = image ? MAX_IMAGE_BYTES : MAX_AUDIO_BYTES;
     if (image && (!IMAGE_MIMES.has(file.mimetype.toLowerCase()) || !IMAGE_EXTENSIONS.has(extension))) {
-      throw new BadRequestException('Unsupported image MIME type or extension');
+      throw new BadRequestException('Choose a PNG, JPG or WebP image.');
     }
     if (!image && extension && !AUDIO_EXTENSIONS.has(extension)) {
       throw new BadRequestException('Choose MP3, WAV, M4A, AAC, OGG, Opus, FLAC or WebM music.');
@@ -485,7 +519,7 @@ export class EditModeService {
       const media = await this.probeAssetMedia(path);
       const imageFormat = media.formatName && /(?:image2|png_pipe|jpeg_pipe|webp_pipe)/iu.test(media.formatName);
       if (image && (!media.hasVideo || media.width == null || media.height == null || !imageFormat)) {
-        throw new BadRequestException('Image file is not readable');
+        throw new BadRequestException('That image could not be read. Choose a PNG, JPG or WebP file.');
       }
       if (!image && (!media.hasAudio || !media.durationSec || media.durationSec <= 0)) {
         throw new BadRequestException('Audio file is not readable or has no audio stream');
@@ -755,7 +789,7 @@ export class EditModeService {
     return serialize(await this.prisma.$transaction(async (tx) => {
       const current = await tx.editProject.findUnique({ where: { id }, include: { elements: true,
         assets: { select: { id: true, role: true, duration: true, width: true, height: true,
-          transcript: true, sourceVideoId: true, storageOwnership: true } } } });
+          transcript: true, analysis: true, mimeType: true, fps: true, metadata: true, sourceVideoId: true, storageOwnership: true } } } });
       if (!current) throw new NotFoundException('EditProject not found');
       this.assertRevision(current.revision, expectedRevision);
       {
@@ -823,9 +857,12 @@ export class EditModeService {
       await this.replaceElements(tx, id, after);
       const settingsRecord = current.settings && typeof current.settings === 'object' &&
         !Array.isArray(current.settings) ? current.settings as Record<string, unknown> : {};
+      const retimedLayout = refreshStyledLayout({ settings: settingsRecord,
+        assets: current.assets as never, before, after, revision: current.revision, projectId: id });
       const settings = { ...settingsRecord, origin: { ...lineage,
         currentSourceStart: Number(nextStart.toFixed(6)),
-        currentSourceEnd: Number(nextEnd.toFixed(6)) } } as Prisma.InputJsonValue;
+        currentSourceEnd: Number(nextEnd.toFixed(6)) },
+        ...(retimedLayout ? { resolvedVisualLayout: retimedLayout } : {}) } as Prisma.InputJsonValue;
       const revision = current.revision + 1;
       await tx.editProject.update({ where: { id }, data: { revision, settings } });
       await tx.editHistory.create({ data: { editProjectId: id, revision, actor: 'USER',
@@ -941,8 +978,24 @@ export class EditModeService {
   }
 
   private deleteVideoTimeline(elements: TimelineElement[], elementId: string): TimelineElement[] {
-    this.videoElement(elements, elementId);
-    return elements.filter((element) => element.id !== elementId);
+    const target = this.videoElement(elements, elementId);
+    const cutStart = target.startTime, cutEnd = cutStart + target.duration;
+    const ripple = (time: number) => time <= cutStart ? time
+      : time >= cutEnd ? time - target.duration : cutStart;
+    return elements.flatMap((element) => {
+      if (element.id === elementId) return [];
+      if (element.type === 'VIDEO') return [element];
+      const startTime = ripple(element.startTime);
+      const duration = ripple(element.startTime + element.duration) - startTime;
+      if (duration <= 1e-6) return [];
+      if (element.type !== 'AUDIO') return [{ ...element, startTime, duration }];
+      // Music remains a continuous bed across a ripple cut. If the cut removes
+      // its beginning, advance the source window by exactly that prefix.
+      const removedPrefix = Math.max(0, Math.min(cutEnd, element.startTime + element.duration)
+        - Math.max(cutStart, element.startTime));
+      const trimStart = element.trimStart! + (element.startTime >= cutStart ? removedPrefix : 0);
+      return [{ ...element, startTime, duration, trimStart, trimEnd: trimStart + duration }];
+    });
   }
 
   private reorderVideoTimeline(elements: TimelineElement[], elementId: string,
@@ -1137,11 +1190,32 @@ export class EditModeService {
         const trimStart = this.finiteNumber(input.trimStart, 'trimStart');
         const trimEnd = this.finiteNumber(input.trimEnd, 'trimEnd');
         const item = this.videoElement(elements, this.requiredString(input.elementId, 'elementId'));
-        const duration = timelineDurationFor(trimStart, trimEnd, readSpeed(item.properties));
+        // One canonical trim: the segment's SOURCE range. Every consumer (preview,
+        // timeline, export, captions) derives from it, so a bad range is refused
+        // here, in plain words, before anything is stored.
+        const sourceDuration = item.assetId ? assets.get(item.assetId)?.duration : null;
+        if (trimStart < 0) throw new BadRequestException({ code: 'INVALID_TRIM',
+          message: 'The trim cannot start before the beginning of the source video.' });
+        if (trimEnd <= trimStart) throw new BadRequestException({ code: 'INVALID_TRIM',
+          message: 'The trim start must be before the trim end.' });
+        if (trimEnd - trimStart < MIN_VIDEO_DURATION_SEC - 1e-9) throw new BadRequestException({
+          code: 'INVALID_TRIM', message: 'A clip cannot be trimmed shorter than ' +
+            `${MIN_VIDEO_DURATION_SEC.toFixed(2)} seconds.` });
+        if (sourceDuration != null && trimEnd > sourceDuration + 1e-6) throw new BadRequestException({
+          code: 'INVALID_TRIM', message: 'The trim end is beyond the end of the source video ' +
+            `(${sourceDuration.toFixed(2)}s).` });
+        const speed = readSpeed(item.properties);
+        const duration = timelineDurationFor(trimStart, trimEnd, speed);
         const before = videoLayout(elements);
         const trimmed = elements.map((candidate) => candidate.id === item.id
           ? { ...candidate, trimStart, trimEnd, duration } : candidate);
-        return retimeOverlays(trimmed, before, videoLayout(trimmed), MIN_VIDEO_DURATION_SEC);
+        return retimeForVideoTrim(trimmed, before, videoLayout(trimmed), {
+          segmentId: item.id, speed,
+          before: { trimStart: item.trimStart ?? 0,
+            trimEnd: item.trimEnd ?? (item.trimStart ?? 0) + item.duration },
+          after: { trimStart, trimEnd }
+        }, { minDurationSec: MIN_VIDEO_DURATION_SEC, minZoomSec: MIN_ZOOM_DURATION_SEC,
+          audioSourceDuration: (id) => assets.get(id)?.duration });
       }
       if (action === 'ADD_IMAGE' || action === 'ADD_LOGO') {
         const expectedRole = action === 'ADD_LOGO' ? 'LOGO' : 'IMAGE';
@@ -1628,10 +1702,29 @@ export class EditModeService {
       if (action === 'SET_VIDEO_SCALE' || action === 'SET_VIDEO_POSITION') {
         const targets = videoTargets(action);
         try {
-          return action === 'SET_VIDEO_SCALE'
-            ? withPropertiesFor(targets, { scale: validateScale(input.scale) })
-            : withPropertiesFor(targets, { offsetX: validateOffset(input.x, 'x'),
-              offsetY: validateOffset(input.y, 'y') });
+          // Manual zoom/pan is ONE stored transform (packages/shared/manual-zoom.cjs). The pan is
+          // kept inside the range that keeps the picture covering the window, and re-clamped
+          // whenever the zoom changes, so what is stored is always what is previewed and exported.
+          if (action === 'SET_VIDEO_SCALE') {
+            const scale = validateScale(input.scale);
+            const ids = new Set(targets.map((item) => item.id));
+            return elements.map((candidate) => {
+              if (!ids.has(candidate.id)) return candidate;
+              const props = candidate.properties as Record<string, unknown>;
+              const pan = clampPan(scale, Number(props.offsetX) || 0, Number(props.offsetY) || 0);
+              return { ...candidate, properties: { ...props, scale, offsetX: pan.x, offsetY: pan.y } as
+                Prisma.InputJsonValue };
+            });
+          }
+          const x = validateOffset(input.x, 'x'), y = validateOffset(input.y, 'y');
+          const ids = new Set(targets.map((item) => item.id));
+          return elements.map((candidate) => {
+            if (!ids.has(candidate.id)) return candidate;
+            const props = candidate.properties as Record<string, unknown>;
+            const pan = clampPan(readScale(props), x, y);
+            return { ...candidate, properties: { ...props, offsetX: pan.x, offsetY: pan.y } as
+              Prisma.InputJsonValue };
+          });
         } catch (caught) {
           throw this.transformError(caught);
         }
@@ -1658,7 +1751,8 @@ export class EditModeService {
             properties: { ...(item.properties as Record<string, unknown>), speed } as
               Prisma.InputJsonValue }
           : candidate);
-        return retimeOverlays(sped, before, videoLayout(sped), MIN_VIDEO_DURATION_SEC);
+        return retimeOverlays(sped, before, videoLayout(sped), MIN_VIDEO_DURATION_SEC,
+          (id) => assets.get(id)?.duration);
       }
       // --- Workstream C: text and caption commands --------------------------
       //
@@ -2044,6 +2138,14 @@ export class EditModeService {
         let properties: Record<string, unknown>;
         try { properties = zoomProperties(input); }
         catch (caught) { throw this.zoomError(caught); }
+        // Two zooms cannot move the picture at once; the renderer would silently drop the later one
+        // (TOO_CLOSE_TO_PREVIOUS_ZOOM). A person who places one by hand is told instead.
+        if (ctx.actor === 'MANUAL_USER_ACTION' && properties.enabled !== false &&
+          elements.some((item) => item.type === 'EFFECT' && readZoomEffect(item.properties)?.enabled &&
+            startTime < item.startTime + item.duration - 1e-6 && startTime + duration > item.startTime + 1e-6)) {
+          throw new BadRequestException({ code: 'ZOOM_OVERLAP',
+            message: 'That zoom overlaps another zoom. Move it, or shorten one of them.' });
+        }
         if (properties.claimsMoment && elements.some((item) => item.type === 'EFFECT' &&
           readZoomEffect(item.properties)?.claimsMoment === properties.claimsMoment)) {
           throw new BadRequestException({ code: 'ZOOM_ALREADY_EDITED',
@@ -2849,7 +2951,15 @@ export class EditModeService {
     // Serialize both snapshots before opening the transaction. Large caption
     // arrays can make JSON conversion surprisingly expensive.
     const { chat: _liveChat, ...styleSettingsBefore } = settingsBefore;
-    const styleSettingsAfter = { ...styleSettingsBefore, ...style, ...settingsPatch };
+    const originPatch = originBoundaryPatch({ ...styleSettingsBefore, ...style, ...settingsPatch }, elements);
+    // The same re-keying for an assistant turn that moved footage - unless the turn itself wrote a new layout.
+    if (!('resolvedVisualLayout' in settingsPatch) && !('resolvedVisualLayout' in style)) {
+      const refreshed = refreshStyledLayout({ settings: { ...styleSettingsBefore, ...style, ...settingsPatch },
+        assets: await this.planAssets(id, styleSettingsBefore), before, after: elements,
+        revision: expectedRevision, projectId: id });
+      if (refreshed) settingsPatch = { ...settingsPatch, resolvedVisualLayout: refreshed };
+    }
+    const styleSettingsAfter = { ...styleSettingsBefore, ...style, ...settingsPatch, ...originPatch };
     const settingsAfter = { ...styleSettingsAfter,
       ...(bundle.chat === undefined ? (settingsBefore.chat === undefined
         ? {} : { chat: settingsBefore.chat }) : { chat: bundle.chat }) } as Prisma.InputJsonValue;
@@ -2972,6 +3082,18 @@ export class EditModeService {
    * also changes project settings commits them in the SAME revision and the
    * SAME history row; and the response carries a structured `commandResult`.
    */
+  /** Full asset rows (analysis included) for re-planning a styled layout; empty when not needed or unavailable. */
+  private async planAssets(id: string, settings: Record<string, unknown>) {
+    const layout = settings.resolvedVisualLayout as { cameraPath?: unknown } | undefined;
+    if (!layout || !Array.isArray(layout.cameraPath)) return [];
+    try {
+      const rows = await this.prisma.editAsset.findMany({ where: { editProjectId: id } });
+      return rows.map((asset) => ({ id: asset.id, role: asset.role, mimeType: asset.mimeType,
+        duration: asset.duration, width: asset.width, height: asset.height, fps: asset.fps,
+        metadata: asset.metadata, transcript: asset.transcript, analysis: asset.analysis }));
+    } catch { return []; }
+  }
+
   private async manualMutation(id: string, revisionValue: unknown, action: string,
     command: Prisma.InputJsonObject, mutate: (elements: TimelineElement[],
       assets: Map<string, CommandAsset>, ctx: CommandContext) => TimelineElement[]) {
@@ -3001,9 +3123,25 @@ export class EditModeService {
     const violation = rangeViolation('MANUAL_USER_ACTION', constraints, before, after);
     if (violation) throw this.blockedError(violation, action);
     this.validateTimeline(after, assetMap);
-    const revision = current.revision + 1;
+    Object.assign(ctx.settingsPatch, originBoundaryPatch({ ...settingsBefore, ...ctx.settingsPatch }, after));
+    // A styled project's camera path / frame segments are keyed to the timeline: re-key them to the
+    // footage when this edit moved footage, or the preview follows a camera the export no longer uses.
+    const refreshedLayout = refreshStyledLayout({ settings: { ...settingsBefore, ...ctx.settingsPatch },
+      assets: await this.planAssets(id, settingsBefore), before, after, revision: current.revision, projectId: id });
+    if (refreshedLayout) ctx.settingsPatch.resolvedVisualLayout = refreshedLayout;
     const settingsChanged = Object.keys(ctx.settingsPatch).filter((key) =>
       JSON.stringify(settingsBefore[key]) !== JSON.stringify(ctx.settingsPatch[key]));
+    // A control released or blurred without changing anything (a slider put back where it was, a
+    // field tabbed through) is not an edit: it must not consume a revision or leave an empty step
+    // in Undo. Anything that did change takes the normal path below.
+    if (!settingsChanged.length && sameTimeline(before, after)) {
+      const project = await this.prisma.editProject.findUniqueOrThrow({ where: { id },
+        include: includeProject });
+      return { ...serialize(project), commandResult: { index: 0, action, status: 'DONE' as const,
+        scope: this.resultScope(action, payload), affectedElementIds: [], affectedCount: 0,
+        revision: current.revision, changes: [], settingsChanged: [] } satisfies EditCommandResult };
+    }
+    const revision = current.revision + 1;
     const { chat: _chat, ...historySettingsBefore } = settingsBefore;
     const settingsAfter = settingsChanged.length ? { ...settingsBefore, ...ctx.settingsPatch } : null;
     const { chat: _chatAfter, ...historySettingsAfter } = settingsAfter ?? {};
@@ -3029,7 +3167,7 @@ export class EditModeService {
           ? { settings: settingsAfter as Prisma.InputJsonValue } : {}) } });
       if (guarded.count !== 1) throw new ConflictException({ code: 'STALE_REVISION',
         message: 'EditProject revision is stale' });
-      await this.replaceElements(tx, id, after);
+      await this.persistElementChanges(tx, id, before, after);
       const historyStarted = Date.now();
       await tx.editHistory.create({ data: { editProjectId: id, revision, actor: 'USER', action,
         command, beforeState, afterState } });
@@ -3122,6 +3260,30 @@ export class EditModeService {
       duration: element.duration, trimStart: element.trimStart ?? 0, trimEnd: element.trimEnd ?? null,
       properties: element.properties ?? {}
     })) });
+  }
+
+  /** Manual controls usually change one row, even on a caption-heavy timeline. */
+  private async persistElementChanges(tx: Prisma.TransactionClient, projectId: string,
+    before: TimelineElement[], after: TimelineElement[]) {
+    const previous = new Map(before.map(element => [element.id, element]));
+    const nextIds = new Set(after.map(element => element.id));
+    const removed = before.filter(element => !nextIds.has(element.id)).map(element => element.id);
+    const changed = after.filter(element => previous.has(element.id) &&
+      JSON.stringify(previous.get(element.id)) !== JSON.stringify(element));
+    // Large caption/style edits still use the two bulk statements. A slider
+    // or a drag affecting one item must not recreate the whole caption track.
+    if (changed.length > 32 && changed.length + removed.length > before.length / 2) {
+      await this.replaceElements(tx, projectId, after); return;
+    }
+    if (removed.length) await tx.editElement.deleteMany({ where: { editProjectId: projectId, id: { in: removed } } });
+    const added = after.filter(element => !previous.has(element.id));
+    if (added.length) await tx.editElement.createMany({ data: added.map(element => ({
+      ...element, editProjectId: projectId, properties: element.properties ?? {}
+    })) });
+    for (const element of changed) {
+      const { id, ...data } = element;
+      await tx.editElement.updateMany({ where: { id, editProjectId: projectId }, data });
+    }
   }
 
   private validateTimeline(elements: TimelineElement[], assets: Map<string, CommandAsset>) {
@@ -3269,11 +3431,13 @@ export class EditModeService {
     };
   }
 
-  async history(id: string) {
+  async history(id: string, compact = false) {
     if (!await this.prisma.editProject.findUnique({ where: { id }, select: { id: true } })) {
       throw new NotFoundException('EditProject not found');
     }
-    return this.prisma.editHistory.findMany({ where: { editProjectId: id }, orderBy: { revision: 'desc' } });
+    // The UI uses metadata/undo targets; full snapshots remain private to undo/redo.
+    return this.prisma.editHistory.findMany({ where: { editProjectId: id }, orderBy: { revision: 'desc' },
+      ...(compact ? { select: { id: true, editProjectId: true, revision: true, actor: true, action: true, command: true, createdAt: true } } : {}) });
   }
 
   async assetFile(assetId: string, rangeHeader?: string) {

@@ -218,8 +218,9 @@ export function projectInstant(instant: number, before: LayoutSegment[],
  * deleting an overlay the user placed is worse than a short one they can see.
  */
 export function retimeOverlays<T extends { id: string; type: string; track: number;
-  startTime: number; duration: number; trimStart?: number; trimEnd?: number | null }>(
-  elements: T[], before: LayoutSegment[], after: LayoutSegment[], minDurationSec: number): T[] {
+  startTime: number; duration: number; trimStart?: number; trimEnd?: number | null; assetId?: string | null }>(
+  elements: T[], before: LayoutSegment[], after: LayoutSegment[], minDurationSec: number,
+  audioSourceDuration?: (assetId: string) => number | null | undefined): T[] {
   const total = layoutEnd(after);
   if (!(total > 0)) return elements;
   return elements.map((element) => {
@@ -227,7 +228,11 @@ export function retimeOverlays<T extends { id: string; type: string; track: numb
     const start = projectInstant(element.startTime, before, after);
     const end = projectInstant(element.startTime + element.duration, before, after);
     const clampedStart = Math.max(0, Math.min(start, Math.max(0, total - minDurationSec)));
-    const length = Math.max(minDurationSec, Math.min(end - clampedStart, total - clampedStart));
+    let length = Math.max(minDurationSec, Math.min(end - clampedStart, total - clampedStart));
+    if (element.type === 'AUDIO' && element.assetId && audioSourceDuration) {
+      const sourceDuration = audioSourceDuration(element.assetId);
+      if (sourceDuration != null) length = Math.min(length, sourceDuration - (element.trimStart ?? 0));
+    }
     if (Math.abs(clampedStart - element.startTime) < 1e-6 &&
       Math.abs(length - element.duration) < 1e-6) return element;
     const next: T = { ...element, startTime: round(clampedStart), duration: round(length) };
@@ -239,5 +244,99 @@ export function retimeOverlays<T extends { id: string; type: string; track: numb
       next.trimEnd = round(trimStart + next.duration);
     }
     return next;
+  });
+}
+
+/** What one VIDEO trim changed: the segment, its source range before and after, and its speed. */
+export type VideoTrimChange = {
+  segmentId: string;
+  before: { trimStart: number; trimEnd: number };
+  after: { trimStart: number; trimEnd: number };
+  speed: number;
+};
+
+export type VideoTrimLimits = {
+  minDurationSec: number;
+  /** An enabled zoom shorter than this cannot ease in and out, so a trim that leaves less removes it. */
+  minZoomSec: number;
+  audioSourceDuration?: (assetId: string) => number | null | undefined;
+};
+
+/**
+ * Re-times every non-VIDEO element after ONE video segment's source range changed.
+ *
+ * A trim does not stretch footage, it removes (or restores) the head or tail of it,
+ * so everything placed on the timeline keeps its place against the CONTENT:
+ *
+ *  - an element inside the trimmed segment is mapped through SOURCE time, which is
+ *    why a caption at source 8.0s is still at source 8.0s after 3s are cut from the
+ *    head (it moves 3s earlier on the timeline), never scaled by the new length;
+ *  - an element on a different segment only shifts by that segment's length change;
+ *  - what falls off either end is clipped, and an element that is entirely cut away
+ *    (or left too short to be meaningful) is removed. Undo restores it.
+ *
+ * AUDIO keeps its place against the footage like every other layer, and when the
+ * trim cuts its beginning its own read window advances by exactly the removed
+ * prefix, so the music is not restarted from a different place. This is the same
+ * policy `adjustSourceRange` applies at the outer boundary of a generated clip.
+ *
+ * `retimeOverlays` (proportional) remains correct for a SPEED change, where the
+ * whole segment is genuinely stretched; it is wrong for a trim.
+ */
+export function retimeForVideoTrim<T extends { id: string; type: string; track: number;
+  startTime: number; duration: number; trimStart?: number; trimEnd?: number | null;
+  assetId?: string | null; properties?: unknown }>(elements: T[], before: LayoutSegment[],
+  after: LayoutSegment[], change: VideoTrimChange, limits: VideoTrimLimits): T[] {
+  const total = layoutEnd(after);
+  if (!(total > 0)) return elements;
+  const index = before.findIndex((segment) => segment.id === change.segmentId);
+  const oldLength = layoutEnd(before);
+  const speed = change.speed > 0 ? change.speed : 1;
+  const EPS = 1e-6;
+  /** `t` on the old timeline -> new timeline; `clamped` stays inside the trimmed segment. */
+  const project = (t: number, side: 'start' | 'end') => {
+    const found = before.findIndex((segment) => side === 'start'
+      ? t >= segment.start - EPS && t < segment.end - EPS
+      : t > segment.start + EPS && t <= segment.end + EPS);
+    if (found < 0 || found >= after.length) {
+      const value = t + (total - oldLength);
+      return { value, clamped: Math.min(total, Math.max(0, value)) };
+    }
+    const segment = before[found], target = after[found];
+    if (found !== index) {
+      const value = target.start + (t - segment.start);
+      return { value, clamped: value };
+    }
+    const source = change.before.trimStart + (t - segment.start) * speed;
+    const value = target.start + (source - change.after.trimStart) / speed;
+    return { value, clamped: Math.min(target.end, Math.max(target.start, value)) };
+  };
+  return elements.flatMap((element) => {
+    if (element.type === 'VIDEO' && element.track === 0) return [element];
+    const from = project(element.startTime, 'start');
+    const to = project(element.startTime + element.duration, 'end');
+    const startTime = Math.max(0, Math.min(from.clamped, total));
+    let length = Math.min(to.clamped, total) - startTime;
+    const zoom = element.type === 'EFFECT' && record(element.properties).enabled !== false;
+    const floor = zoom ? limits.minZoomSec : limits.minDurationSec;
+    const unchanged = Math.abs(length - element.duration) < EPS;
+    if (length < EPS || (!unchanged && length < Math.min(floor, element.duration) - EPS)) return [];
+    const prefix = Math.max(0, from.clamped - from.value);
+    let trimStart = Math.max(0, element.trimStart ?? 0);
+    if (element.type === 'AUDIO') {
+      trimStart += prefix;
+      const sourceDuration = element.assetId && limits.audioSourceDuration
+        ? limits.audioSourceDuration(element.assetId) : null;
+      if (sourceDuration != null) length = Math.min(length, sourceDuration - trimStart);
+      if (length < EPS) return [];
+    }
+    if (Math.abs(startTime - element.startTime) < EPS && Math.abs(length - element.duration) < EPS &&
+      (element.type !== 'AUDIO' || prefix < EPS)) return [element];
+    const next: T = { ...element, startTime: round(startTime), duration: round(length) };
+    if (element.type === 'AUDIO') {
+      next.trimStart = round(trimStart);
+      next.trimEnd = round(trimStart + next.duration);
+    }
+    return [next];
   });
 }

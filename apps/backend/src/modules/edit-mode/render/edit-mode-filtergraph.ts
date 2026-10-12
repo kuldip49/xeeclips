@@ -15,6 +15,7 @@ import { colorAdjustmentFilter } from './edit-mode-color-filter';
 import { atempoChain, overlayTransformFilter,
   segmentTransformFilter } from './edit-mode-segment-filter';
 import { zoomAnchorExpression, zoomEnvelopeExpression } from './edit-mode-zoom';
+import { isManualZoom, manualZoomFilter, readManualZoom } from '@ai-content-platform/shared/manual-zoom.cjs';
 import { styleTwoCropTransform, styleTwoCropFilter, styleTwoCropCameraFilter, styleTwoFitBox } from '@ai-content-platform/shared/style-two-crop.cjs';
 
 export type GraphInput = {
@@ -28,6 +29,8 @@ export type GraphInput = {
   overlayPaths: Record<string, string>;
   /** elementId -> local file for every audio element. */
   audioPaths: Record<string, string>;
+  /** Channel counts probed from the real files (source audio, and music by element id). Unknown = unset. */
+  audioChannels?: { source?: number; tracks?: Record<string, number> };
   /** Written next to the working directory; empty when there is no text at all. */
   assFileName: string | null;
   /** Optional extra libass font directory (local QA on hosts without the image fonts). */
@@ -41,6 +44,17 @@ export type GraphInput = {
 };
 
 const seconds = (value: number) => value.toFixed(3);
+
+/**
+ * Brings one audio stream to stereo at 48 kHz WITHOUT changing how loud it is.
+ *
+ * `aformat=channel_layouts=stereo` upmixes mono with a -3 dB constant-power law, so a mono source or
+ * mono music file exported 3 dB quieter than the preview (a browser plays mono at full level in both
+ * ears) and than its own volume setting. A mono stream is therefore duplicated into both channels.
+ */
+const toStereo = (channels?: number) => channels === 1
+  ? 'aresample=48000,pan=stereo|c0=c0|c1=c0'
+  : 'aformat=sample_rates=48000:channel_layouts=stereo';
 
 /** One fitted layer: the source (optionally pre-cropped) scaled to fit the
  * canvas over a blurred, darkened fill of itself - so a vertical source in a
@@ -211,12 +225,15 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
       `enable='${input.informationFitExpression}'[vinfofitted]`);
     composited = 'vinfofitted';
   }
+  // The window a manual zoom acts inside: the whole canvas, or a card layout's video window.
+  let zoomWindow = { x: 0, y: 0, width, height };
   if (useLayoutFrame && layoutFrame) {
     const cropWindow = canonicalCrops.find(Boolean)?.target;
     const frameWidth = cropWindow?.width ?? Math.max(2, Math.round(layoutFrame.width * width));
     const frameHeight = cropWindow?.height ?? Math.max(2, Math.round(layoutFrame.height * height));
     const frameX = cropWindow?.x ?? Math.round(layoutFrame.x * width);
     const frameY = cropWindow?.y ?? Math.round(layoutFrame.y * height);
+    zoomWindow = { x: frameX, y: frameY, width: frameWidth, height: frameHeight };
     const background = plan.canvas.visualLayout?.background.color ?? '#000000';
     const cropBackdrop = manualCropExpression && plan.canvas.visualLayout?.editingProfile !== 'AUTOMATIC_3_STYLE_TWO'
       ? `,drawbox=x=0:y=0:w=iw:h=ih:color=black@1:t=fill:enable='${manualCropExpression}'`
@@ -254,6 +271,30 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
     }
   }
 
+  // --- Manual zoom / pan ----------------------------------------------------
+  //
+  // One canonical transform (packages/shared/manual-zoom.cjs), acting on the FRAMED picture - the
+  // camera crop, fitted layers and card window are already resolved - so it means the same thing
+  // here as in the preview. It is time-gated to its own segment. A StyleTwo manual crop carries
+  // its own scale inside its crop geometry, so those segments are skipped: zoom is never applied
+  // twice. Automatic zoom stands aside over a manually zoomed segment (see the zoom planner).
+  segments.forEach((segment, i) => {
+    if (canonicalCrops[i]) return;
+    const zoom = readManualZoom({ scale: segment.scale, offsetX: segment.offsetX, offsetY: segment.offsetY });
+    if (!isManualZoom({ scale: zoom.scale, offsetX: zoom.x, offsetY: zoom.y })) return;
+    const chain = manualZoomFilter(zoom, zoomWindow.width, zoomWindow.height);
+    const full = zoomWindow.x === 0 && zoomWindow.y === 0 &&
+      zoomWindow.width === width && zoomWindow.height === height;
+    const gate = `between(t\\,${seconds(segment.timelineStart)}\\,` +
+      `${seconds(Math.max(segment.timelineStart, segment.timelineEnd - 0.001))})`;
+    graph.push(`[${composited}]split=2[mzbase${i}][mzsrc${i}]`);
+    graph.push(`[mzsrc${i}]${full ? '' : `crop=${zoomWindow.width}:${zoomWindow.height}:` +
+      `${zoomWindow.x}:${zoomWindow.y},`}${chain}[mzpic${i}]`);
+    graph.push(`[mzbase${i}][mzpic${i}]overlay=${zoomWindow.x}:${zoomWindow.y}:` +
+      `enable='${gate}'[mzout${i}]`);
+    composited = `mzout${i}`;
+  });
+
   // --- Grading --------------------------------------------------------------
   if (!gradeBeforeGeometry && plan.grading.filter && plan.grading.filter !== 'null') {
     graph.push(`[${composited}]${plan.grading.filter}[vgraded]`);
@@ -281,10 +322,10 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
     const out = `vov${index}`;
     // The box is top-left anchored and a preserved-aspect image is centred in
     // it, matching how the editor preview draws `object-contain`.
-    const x = overlay.preserveAspectRatio
-      ? `${overlay.x}+(${overlay.width}-w)/2` : String(overlay.x);
-    const y = overlay.preserveAspectRatio
-      ? `${overlay.y}+(${overlay.height}-h)/2` : String(overlay.y);
+    // A rotated overlay's frame is larger than its box, so it is centred on the box as well.
+    const centred = overlay.preserveAspectRatio || overlay.rotation !== 0;
+    const x = centred ? `${overlay.x}+(${overlay.width}-w)/2` : String(overlay.x);
+    const y = centred ? `${overlay.y}+(${overlay.height}-h)/2` : String(overlay.y);
     graph.push(`[${composited}][ov${index}]overlay=${x}:${y}:` +
       `enable='between(t\\,${seconds(overlay.startSec)}\\,${seconds(overlay.endSec)})'[${out}]`);
     composited = out;
@@ -300,7 +341,7 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
   // --- Audio ----------------------------------------------------------------
   const mixInputs: string[] = [];
   if (withAudio) {
-    graph.push('[acat]aformat=sample_rates=48000:channel_layouts=stereo[adialogue]');
+    graph.push(`[acat]${toStereo(input.audioChannels?.source)}[adialogue]`);
     mixInputs.push('adialogue');
   }
   audible.forEach((track, index) => {
@@ -328,7 +369,7 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
       ? `,volume=volume='${duckExpression.replace(/,/gu, '\\,')}':eval=frame` : '';
     graph.push(`[${inputIndex}:a]atrim=start=${seconds(track.trimStart)}:` +
       `end=${seconds(track.trimEnd)},asetpts=PTS-STARTPTS,` +
-      `aformat=sample_rates=48000:channel_layouts=stereo,` +
+      `${toStereo(input.audioChannels?.tracks?.[track.elementId])},` +
       `atrim=start=0:end=${seconds(length)},asetpts=PTS-STARTPTS,` +
       `volume=${track.volume.toFixed(4)}${fadeIn}${fadeOut}${delay}${duck}[${label}]`);
     mixInputs.push(label);
@@ -345,7 +386,11 @@ export function buildFfmpegArgs(input: GraphInput): string[] {
     // A short tail fade stops the export ending on a click.
     const endFade = Math.min(0.12, plan.durationSec / 4);
     if (input.preserveSourceAudio) graph.push('[amixed]anull[aout]');
-    else graph.push('[amixed]alimiter=level_in=1:level_out=1:limit=0.95:attack=5:release=50,' +
+    // `level=disabled` is load-bearing. alimiter's default auto-level re-scales the signal back up to
+    // full scale after limiting, which both defeated the 0.95 ceiling (a hot mix hard-clipped at 1.0)
+    // and silently raised every export's overall loudness, so "100%" no longer meant "as recorded"
+    // and the export disagreed with what the preview plays.
+    else graph.push('[amixed]alimiter=limit=0.95:attack=5:release=50:level=disabled,' +
       `atrim=start=0:end=${seconds(plan.durationSec)},asetpts=PTS-STARTPTS,` +
       `afade=t=out:st=${seconds(Math.max(0, plan.durationSec - endFade))}:` +
       `d=${seconds(endFade)},` +

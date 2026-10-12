@@ -42,6 +42,7 @@ async function editor(page: Page, tool = 'Audio') {
   let delayHistory = false;
   let failMedia = false;
   let delayedMedia = false;
+  let rejectTiming = false;
   const commands: string[] = [];
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
@@ -63,7 +64,7 @@ async function editor(page: Page, tool = 'Audio') {
         projectReads++; await json(await state.service.get(state.project.id)); return;
       }
       if (path.endsWith('/history')) {
-        const history = await state.service.history(state.project.id);
+        const history = await state.service.history(state.project.id, true);
         if (delayHistory) await new Promise((resolve) => setTimeout(resolve, 5000));
         await json(history); return;
       }
@@ -80,6 +81,9 @@ async function editor(page: Page, tool = 'Audio') {
       if (path.includes('/commands/')) {
         const action = path.split('/').at(-1)!;
         commands.push(action);
+        if (action === 'set-element-timing' && rejectTiming) {
+          rejectTiming = false; await json({ message: 'Synthetic save failure' }, 400); return;
+        }
         await json(await state.service.phase3Command(state.project.id, action,
           route.request().postDataJSON())); return;
       }
@@ -114,6 +118,7 @@ async function editor(page: Page, tool = 'Audio') {
   await page.getByRole('button', { name: tool, exact: true }).click();
   return { state, commands, errors, projectReads: () => projectReads,
     delayHistory: () => { delayHistory = true; },
+    rejectTiming: () => { rejectTiming = true; },
     failMedia: (value: boolean) => { failMedia = value; },
     delayedMedia: () => { delayedMedia = true; } };
 }
@@ -123,6 +128,50 @@ async function upload(page: Page) {
     name: 'test-music.wav', mimeType: 'application/octet-stream', buffer: music });
   await expect(page.getByTestId('edit-preview-audio')).toHaveCount(1);
 }
+
+test('phone music edges stay in source bounds and a rejected gesture restores saved geometry', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const fixture = await editor(page);
+  await page.getByLabel('Seek edited timeline').fill('2');
+  await upload(page);
+  await expect(page.locator('#music-volume')).toBeEnabled();
+  await page.getByRole('button', { name: 'Close Audio', exact: true }).click();
+  const block = page.locator('[data-testid="timeline-block"][data-element-type="AUDIO"]');
+  const saved = async () => (await fixture.state.service.get(fixture.state.project.id)).elements
+    .find((item: { type: string }) => item.type === 'AUDIO');
+  const drag = async (edge: 'left' | 'right', delta: number) => {
+    const handle = block.getByTestId(`timeline-trim-${edge}`);
+    await handle.scrollIntoViewIfNeeded();
+    const box = (await handle.boundingBox())!;
+    const before = fixture.commands.length;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + delta, box.y + box.height / 2, { steps: 8 });
+    await page.mouse.up();
+    await expect.poll(() => fixture.commands.length).toBeGreaterThan(before);
+    await expect(page.getByRole('button', { name: 'Duplicate', exact: true })).toBeEnabled();
+  };
+  await drag('left', -150);
+  expect((await saved()).startTime).toBe(2);
+  expect((await saved()).trimStart).toBe(0);
+  await drag('right', 150);
+  expect((await saved()).trimEnd).toBe(10);
+  expect((await saved()).duration).toBe(10);
+  const previous = (await block.boundingBox())!;
+  fixture.rejectTiming();
+  await drag('left', 45);
+  await expect(page.getByRole('alert').filter({ hasText: 'Synthetic save failure' })).toBeVisible();
+  expect((await saved()).startTime).toBe(2);
+  await expect.poll(async () => Math.abs((await block.boundingBox())!.x - previous.x)).toBeLessThan(1);
+  await expect.poll(async () => Math.abs((await block.boundingBox())!.width - previous.width)).toBeLessThan(1);
+  await drag('left', 40);
+  expect((await saved()).trimStart).toBeGreaterThan(0);
+  await expect(page.getByRole('alert').filter({ hasText: 'Synthetic save failure' })).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByTestId('edit-preview-audio')).toHaveCount(1);
+  expect(fixture.errors).toEqual([]);
+});
 
 test('upload adds music without project readback or waiting for history; controls persist', async ({ page }) => {
   test.setTimeout(120_000);

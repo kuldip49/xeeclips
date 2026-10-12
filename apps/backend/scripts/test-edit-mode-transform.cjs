@@ -193,8 +193,8 @@ function main() {
   ok('a transformed segment resets its sample aspect ratio for concat',
     cropped.endsWith('setsar=1'));
   ok('every transform path ends with a normalized SAR',
-    [{ ...NEUTRAL, rotation: 30 }, { ...NEUTRAL, flipH: true }, { ...NEUTRAL, scale: 2 },
-      { ...NEUTRAL, scale: 0.5 }, { ...NEUTRAL, offsetX: 0.2 }]
+    [{ ...NEUTRAL, rotation: 30 }, { ...NEUTRAL, flipH: true },
+      { ...NEUTRAL, crop: { left: 0.1, right: 0.1, top: 0, bottom: 0 } }]
       .every((transform) => segmentTransformFilter(transform, 1920, 1080).endsWith('setsar=1')));
   ok('horizontal flip emits hflip',
     segmentTransformFilter({ ...NEUTRAL, flipH: true }, 1920, 1080).includes('hflip'));
@@ -209,16 +209,26 @@ function main() {
   ok('the order is crop, then flip, then rotate',
     ordered.indexOf('crop=') < ordered.indexOf('hflip') &&
     ordered.indexOf('hflip') < ordered.indexOf('rotate='));
-  const zoomed = segmentTransformFilter({ ...NEUTRAL, scale: 2 }, 1920, 1080);
-  ok('scaling up crops back to canvas size', zoomed.includes('scale=3840:2160') &&
-    zoomed.includes('crop=1920:1080'));
   ok('a transformed and an untransformed segment agree on size AND SAR',
     segmentTransformFilter({ ...NEUTRAL, rotation: 5 }, 1920, 1080).endsWith('setsar=1'));
-  const shrunk = segmentTransformFilter({ ...NEUTRAL, scale: 0.5 }, 1920, 1080);
-  ok('scaling down pads back to canvas size', shrunk.includes('pad=1920:1080'));
+  // Manual zoom/pan is NOT part of the per-segment source chain any more: it is one canonical
+  // transform of the framed picture (packages/shared/manual-zoom.cjs), so it can never apply
+  // twice or mean a different distance for each source aspect ratio.
+  ok('scale and position never reach the source-frame chain',
+    segmentTransformFilter({ ...NEUTRAL, scale: 2, offsetX: 0.25 }, 1920, 1080) === '');
+  const zoom = require('@ai-content-platform/shared/manual-zoom.cjs');
+  const zoomed = zoom.manualZoomFilter(zoom.readManualZoom({ scale: 2 }), 1080, 1920);
+  ok('scaling up crops back to window size', zoomed.includes('scale=2160:3840') &&
+    zoomed.includes('crop=1080:1920:540:960') && zoomed.endsWith('setsar=1'));
+  ok('scaling down pads back to window size',
+    zoom.manualZoomFilter(zoom.readManualZoom({ scale: 0.5 }), 1080, 1920).includes('pad=1080:1920:270:480'));
+  ok('a pan beyond what keeps the picture covering the window is clamped, not exported as a gap',
+    zoom.readManualZoom({ scale: 1.15, offsetX: 0.9, offsetY: -0.9 }).x === 0.075 &&
+    zoom.readManualZoom({ scale: 1.15, offsetX: 0.9, offsetY: -0.9 }).y === -0.075);
   ok('position shifts the crop window off centre',
-    !segmentTransformFilter({ ...NEUTRAL, scale: 2, offsetX: 0.25 }, 1920, 1080)
+    !zoom.manualZoomFilter(zoom.readManualZoom({ scale: 2, offsetX: 0.25 }), 1920, 1080)
       .includes('crop=1920:1080:960:540'));
+  ok('the pan limit is symmetric and zero at 1x', zoom.maxPan(1) === 0 && zoom.maxPan(2) === 0.5 && zoom.maxPan(0.6) === 0.2);
 
   // --- 5. Overlay transforms ------------------------------------------------
   section('5. Overlay crop, flip and rotation');
