@@ -1,4 +1,4 @@
-import { assertXeeProAvailable } from '../processing/generation-availability';
+import { assertXeeProAvailable, withProviderBusyGuard } from '../processing/generation-availability';
 import { creativeService, publicCreativePackage } from '../content-intelligence/creative-package.service';
 import { editProjectEvidence } from '../content-intelligence/edit-project-evidence';
 import { HOOK_CATEGORIES, type HookCategory } from '../content-intelligence/creative-quality.service';
@@ -95,12 +95,12 @@ export class EditModeController {
     const currentHook=project.elements.find(element=>element.type==='TEXT' && element.properties &&
       ['presetRole','templateRole'].some(role=>(element.properties as Record<string,unknown>)[role]==='HOOK'));
     const currentText=currentHook ? String((currentHook.properties as Record<string,unknown>).content ?? '').trim() : '';
-    const p=await performanceContext.run(createPerformanceTelemetry(external?'ONLINE':'FALLBACK_ONLY'),()=>creativeService(this.llm).create({
+    const p=await withProviderBusyGuard(()=>performanceContext.run(createPerformanceTelemetry(external?'ONLINE':'FALLBACK_ONLY'),()=>creativeService(this.llm).create({
       evidence:editProjectEvidence(project),external,hooksOnly:body.hooksOnly!==false,
       existingHook:currentText ? {text:currentText} : undefined,changeHook:body.hooksOnly!==false,
       exclude:Array.isArray(body.exclude)?body.exclude.filter((v):v is string=>typeof v==='string').slice(0,30):[],
       direction:typeof body.direction==='string'?body.direction.slice(0,500):'',
-      category:HOOK_CATEGORIES.includes(body.category as HookCategory)?body.category as HookCategory:undefined}));
+      category:HOOK_CATEGORIES.includes(body.category as HookCategory)?body.category as HookCategory:undefined})));
     const publicPackage=publicCreativePackage(p);
     await this.editMode.saveCreativeSuggestions(id,project.revision,publicPackage,body.hooksOnly!==false);
     return {package:publicPackage,warnings:p.warnings};
@@ -123,8 +123,8 @@ export class EditModeController {
     sourceWidth?: unknown; sourceHeight?: unknown }) {
     if (body.useAi === true) assertXeeProAvailable();
     const brief = typeof body.brief === 'string' ? body.brief.slice(0, 1500) : '';
-    const interpreted = await interpretBrief({ brief, llm: body.useAi === true ? this.llm : null,
-      aiMode: chatPlannerAiMode() });
+    const interpreted = await withProviderBusyGuard(() => interpretBrief({ brief, llm: body.useAi === true ? this.llm : null,
+      aiMode: chatPlannerAiMode() }));
     const components = body.components && typeof body.components === 'object' &&
       !Array.isArray(body.components) ? body.components as Record<string, string> : {};
     const templateId = typeof body.templateId === 'string' && body.templateId ? body.templateId

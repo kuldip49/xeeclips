@@ -63,8 +63,8 @@ export class VideosController {
   }
 
   @Post('videos/:id/retry')
-  retry(@Param('id') id: string) {
-    return this.videosService.retry(id);
+  retry(@Param('id') id: string, @Body() body?: { aiMode?: unknown }) {
+    return this.videosService.retry(id, body?.aiMode);
   }
 
   @Delete('videos/:id')

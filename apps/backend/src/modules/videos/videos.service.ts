@@ -34,7 +34,7 @@ import { ClipCreationRequest, ClipSelectionService } from './clip-selection.serv
 import { ClipRenderQueueService } from './clip-render-queue.service';
 import { isVideoTooLong, maxClipCountForDuration, parseTargetPlatform, VIDEO_TOO_LONG_MESSAGE }
   from '../processing/clip-selection-policy';
-import { normalizeAiProcessingMode } from '../processing/ai-processing-mode';
+import { AiProcessingMode, normalizeAiProcessingMode } from '../processing/ai-processing-mode';
 import { parseProcessingType, parseOutputAspectRatio } from '../processing/processing-type';
 import { isRetryableErrorCode, MEDIA_ERROR_MESSAGES, MediaErrorCode } from '../processing/media-probe';
 
@@ -329,7 +329,11 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
     return video.understanding;
   }
 
-  async retry(videoId: string) {
+  /**
+   * `requestedAiMode` lets the user move a failed XeePro job to XeeFree (the "Use XeeFree" action after XEEPRO_BUSY). It can only
+   * lower a job to the free tier; it never starts Pro, and nothing switches automatically.
+   */
+  async retry(videoId: string, requestedAiMode?: unknown) {
     const video = await this.prisma.video.findUnique({
       where: { id: videoId },
       include: { processingJobs: { orderBy: { createdAt: 'desc' }, take: 1 } }
@@ -337,7 +341,11 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
     if (!video) throw new NotFoundException('Video not found');
     const job = video.processingJobs[0];
     if (!job) throw new ConflictException('Video has no processing job');
-    assertNewProcessingMode(job.aiMode);
+    const toFree = typeof requestedAiMode === 'string' && requestedAiMode.trim() !== '' &&
+      normalizeAiProcessingMode(requestedAiMode) === AiProcessingMode.FALLBACK_ONLY;
+    const retryMode = toFree ? AiProcessingMode.FALLBACK_ONLY
+      : normalizeAiProcessingMode((job as typeof job & { aiMode?: unknown }).aiMode);
+    assertNewProcessingMode(retryMode);
     const forceReprocess = process.env.FORCE_REPROCESS?.toLowerCase() === 'true';
     if (job.status === 'COMPLETED' && !forceReprocess) {
       throw new ConflictException('Video is already completed');
@@ -352,11 +360,11 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
       });
     }
     try {
-      await this.processingQueue.resume({ videoId, processingJobId: job.id,
-        aiMode: normalizeAiProcessingMode((job as typeof job & { aiMode?: unknown }).aiMode) }, async () => {
+      await this.processingQueue.resume({ videoId, processingJobId: job.id, aiMode: retryMode }, async () => {
         await this.prisma.processingJob.update({
           where: { id: job.id },
-          data: { status: 'PENDING', error: null, errorCode: null, retryable: true, completedAt: null }
+          data: { status: 'PENDING', error: null, errorCode: null, retryable: true, completedAt: null,
+            ...(toFree ? { aiMode: AiProcessingMode.FALLBACK_ONLY } : {}) }
         });
       });
     } catch (error) {

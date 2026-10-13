@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
@@ -492,7 +493,10 @@ export function ClipCreationPanel({ video }: { video: Video }) {
     </details> : setup}
 
     {error ? <p role='alert' className='rounded-xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger-soft'>{error}</p> : null}
-    {request?.status === 'FAILED' && request.error ? <p role='alert' className='rounded-xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger-soft'>{request.error}</p> : null}
+    {request?.status === 'FAILED' && request.error ? <div role='alert' className='grid gap-2 rounded-xl border border-danger/20 bg-danger/10 p-3 text-sm text-danger-soft'>
+      <p>{request.error}</p>
+      {/* The choice is the user's: XeeFree is offered as a new project, never started automatically. */}
+      {job?.errorCode === 'XEEPRO_BUSY' ? <Link href='/create' className='w-fit font-semibold underline'>Use XeeFree</Link> : null}</div> : null}
     {request?.status === 'COMPLETED' && request.error ? <p role='status' className='rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning-soft'>{request.error}</p> : null}
     {rendering && !autoFlow ? <p className='text-sm text-muted-foreground' role='status'>
       {results?.deliveredClipCount ?? 0} / {request?.requestedClipCount ?? count} clips ready</p> : null}

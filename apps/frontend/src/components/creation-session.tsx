@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { Loader2 } from 'lucide-react';
 import { ClipCreationPanel } from '@/components/clip-creation-panel';
 import { UploadVideoForm } from '@/components/upload-video-form';
-import { listVideoImports, listVideos, retryVideo, type Project, type VideoImportJob } from '@/lib/api';
+import { isXeeProBusy, listVideoImports, listVideos, retryVideo, XEEPRO_BUSY_CODE, XEEPRO_BUSY_MESSAGE, type Project, type VideoImportJob } from '@/lib/api';
 import { analysisProgressLabel, importProgressLabel, settingsFromImport } from '@/lib/entry-flow';
 import { usePolling } from '@/lib/use-polling';
 
@@ -13,6 +13,10 @@ export function CreationSession({ initialProject }: { initialProject: Project })
   const [project, setProject] = useState(initialProject);
   const [imports, setImports] = useState<VideoImportJob[]>([]);
   const [retrying, setRetrying] = useState(false);
+  const retry = (aiMode?: 'FALLBACK_ONLY') => { setRetrying(true); setError('');
+    void retryVideo(video.id, aiMode).then(refresh)
+      .catch((cause) => setError(isXeeProBusy(cause) ? XEEPRO_BUSY_MESSAGE : 'Could not try again.'))
+      .finally(() => setRetrying(false)); };
   const [error, setError] = useState('');
   const refresh = useCallback(async () => {
     const [videos, jobs] = await Promise.allSettled([listVideos(initialProject.id), listVideoImports(initialProject.id)]);
@@ -22,6 +26,7 @@ export function CreationSession({ initialProject }: { initialProject: Project })
   useEffect(() => { void refresh(); }, [refresh]);
   const video = project.videos[0];
   const job = video?.processingJobs?.[0];
+  const busy = job?.status === 'FAILED' && job.errorCode === XEEPRO_BUSY_CODE;
   const pendingImport = imports.find((item) => item.status !== 'READY');
   // Once analysis has finished (or failed), the auto-started request has been handed to the
   // clips panel and no import is in flight, nothing here changes any more: stop polling. The
@@ -35,10 +40,13 @@ export function CreationSession({ initialProject }: { initialProject: Project })
       <div className='rounded-2xl border border-border bg-surface p-4 sm:p-5'>
         <p className='truncate text-sm font-semibold'>{video.originalName}</p>
         <p className='mt-1 text-sm text-muted-foreground'>
-          {job?.status === 'COMPLETED' ? 'Your video is ready.' : job?.status === 'FAILED' ? 'Something went wrong.' : analysisProgressLabel(video.processingStages)}
+          {job?.status === 'COMPLETED' ? 'Your video is ready.' : job?.status === 'FAILED' ? (busy ? XEEPRO_BUSY_MESSAGE : 'Something went wrong.') : analysisProgressLabel(video.processingStages)}
         </p>
         {job?.status !== 'COMPLETED' && job?.status !== 'FAILED' ? <div className='mt-3 h-1.5 overflow-hidden rounded-full bg-tint-strong'><div className='h-full rounded-full bg-brand-progress transition-all' style={{ width: `${Math.max(4, job?.progress ?? 0)}%` }} /></div> : null}
-        {job?.status === 'FAILED' && job.retryable !== false ? <button className='mt-3 rounded-xl border border-border px-4 py-2 text-sm font-semibold' disabled={retrying} onClick={() => { setRetrying(true); void retryVideo(video.id).then(refresh).catch(() => setError('Could not try again.')).finally(() => setRetrying(false)); }}>{retrying ? 'Trying again…' : 'Try again'}</button> : null}
+        {job?.status === 'FAILED' && job.retryable !== false ? <div className='mt-3 flex flex-wrap gap-2'>
+          {/* XeeFree is offered, never started automatically. */}
+          {busy ? <button className='rounded-xl border border-border px-4 py-2 text-sm font-semibold' disabled={retrying} onClick={() => retry('FALLBACK_ONLY')}>Use XeeFree</button> : null}
+          <button className='rounded-xl border border-border px-4 py-2 text-sm font-semibold' disabled={retrying} onClick={() => retry()}>{retrying ? 'Trying again…' : 'Try again'}</button></div> : null}
       </div>
       {error ? <p role='alert' className='text-sm text-danger-soft'>{error}</p> : null}
       <ClipCreationPanel video={video} />

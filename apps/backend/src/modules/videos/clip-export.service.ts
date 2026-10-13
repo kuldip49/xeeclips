@@ -1,3 +1,4 @@
+import { assertProviderNotBusy } from '../processing/generation-availability';
 import { cleanCaptionWords } from '../free/free-captions';
 import { executionPolicyFor } from '../processing/execution-policy';
 import { stabilizeSpeakerChanges } from '../free/free-speakers';
@@ -297,6 +298,8 @@ export class ClipExportService {
       .repairSemantic(candidate, boundaryWords, this.boundaryRouter, boundaryMode === 'ONLINE', { sourceDuration: video.duration ?? undefined,
         verifyTail: probe.verifier(video, storedSegments, boundaryWords, 'base'), verifyStrongTail: probe.verifier(video, storedSegments, boundaryWords, 'strong'),
         eofAcoustics: { required: true } }));
+    // A busy Pro provider ends this request as XEEPRO_BUSY before any local-fallback result is used or stored.
+    assertProviderNotBusy();
     // Persist a lexical correction (with provenance) before the render reloads the transcript, so captions never show the doubtful word.
     if (repaired.correction) await probe.persistCorrection(storedSegments, boundaryWords, repaired.correction, repaired.strongTail);
     if (!repaired.valid) throw new EditQualityError('Clip rejected before render: incomplete spoken thought',
@@ -370,6 +373,7 @@ export class ClipExportService {
           nextContext:boundaryWords.filter(w=>w.start>=candidate.endTime).slice(0,100).map(w=>w.text).join(' '),
           speakerTurns:transcriptContext.transcript?.segments.filter(s=>s.end>candidate.startTime&&s.start<candidate.endTime).map(s=>({speaker:s.speaker??'unknown',text:s.text})),
           originalName:video.originalName,targetPlatform:video.targetPlatform}));
+        assertProviderNotBusy();
         const shared = packaging.sharedPackage!;
         candidate = {...candidate,creativeCandidates:{sharedPackage:shared} as unknown as Prisma.JsonValue,
           bestHook:shared.selectedHook,synopsis:shared.synopsis,caption:shared.captions[0]?.text ?? '',
@@ -676,6 +680,7 @@ export class ClipExportService {
         ...(candidate.alternateHooks ?? []), ...storedHooks].filter(Boolean),
       existingCaption: candidate.caption || candidate.captionCandidate,
       existingHashtags: candidate.hashtags ?? [], targetPlatform }));
+    assertProviderNotBusy();
     const packagingMs = Date.now() - packagingStarted;
     const baseContext = { start: candidate.startTime, end: candidate.endTime, aspectRatio, targetPlatform,
       transcript: candidate.transcriptText, words,
@@ -696,6 +701,7 @@ export class ClipExportService {
             sum + frame.textCoverage, 0) / analysis.frames.length).toFixed(3)) : 0,
           maxFaces: Math.max(0, ...analysis.frames.map((frame) => frame.faces.length)) } }
     }));
+    assertProviderNotBusy();
     let planMs = Date.now() - planStarted;
     // Headline realignment state, filled in by prepare() below.
     let hookRealigned = false;
@@ -781,6 +787,7 @@ export class ClipExportService {
           startTime: timeline.editedStart, endTime: timeline.editedEnd, transcriptText: finalTranscript },
           transcriptBoundaryWords(segments).filter(w => !boundary.cuts.some(c => w.start < c.end && w.end > c.start)),
           this.boundaryRouter, aiMode === 'ONLINE', { sourceDuration: video.duration ?? undefined, eofAcoustics: { required: true } }));
+        assertProviderNotBusy();
         if (!semantic.valid || Math.abs(semantic.startTime - timeline.editedStart) > .15 || Math.abs(semantic.endTime - timeline.editedEnd) > .15)
           throw new EditQualityError('Edited clip rejected before render: unresolved delivered narrative',
             { boundaryQa: semantic.qa, reasons: semantic.reasons, preRenderClassification: 'SKIP_BEFORE_RENDER' });
@@ -791,6 +798,7 @@ export class ClipExportService {
           nextContext:segments.filter(s=>s.start>=timeline.editedEnd).map(s=>s.text).join(' ').slice(0,1500),
           synopsis:'',wholeVideoSummary:'',sourceId:video.id,startTime:timeline.editedStart,endTime:timeline.editedEnd,ocrText:analysis.ocrText,targetPlatform}));
       }
+      assertProviderNotBusy();
       let hooked = plan;
       if (plan.onScreenHook.enabled && finalTranscript &&
         finalTranscript !== candidate.transcriptText.trim()) {

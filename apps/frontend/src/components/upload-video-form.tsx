@@ -8,7 +8,7 @@ import { CheckCircle2, ChevronDown, Circle, ClipboardPaste, FileVideo, FolderOpe
   SlidersHorizontal, Sparkles, Upload, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { TemplateThumb, TemplateThumbEnlarge } from '@/components/generation/template-thumb';
-import { TARGET_PLATFORM_LABELS, uploadVideo, importYouTubeVideo, getVideoImportCapabilities,
+import { TARGET_PLATFORM_LABELS, uploadVideo, importYouTubeVideo, getVideoImportCapabilities, isXeeProBusy, XEEPRO_BUSY_MESSAGE,
   type OutputAspectRatio, type TargetPlatform } from '@/lib/api';
 import { CLIP_LIMIT_HINT, DEFAULT_ENTRY_SETTINGS, ENTRY_MAX_CLIPS, entryGenerationRequest, maxClipsForDuration,
   type EntrySettings, type EntrySource, type EntryTemplate } from '@/lib/entry-flow';
@@ -83,7 +83,7 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
   const abortRef = useRef<AbortController | null>(null);
   const createdProject = useRef<string | null>(projectId ?? null);
   const formKey = projectId ?? 'new';
-  const [settings, setSettings] = useState<EntrySettings>({ ...(initialSettings ?? DEFAULT_ENTRY_SETTINGS), aiMode: 'FALLBACK_ONLY' });
+  const [settings, setSettings] = useState<EntrySettings>(initialSettings ?? DEFAULT_ENTRY_SETTINGS);
   const [source, setSource] = useState<EntrySource>(initialSource ?? 'youtube');
   const [file, setFile] = useState<File | null>(null);
   const [sourceUrl, setSourceUrl] = useState('');
@@ -92,7 +92,7 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
   const [proEnabled, setProEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
-  const [error, setError] = useState<{ message: string; fallback: boolean } | null>(null);
+  const [error, setError] = useState<{ message: string; fallback: boolean; busy?: boolean } | null>(null);
   const [notice, setNotice] = useState<string | null>(initialNotice ?? null);
   const [dragging, setDragging] = useState(false);
   const [canPaste, setCanPaste] = useState(false);
@@ -104,13 +104,12 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
     let active = true;
     const refreshAvailability = () => void getVideoImportCapabilities().then((result) => {
       if (active) {
-        setYoutubeEnabled(result.youtubeEnabled); setProEnabled(result.xeePro === true);
-        if (!result.xeePro) setSettings(current => ({ ...current, aiMode: 'FALLBACK_ONLY' }));
+        setYoutubeEnabled(result.youtubeEnabled); setProEnabled(result.xeePro !== false);
+        // Only the owner's emergency switch disables Pro here; provider capacity is never read in advance.
+        if (result.xeePro === false) setSettings(current => current.aiMode === 'ONLINE' ? { ...current, aiMode: 'FALLBACK_ONLY' } : current);
         if (!result.youtubeEnabled) setSource('file');
       }
-    }).catch(() => { if (active) {
-      setProEnabled(null); setSettings(current => ({ ...current, aiMode: 'FALLBACK_ONLY' }));
-    } });
+    }).catch(() => undefined);
     refreshAvailability();
     const availabilityTimer = window.setInterval(refreshAvailability, 30_000);
     setCanPaste(typeof navigator !== 'undefined' && typeof navigator.clipboard?.readText === 'function');
@@ -206,7 +205,7 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (offline) return;
-    if (settings.aiMode === 'ONLINE' && proEnabled !== true) {
+    if (settings.aiMode === 'ONLINE' && proEnabled === false) {
       setError({ message: 'XeePro is temporarily unavailable. XeeFree is available.', fallback: false }); return;
     }
     setError(null); setNotice(null); setUploadProgress(null); setBusy(true);
@@ -223,6 +222,8 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
       }
       const message = isServerUnavailable(cause) ? OFFLINE_MESSAGE
         : cause instanceof Error ? cause.message : 'Clips could not be started.';
+      // The busy answer is shown as-is with an explicit choice; XeeFree is never started on the user's behalf.
+      if (isXeeProBusy(cause)) { setError({ message: XEEPRO_BUSY_MESSAGE, fallback: false, busy: true }); return; }
       setError({ message, fallback: source === 'youtube' && !isServerUnavailable(cause) });
     } finally { setBusy(false); abortRef.current = null; }
   }
@@ -323,7 +324,7 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
       <div className='grid gap-2 sm:grid-cols-2'>
         {([{ value: 'FALLBACK_ONLY', title: 'XeeFree', description: "Fast clip creation using XeeClip's built-in editing intelligence." },
           { value: 'ONLINE', title: 'XeePro', description: 'Advanced AI understanding for stronger moment selection and creative decisions.' }] as const).map((option) =>
-          { const unavailable = option.value === 'ONLINE' && proEnabled !== true;
+          { const unavailable = option.value === 'ONLINE' && proEnabled === false;
           const selected = settings.aiMode === option.value;
           const Indicator = selected ? CheckCircle2 : Circle;
           return <label key={option.value} data-entry-mode={option.value}
@@ -393,6 +394,8 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
       <p className='break-words [overflow-wrap:anywhere]'>{error.message}{error.fallback && !error.message.includes(FALLBACK_HINT) ? ` ${FALLBACK_HINT}` : ''}</p>
       {error.fallback ? <Button type='button' size='sm' variant='outline' className='h-10 w-fit' onClick={switchToUpload}>
         <Upload size={14} aria-hidden />Upload file instead</Button> : null}
+      {error.busy ? <Button type='button' size='sm' variant='outline' className='h-10 w-fit'
+        onClick={() => { update({ aiMode: 'FALLBACK_ONLY' }); setError(null); }}>Use XeeFree</Button> : null}
     </div> : null}
 
     <div className={cn('grid gap-2', stickyCta && 'sticky bottom-[calc(var(--nav-offset,0px)+12px)] z-20 -mx-4 bg-gradient-to-t from-surface via-surface/95 to-transparent px-4 pb-1 pt-6 sm:-mx-6 sm:px-6 lg:static lg:mx-0 lg:bg-none lg:p-0')}>

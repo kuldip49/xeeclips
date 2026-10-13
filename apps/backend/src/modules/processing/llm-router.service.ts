@@ -1,4 +1,4 @@
-import { isXeeProEnabled } from './generation-availability';
+import { currentProviderBusy, isXeeProEnabled, markProviderBusy, providerBusyCategory } from './generation-availability';
 import { createHash } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { countPerformance, countProEscalation, currentAiProcessingMode, isProviderModelUnavailable,
@@ -148,6 +148,8 @@ export class LlmRouterService {
       throw new LlmProviderError('AI_MODE_FALLBACK_ONLY',
         'Generative model routing is disabled for FALLBACK_ONLY');
     }
+    // This unit of Pro work already met a busy provider: it will end as XEEPRO_BUSY, so do not spend more quota on it.
+    if (currentProviderBusy()) throw new LlmProviderError('CIRCUIT_OPEN', 'Provider busy for this request');
     const hookLanguageReview = input.role === 'critic' && ['shared_hook_review_v2', 'shared_creative_review_v2'].includes(input.request.schemaName);
     const hookUnderstanding = input.role === 'clipUnderstanding' && input.request.schemaName === 'shared_content_understanding_v1';
     const creativeModel = hookLanguageReview || hookUnderstanding
@@ -188,6 +190,8 @@ export class LlmRouterService {
         // A permanent cause (rejected key, exhausted quota, missing model) is reported as itself.
         const cause = this.unavailable.get(this.circuitKey(route))?.kind;
         if (cause) lastError = new LlmProviderError(cause, 'Provider unavailable: ' + cause);
+        // A provider-wide cooldown (rate limit, quota, rejected key) is a busy provider for this request too.
+        markProviderBusy(providerBusyCategory(cause) ?? 'PROVIDER_RATE_LIMITED');
         continue;
       }
       const circuitPermit = this.acquireCircuit(route, input.role);
@@ -251,6 +255,8 @@ export class LlmRouterService {
           latencyMs: Date.now() - started,
           priorityIndex: routeIndex, providerState: 'DEGRADED' });
         this.recordFailure(route, input.role, lastError);
+        const busy = providerBusyCategory(lastError.kind);
+        if (busy) markProviderBusy(busy);
         this.log(input.role, route, false, routeIndex > 0, attempts, lastError.kind);
         if (lastError.kind === 'CALL_BUDGET_EXCEEDED') throw lastError;
       }
@@ -342,7 +348,7 @@ export class LlmRouterService {
       error.kind === 'QUOTA_EXHAUSTED_FAILURE' || error.kind === 'QUOTA_FAILURE') {
       markProviderModelUnavailable(this.circuitKey(route));
       const cooldown = error.kind === 'AUTH_FAILURE' || error.kind === 'MODEL_NOT_FOUND'
-        ? 365 * 24 * 60 * 60 * 1000 : numberSetting('LLM_QUOTA_COOLDOWN_MS', 3600000, 1000, 86400000);
+        ? 365 * 24 * 60 * 60 * 1000 : numberSetting('LLM_QUOTA_COOLDOWN_MS', 60000, 1000, 86400000);
       this.unavailable.set(this.circuitKey(route), { until: Date.now() + cooldown,
         credentialHash: createHash('sha256').update(route.apiKey).digest('hex'), kind: error.kind });
       return;

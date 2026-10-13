@@ -191,7 +191,7 @@ async function main() {
     const { run: run429 } = await agentFor({ llm: failing });
     const limited = await run429('make it more energetic');
     ok('OpenAI 429 -> simple unavailable message, nothing faked', limited.ledger[0].status === 'UNSUPPORTED' &&
-      /AI editor is busy/u.test(limited.ledger[0].detail) && limited.ai.state !== 'AVAILABLE');
+      /XeePro is busy/u.test(limited.ledger[0].detail) && limited.ai.state !== 'AVAILABLE');
     const mixed = await run429('make captions yellow and make it more energetic');
     ok('with AI down, simple clauses still execute deterministically',
       mixed.ledger[0].status === 'DONE' && mixed.ledger[1].status === 'UNSUPPORTED');

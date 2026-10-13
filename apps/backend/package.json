@@ -80,7 +80,8 @@
     "verify:style-two-preview": "node scripts/verify-style-two-preview.cjs",
     "verify:edit-mode-ai": "npm run build && node scripts/verify-edit-mode-ai.cjs",
     "soak:edit-mode-ai": "npm run build && node scripts/soak-edit-mode-ai.cjs",
-    "test:xeepro-availability": "npm run build && node scripts/test-xeepro-availability.cjs"
+    "test:xeepro-availability": "npm run build && node scripts/test-xeepro-availability.cjs",
+    "test:xeepro-busy": "npm run build && node scripts/test-xeepro-busy.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.7",

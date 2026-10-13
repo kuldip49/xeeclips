@@ -23,6 +23,9 @@ import {
 const execFileAsync = promisify(execFile);
 import { buildTranscriptChunks } from './transcript-chunks';
 import { executionPolicyFor } from './execution-policy';
+import { assertProviderNotBusy, isXeeProBusyError, runInProviderBusyScope, XEEPRO_BUSY,
+  XEEPRO_BUSY_MESSAGE } from './generation-availability';
+import { UsageService } from '../auth/usage.service';
 import { FreeTranscriptIndex, rescoreFreePool, sentenceChunks, FREE_CANDIDATE_POOL } from '../free/free-moments';
 import {
   extractAudioToWav,
@@ -519,8 +522,11 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       { processingType?: unknown }).processingType);
     const outputAspectRatio = parseOutputAspectRatio((persisted as typeof persisted &
       { outputAspectRatio?: unknown }).outputAspectRatio);
-    return performanceContext.run(createPerformanceTelemetry(aiMode, processingType, outputAspectRatio),
-      () => this.processWithTelemetry(job));
+    // The scope lets any stage's provider call flag a busy XeePro provider; the stage checks below end the job instead of
+    // letting it quietly finish on the deterministic path.
+    return runInProviderBusyScope(() => performanceContext.run(
+      createPerformanceTelemetry(aiMode, processingType, outputAspectRatio),
+      () => this.processWithTelemetry(job)));
   }
 
   private async processWithTelemetry(job: Job<ProcessVideoJobData>) {
@@ -546,6 +552,8 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       error: string | null = null
     ) => {
       const terminal = status === 'COMPLETED' || status === 'SKIPPED' || status === 'FAILED';
+      // A stage that finished because the provider was busy must not be recorded as done: the job ends as XEEPRO_BUSY.
+      if (status === 'COMPLETED' || status === 'SKIPPED') assertProviderNotBusy();
       stageClock.checkpoint(name, status);
       await this.prisma.videoProcessingStage.update({
         where: { videoId_stage: { videoId, stage: name } },
@@ -1447,6 +1455,7 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       }
 
       stage = 'COMPLETED';
+      assertProviderNotBusy();
       await this.prisma.$transaction([
         this.prisma.videoProcessingStage.update({
           where: { videoId_stage: { videoId, stage: 'COMPLETED' } },
@@ -1476,7 +1485,10 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
     } catch (error) {
       stageClock.checkpoint(stage, 'FAILED');
       this.logProcessingError(error, stage, { processingJobId, videoId });
-      const message = formatProcessingJobError(error).slice(0, 2000);
+      // Capacity failures store a safe, product-level reason; the technical detail stays in the log above.
+      const busy = isXeeProBusyError(error) ? error : undefined;
+      if (busy) performance.providerFailureCategory = busy.category;
+      const message = busy ? XEEPRO_BUSY_MESSAGE : formatProcessingJobError(error).slice(0, 2000);
       const mediaError = isMediaProcessingError(error) ? error : undefined;
       await this.prisma.$transaction([
         this.prisma.videoProcessingStage.updateMany({
@@ -1486,10 +1498,15 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
         this.prisma.processingJob.update({
           where: { id: processingJobId },
           data: { status: 'FAILED', completedAt: new Date(), error: message,
-            errorCode: mediaError?.code ?? null, retryable: mediaError ? mediaError.retryable : true,
+            errorCode: busy ? XEEPRO_BUSY : mediaError?.code ?? null,
+            retryable: mediaError ? mediaError.retryable : true,
             telemetry: performance as unknown as Prisma.InputJsonValue }
         })
       ]);
+      // Release the credit now rather than at the next reconcile tick. Settlement is atomic and idempotent per reservation,
+      // so this and the periodic reconcile can never refund twice, and a job that delivered output is never refunded.
+      if (busy) await new UsageService(this.prisma).reconcile().catch((failure) =>
+        this.logger.warn('credit_release_deferred: ' + (failure instanceof Error ? failure.message : String(failure))));
       throw error;
     } finally {
       await frameWork;

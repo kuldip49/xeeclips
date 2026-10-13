@@ -1,4 +1,4 @@
-import { assertXeeProAvailable, isXeeProEnabled } from '../processing/generation-availability';
+import { assertXeeProAvailable, isXeeProEnabled, withProviderBusyGuard } from '../processing/generation-availability';
 import { UsageService } from '../auth/usage.service';
 import { xeeProHookApproved } from '../content-intelligence/hook-language';
 import { hookMeetsThreshold, type CreativeHook } from '../content-intelligence/creative-quality.service';
@@ -400,12 +400,12 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const exclude=Array.isArray(body.exclude)?body.exclude.filter((t):t is string=>typeof t==='string').map(t=>t.slice(0,200)).slice(0,30):[];
     const context=this.postCopyContext(q,body);
     const category=typeof body.category==='string'&&HOOK_CATEGORIES.includes(body.category as never)?body.category as ReframeHook['category']:undefined;
-    const {hooks,warnings,package:p}=await suggestHooks(this.router,context.transcript,external,exclude,
+    const {hooks,warnings,package:p}=await withProviderBusyGuard(()=>suggestHooks(this.router,context.transcript,external,exclude,
       {sourceId:context.sourceId,transcriptVersion:context.transcriptVersion,visualVersion:context.visualVersion,
        visibleText:[context.visibleText,context.subtitleText].filter(Boolean).join('\n'),sceneType:context.sceneType,visualSummary:context.visualSummary,
        speakerTurns:context.speakerTurns,template:context.template,boundaryQa:context.boundaryQa,
        sourceTitle:context.sourceContext?.sourcePostTitle,sourceCaption:context.sourceContext?.sourcePostText,sourceHashtags:context.sourceContext?.sourceHashtags},
-      typeof body.direction==='string'?body.direction.slice(0,500):'',category,context.selectedHook);
+      typeof body.direction==='string'?body.direction.slice(0,500):'',category,context.selectedHook));
     // Regenerate with nothing new keeps the current list rather than emptying it.
     if(hooks.length||!exclude.length){const saved=await this.prisma.quickReframe.updateMany({where:{id,postCopy:{equals:q.postCopy as Prisma.InputJsonValue},editProject:{revision:q.editProject.revision},status:q.status,operationId:q.operationId},data:{hooks:json(hooks),externalAiAuthorized:external,
       postCopy:json({...emptyPostCopy(),...record(q.postCopy),version:(Number(record(q.postCopy).version)||0)+1,
@@ -458,7 +458,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     if(rewrite!==undefined&&(!(REWRITE_DIRECTIONS as readonly unknown[]).includes(rewrite)||!record(q.sourceContext).sourcePostText))throw new BadRequestException('Choose a rewrite direction for an imported post caption.');
     const context=this.postCopyContext(q,body);
     if(body.externalAiAuthorized===true)assertXeeProAvailable();
-    const result=await generatePostCopy(this.router,context,body.externalAiAuthorized===true,typeof rewrite==='string'?rewrite:'');
+    const result=await withProviderBusyGuard(()=>generatePostCopy(this.router,context,body.externalAiAuthorized===true,typeof rewrite==='string'?rewrite:''));
     const prior={...emptyPostCopy(),...record(q.postCopy)} as ReframePostCopy;
     const hashtagOnly=body.hashtagsOnly===true;
     const copy:ReframePostCopy={...prior,version:prior.version+1,generatedCaptions:hashtagOnly?prior.generatedCaptions:result.generatedCaptions,generatedHashtagSets:result.generatedHashtagSets,

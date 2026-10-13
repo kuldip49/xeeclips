@@ -33,7 +33,7 @@ export const CLIP_LIMIT_HINT = 'Up to 8 clips for videos under 15 min, 20 up to 
 
 export const DEFAULT_ENTRY_SETTINGS: EntrySettings = {
   template: 'AUTOMATIC_1', count: 3, brief: '', platform: 'YOUTUBE_SHORTS', aspectRatio: '9:16',
-  aiMode: 'FALLBACK_ONLY'
+  aiMode: 'ONLINE'
 };
 
 export const ENTRY_TEMPLATE_LABELS: Record<EntryTemplate, string> = {

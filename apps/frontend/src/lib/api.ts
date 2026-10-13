@@ -111,12 +111,20 @@ export class ApiError extends Error {
   }
 }
 
+/** Stable product-level code: the XeePro provider has no capacity right now. Never carries provider detail. */
+export const XEEPRO_BUSY_CODE = 'XEEPRO_BUSY';
+export const XEEPRO_BUSY_MESSAGE = 'XeePro is busy right now. Try XeeFree or try again later.';
+export const isXeeProBusy = (error: unknown) => error instanceof ApiError && error.code === XEEPRO_BUSY_CODE;
+
 export function isProcessingServerUnavailableStatus(status: number) {
   return [502, 503, 504, 520, 521, 522, 523, 524, 530].includes(status);
 }
 
-export function retryVideo(videoId: string) {
-  return apiFetch<ProcessingJob>('/videos/' + encodeURIComponent(videoId) + '/retry', { method: 'POST' });
+/** `aiMode: 'FALLBACK_ONLY'` is the explicit "Use XeeFree" choice for a job that failed as XEEPRO_BUSY; nothing switches on its own. */
+export function retryVideo(videoId: string, aiMode?: 'FALLBACK_ONLY') {
+  return apiFetch<ProcessingJob>('/videos/' + encodeURIComponent(videoId) + '/retry', aiMode
+    ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ aiMode }) }
+    : { method: 'POST' });
 }
 
 export function deleteVideo(videoId: string) {
@@ -260,6 +268,11 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
 
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith('/auth/') && typeof window !== 'undefined') window.dispatchEvent(new Event('xeeclip-auth-expired'));
+    if (response.status === 503) {
+      // A busy XeePro provider is a product answer, not an outage of the processing server.
+      const busy = await response.clone().json().catch(() => null) as { code?: unknown } | null;
+      if (busy?.code === XEEPRO_BUSY_CODE) throw new ApiError(XEEPRO_BUSY_MESSAGE, 503, XEEPRO_BUSY_CODE, true);
+    }
     if (isProcessingServerUnavailableStatus(response.status)) {
       throw new ApiError("Processing server is currently unavailable.", response.status);
     }

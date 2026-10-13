@@ -124,6 +124,10 @@ XeeFree job or XeeFree project can reach, take the deterministic path directly i
 (sentence reconstruction, typed frames, moment scoring, the typed-slot hook engine and its 12-point gate, caption/speaker/zoom helpers) lives in
 `src/modules/free/`; see `docs/xeefree-pipeline.md`. Run `npm --workspace apps/backend run test:xeefree` after touching it.
 
+### XeePro busy is a per-request result, not a flag
+
+`XEEPRO_ENABLED` is only the owner's kill switch (default on). A provider 429/quota/overload ends the Pro job as `XEEPRO_BUSY` (HTTP 503 for request-level calls; `errorCode` on the job) with a safe message, refunds the credit once, and never falls back to XeeFree on its own. Capacity is never stored: the next request tries the provider live (quota cooldown default 60 s). See `docs/xeepro-availability.md`; run `npm --workspace apps/backend run test:xeepro-busy` after touching routing, the processor or clip creation.
+
 ### Data model
 
 Prisma schema: `apps/backend/prisma/schema.prisma`. One row per pipeline stage per chunk/video

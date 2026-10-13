@@ -54,7 +54,7 @@ const modeLegend = form.indexOf("text-sm font-medium'>Mode</legend>");
 ok(modeLegend > 0 && modeLegend < form.indexOf("type='submit'"), 'the mode is chosen before the Generate button');
 
 // --- Defaults and restore ----------------------------------------------------------------
-ok(entry.DEFAULT_ENTRY_SETTINGS.aiMode === 'FALLBACK_ONLY', 'new creations default to XeeFree');
+ok(entry.DEFAULT_ENTRY_SETTINGS.aiMode === 'ONLINE', 'new creations default to XeePro');
 const restored = (aiMode) => entry.settingsFromImport({ aiMode, autoGeneration: null }).aiMode;
 ok(restored('FALLBACK_ONLY') === 'FALLBACK_ONLY', 'a XeeFree import restores as XeeFree');
 ok(restored('OFFLINE') === 'FALLBACK_ONLY', 'a legacy OFFLINE import restores as XeeFree, never as paid XeePro');
@@ -71,10 +71,10 @@ ok(!/Normal Clips|Edited Clips|Processing Type<\/legend>/u.test(form), 'the Norm
 
 console.log(`AI mode upload UI tests passed (${checks} checks).`);
 
-assert.equal(entry.DEFAULT_ENTRY_SETTINGS.aiMode, 'FALLBACK_ONLY', 'Create defaults to XeeFree');
-assert(form.includes('setProEnabled(result.xeePro === true)'), 'availability comes from the server');
-assert(form.includes('disabled={unavailable}'), 'Pro uses a disabled native radio');
-assert(form.includes('XeePro is temporarily unavailable. XeeFree is available.'), 'unavailability message is product-only');
-assert(form.includes("aiMode: 'FALLBACK_ONLY'") && form.includes('if (!result.xeePro)'), 'stale Pro choices move to Free');
+assert.equal(entry.DEFAULT_ENTRY_SETTINGS.aiMode, 'ONLINE', 'Create restores the normal default');
+assert(form.includes('setProEnabled(result.xeePro !== false)'), 'only the explicit owner switch disables Pro');
+assert(form.includes("const unavailable = option.value === 'ONLINE' && proEnabled === false;"), 'Pro is selectable unless the owner switch is off');
+assert(!form.includes('proEnabled !== true'), 'unknown or empty-quota state never greys out XeePro');
+assert(form.includes('isXeeProBusy(cause)') && form.includes('Use XeeFree') && form.includes("update({ aiMode: 'FALLBACK_ONLY' })"), 'busy answer offers XeeFree as a user action');
 assert(!/quota|API key|OpenAI|gpt-[0-9]/i.test(form), 'mode UI exposes no provider internals');
-console.log('PASS 6 temporary availability UI contracts');
+console.log('PASS 5 availability UI contracts');

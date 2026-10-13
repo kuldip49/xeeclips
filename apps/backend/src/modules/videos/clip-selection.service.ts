@@ -1,4 +1,5 @@
-import { assertNewProcessingMode } from '../processing/generation-availability';
+import { assertNewProcessingMode, assertProviderNotBusy, isXeeProBusyError, runInProviderBusyScope, XEEPRO_BUSY,
+  XEEPRO_BUSY_MESSAGE, XeeProBusyError } from '../processing/generation-availability';
 import { isXeeFree } from '../processing/execution-policy';
 import { diversifyOrder } from '../free/free-moments';
 import { UsageService } from '../auth/usage.service';
@@ -597,8 +598,14 @@ export class ClipSelectionService {
     const requestedClipCount = validateRequestedClipCount(request.requestedClipCount, maxClipCount);
     if (!job || job.status !== 'COMPLETED')
       throw new ConflictException('Video analysis is not complete yet');
-    const generationSettings = await this.buildGenerationSettings(request.generation,
-      String(jsonObject(job.telemetry).effectiveAiMode ?? job.aiMode));
+    // Brief interpretation may call the Pro provider. If it is busy the request ends here (HTTP 503 XEEPRO_BUSY), before a credit
+    // is reserved or any state is written; it never continues on the local interpreter under a Pro label.
+    const generationSettings = await runInProviderBusyScope(async () => {
+      const settings = await this.buildGenerationSettings(request.generation,
+        String(jsonObject(job.telemetry).effectiveAiMode ?? job.aiMode));
+      assertProviderNotBusy();
+      return settings;
+    });
     // A styled automatic request keeps the golden AI_EDITED selection/edit
     // pipeline, then applies only its canonical style delta in EditMode.
     const outputStyle: OutputStyle = request.outputStyle ?? (generationSettings?.resolved.styled
@@ -635,7 +642,7 @@ export class ClipSelectionService {
         generationSettings: generationSettings
           ? generationSettings as unknown as Prisma.InputJsonValue : Prisma.DbNull,
         processingType: processingTypeForOutputStyle(outputStyle), selectedCandidateIds: [],
-        clipRenderStatus: 'QUEUED', clipRenderError: null, clipRequestedAt: requestedAt,
+        clipRenderStatus: 'QUEUED', clipRenderError: null, errorCode: null, clipRequestedAt: requestedAt,
         clipRenderStartedAt: null } });
       if (result.count) {
         const owner = await tx.project.findUniqueOrThrow({ where: { id: video.projectId }, select: { userId: true } });
@@ -665,9 +672,12 @@ export class ClipSelectionService {
   async markFailed(request: ClipRenderRequest, error: unknown, message = RENDER_FAILED_MESSAGE) {
     this.logger.error(`Clip creation failed for ${request.videoId}: ${
       error instanceof Error ? error.stack ?? error.message : String(error)}`);
+    // A busy XeePro provider is stored as a safe product-level reason (never the provider's text) with a stable code.
+    const busy = isXeeProBusyError(error) ? error : undefined;
     await this.prisma.processingJob.updateMany({ where: { id: request.processingJobId,
       clipRequestedAt: new Date(request.requestedAt), clipRenderStatus: { in: ACTIVE_RENDER_STATES } },
-    data: { clipRenderStatus: 'FAILED', clipRenderError: message } }).catch(() => undefined);
+    data: busy ? { clipRenderStatus: 'FAILED', clipRenderError: XEEPRO_BUSY_MESSAGE, errorCode: XEEPRO_BUSY }
+      : { clipRenderStatus: 'FAILED', clipRenderError: message } }).catch(() => undefined);
     await this.settleRequest(request);
   }
 
@@ -683,6 +693,10 @@ export class ClipSelectionService {
    * resumes; already rendered variants are reused, so nothing is rendered twice.
    */
   async processRequest(request: ClipRenderRequest) {
+    return runInProviderBusyScope(() => this.processScopedRequest(request));
+  }
+
+  private async processScopedRequest(request: ClipRenderRequest) {
     const requestedAt = new Date(request.requestedAt);
     const job = await this.prisma.processingJob.findUnique({ where: { id: request.processingJobId } });
     if (!job || job.clipRequestedAt?.getTime() !== requestedAt.getTime() || !isActiveRender(job) ||
@@ -768,6 +782,7 @@ export class ClipSelectionService {
     const candidatePerformance: Array<Record<string, unknown>> = [];
     let nextIndex = 0, inFlight = 0, attempted = 0;
     let fatalError: ClipInfrastructureError | null = null;
+    let busyError: XeeProBusyError | null = null;
     const completionMs: number[] = [];
     const concurrency = processingType === 'EDITED_CLIPS' ? aiEditedRenderConcurrency() : 1;
     const batchExporter = this.exporter as ClipExportService & { prepareBatchSource?:
@@ -786,7 +801,7 @@ export class ClipSelectionService {
       while (true) {
         // Reserving in-flight slots prevents the pool from rendering more clips
         // than can still be returned, while a failure releases its slot at once.
-        if (fatalError || selectedByIndex.size + inFlight >= requestedClipCount ||
+        if (fatalError || busyError || selectedByIndex.size + inFlight >= requestedClipCount ||
           nextIndex >= ordered.length) return;
         const index = nextIndex++;
         const candidate = ordered[index];
@@ -849,6 +864,9 @@ export class ClipSelectionService {
             totalCandidateMs: Date.now() - candidateStarted }));
         } catch (error) {
           if (error instanceof SupersededRequestError) throw error;
+          // The Pro provider has no capacity: stop picking candidates and end the request. It is not a candidate failure and
+          // must not move on to the next candidate on a local fallback.
+          if (error instanceof XeeProBusyError) { busyError = error; return; }
           if (error instanceof ClipInfrastructureError) {
             fatalError = error;
             this.logger.error(JSON.stringify({ event: 'clip_infrastructure_failure', videoId: video.id,
@@ -927,6 +945,7 @@ export class ClipSelectionService {
         const available = ordered.length - nextIndex;
         if (available > 0) await Promise.all(Array.from({ length: Math.min(concurrency,
           requestedClipCount - selectedByIndex.size, available) }, (_, index) => worker(index)));
+        if (busyError) throw busyError;
         if (fatalError) throw fatalError;
         if (selectedByIndex.size >= requestedClipCount) break;
         candidateExpansionTriggered = true;

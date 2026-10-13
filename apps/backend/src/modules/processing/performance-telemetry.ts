@@ -75,7 +75,10 @@ export function createPerformanceTelemetry(aiMode: unknown = AiProcessingMode.FA
     selectedClipTimestamps: [] as Array<{ startTime: number; endTime: number }>,
     clipDecisionSource: 'DETERMINISTIC_FALLBACK' as ClipDecisionSource,
     deterministicFallbackUsed: false,
-    fallbackReason: '' };
+    fallbackReason: '',
+    // Internal only: why a XeePro job ended because the provider had no capacity (never shown to users).
+    providerFailureCategory: '' as '' | 'PROVIDER_BUSY' | 'PROVIDER_RATE_LIMITED' | 'PROVIDER_QUOTA_UNAVAILABLE'
+      | 'PROVIDER_UNAVAILABLE' };
 }
 export const performanceContext = new AsyncLocalStorage<ReturnType<typeof createPerformanceTelemetry>>();
 export function currentAiProcessingMode() {

@@ -1,4 +1,4 @@
-import { XEEPRO_UNAVAILABLE_MESSAGE } from '../processing/generation-availability';
+import { XEEPRO_BUSY, XEEPRO_BUSY_MESSAGE, XEEPRO_UNAVAILABLE_MESSAGE } from '../processing/generation-availability';
 // Step 6: honest, distinct user-facing states for semantic-AI failures.
 //
 // Production semantic AI is the OpenAI API (backend-only key). When it cannot be
@@ -21,7 +21,10 @@ export type AiAvailability = {
   /** One sentence for the UI. */
   message: string;
   failureKind: LlmFailureKind | null;
+  /** Stable product code when the provider has no capacity right now; null otherwise. */
+  code: typeof XEEPRO_BUSY | null;
 };
+const BUSY_STATES = new Set<AiAvailabilityState>(['RATE_LIMITED', 'QUOTA_EXHAUSTED', 'PROVIDER_ERROR', 'CIRCUIT_OPEN']);
 
 const STILL_WORKS = 'Manual editing and automatic generation are still available.';
 
@@ -34,12 +37,13 @@ const MESSAGES: Record<Exclude<AiAvailabilityState, 'AVAILABLE'>, string> = {
   NOT_CONFIGURED: 'The AI editor is unavailable right now.',
   DISABLED: 'The AI editor is unavailable right now.',
   AUTH_FAILED: 'The AI editor is unavailable right now.',
-  RATE_LIMITED: 'The AI editor is busy. Try again in a minute.',
-  QUOTA_EXHAUSTED: 'The AI editor is unavailable right now.',
+  // Provider capacity states share one product-level message; it never names the provider, a model or a quota.
+  RATE_LIMITED: XEEPRO_BUSY_MESSAGE,
+  QUOTA_EXHAUSTED: XEEPRO_BUSY_MESSAGE,
   TIMEOUT: 'The AI editor took too long to respond. Try again.',
   NETWORK: 'The AI editor could not connect. Try again.',
-  PROVIDER_ERROR: 'The AI editor is temporarily unavailable. Try again.',
-  CIRCUIT_OPEN: 'The AI editor is paused briefly. Try again soon.',
+  PROVIDER_ERROR: XEEPRO_BUSY_MESSAGE,
+  CIRCUIT_OPEN: XEEPRO_BUSY_MESSAGE,
   INVALID_RESPONSE: 'The AI editor could not use that result, so nothing was changed.',
   UNKNOWN: 'The AI editor is temporarily unavailable.'
 };
@@ -67,12 +71,12 @@ const RETRYABLE = new Set<AiAvailabilityState>(['RATE_LIMITED', 'TIMEOUT', 'NETW
   'PROVIDER_ERROR', 'CIRCUIT_OPEN', 'INVALID_RESPONSE', 'UNKNOWN']);
 
 export function aiAvailable(): AiAvailability {
-  return { state: 'AVAILABLE', retryable: false, message: 'AI editor available.', failureKind: null };
+  return { state: 'AVAILABLE', retryable: false, message: 'AI editor available.', failureKind: null, code: null };
 }
 
 export function aiUnavailable(state: Exclude<AiAvailabilityState, 'AVAILABLE'>,
   failureKind: LlmFailureKind | null = null): AiAvailability {
-  return { state, retryable: RETRYABLE.has(state), failureKind,
+  return { state, retryable: RETRYABLE.has(state), failureKind, code: BUSY_STATES.has(state) ? XEEPRO_BUSY : null,
     message: state === 'NOT_REQUESTED' || state === 'XEEFREE' ? MESSAGES[state] : `${MESSAGES[state]} ${STILL_WORKS}` };
 }
 
