@@ -8,7 +8,7 @@
 
 import { LlmProviderError, type LlmFailureKind } from '../processing/llm-provider.service';
 
-export const AI_AVAILABILITY_STATES = ['AVAILABLE', 'NOT_REQUESTED', 'NOT_CONFIGURED', 'DISABLED', 'AUTH_FAILED',
+export const AI_AVAILABILITY_STATES = ['AVAILABLE', 'NOT_REQUESTED', 'XEEFREE', 'NOT_CONFIGURED', 'DISABLED', 'AUTH_FAILED',
   'RATE_LIMITED', 'QUOTA_EXHAUSTED', 'TIMEOUT', 'NETWORK', 'PROVIDER_ERROR', 'CIRCUIT_OPEN',
   'INVALID_RESPONSE', 'UNKNOWN'] as const;
 export type AiAvailabilityState = typeof AI_AVAILABILITY_STATES[number];
@@ -27,6 +27,8 @@ const STILL_WORKS = 'Manual editing and automatic generation are still available
 const MESSAGES: Record<Exclude<AiAvailabilityState, 'AVAILABLE'>, string> = {
   // The caller chose built-in rules on purpose (e.g. the live style preview). Not an outage.
   NOT_REQUESTED: 'The AI editor was not needed for this step.',
+  // XeeFree projects never reach a cloud model. Built-in tools handle direct commands.
+  XEEFREE: 'XeeFree edits use built-in tools: direct commands such as trim, zoom, crop, volume, captions and hook changes work. Open-ended requests are not supported.',
   NOT_CONFIGURED: 'The AI editor is unavailable right now.',
   DISABLED: 'The AI editor is unavailable right now.',
   AUTH_FAILED: 'The AI editor is unavailable right now.',
@@ -69,7 +71,7 @@ export function aiAvailable(): AiAvailability {
 export function aiUnavailable(state: Exclude<AiAvailabilityState, 'AVAILABLE'>,
   failureKind: LlmFailureKind | null = null): AiAvailability {
   return { state, retryable: RETRYABLE.has(state), failureKind,
-    message: state === 'NOT_REQUESTED' ? MESSAGES[state] : `${MESSAGES[state]} ${STILL_WORKS}` };
+    message: state === 'NOT_REQUESTED' || state === 'XEEFREE' ? MESSAGES[state] : `${MESSAGES[state]} ${STILL_WORKS}` };
 }
 
 /** Maps any thrown provider error to one honest availability state. */

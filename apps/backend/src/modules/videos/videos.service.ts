@@ -516,8 +516,9 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
         g."contentPackaging"->'sharedPackage'->'hashtagSets' AS "hashtags",
         g."contentPackaging"->'sharedPackage'->'understanding'->>'version' AS "understandingVersion",
         e."settings"->'generationStyle' AS "generationStyle",
-        (SELECT j."telemetry"->>'effectiveAiMode' FROM "ProcessingJob" j WHERE j."videoId" = g."videoId"
-          ORDER BY j."createdAt" DESC LIMIT 1) AS "effectiveAiMode"
+        COALESCE(g."editTelemetry"->>'effectiveAiMode', g."editTelemetry"->>'requestedAiMode',
+          (SELECT j."telemetry"->>'effectiveAiMode' FROM "ProcessingJob" j WHERE j."videoId" = g."videoId"
+          ORDER BY j."createdAt" DESC LIMIT 1)) AS "effectiveAiMode"
       FROM "GeneratedClip" g LEFT JOIN "EditProject" e ON e."generatedClipId" = g."id"
       WHERE g."id" IN (${Prisma.join(clips.map((clip) => clip.id))})`;
     const byId = new Map(extracted.map((row) => [row.id, row]));

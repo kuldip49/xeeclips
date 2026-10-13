@@ -1,6 +1,7 @@
 import type { EditPlan, SubtitleEmphasis, TimedWord } from './edit-plan';
 import { fallbackMusicMood } from './music-library';
 import { semanticZoomTarget, ZOOM_TUNING } from './zoom-planner';
+import { freeEmphasisPicks } from '../free/free-emphasis';
 
 // Non-LLM editorial signals for plans produced without Luna (OFFLINE,
 // FALLBACK_ONLY, or a failed plan). Only spoken words are ever emphasized.
@@ -40,7 +41,11 @@ function score(word: TimedWord) {
   return 0;
 }
 
-export function applyDeterministicEditorial(plan: EditPlan, words: TimedWord[], transcript: string): EditPlan {
+/**
+ * `semantic` is XeeFree's sentence-aware mode: zooms land on the beat of a sentence that matters (payoff, conclusion, number, turn of a
+ * contrast, cause, answer) instead of on the loudest-looking single word. XeePro's fallback keeps the original word-level behaviour.
+ */
+export function applyDeterministicEditorial(plan: EditPlan, words: TimedWord[], transcript: string, options: { semantic?: boolean } = {}): EditPlan {
   const inRange = words.filter((word) => word.start >= plan.clipStartSec && word.end <= plan.clipEndSec);
   const duration = plan.clipEndSec - plan.clipStartSec;
   const limit = semanticZoomTarget(duration);
@@ -51,9 +56,14 @@ export function applyDeterministicEditorial(plan: EditPlan, words: TimedWord[], 
     picked.push(word);
   }
   picked.sort((a, b) => a.start - b.start);
+  const semantic = options.semantic ? freeEmphasisPicks(inRange, plan.clipStartSec, plan.clipEndSec, limit) : [];
+  const semanticByStart = new Map(semantic.map(item => [item.word.start, item]));
   const subtitleEmphasis: SubtitleEmphasis[] = plan.subtitleEmphasis.length ? plan.subtitleEmphasis :
-    picked.map((word) => ({ word: word.text, startSec: word.start, endSec: word.end,
-      strength: score(word) >= 2.5 ? 'STRONG' as const : 'MEDIUM' as const }));
+    [...picked, ...semantic.map(item => inRange.find(word => word.start === item.word.start)).filter((word): word is TimedWord => !!word)]
+      .filter((word, index, all) => all.findIndex(other => other.start === word.start) === index).sort((a, b) => a.start - b.start)
+      .map((word) => ({ word: word.text, startSec: word.start, endSec: word.end,
+        strength: score(word) >= 2.5 || ['PAYOFF', 'NUMBER', 'CONTRAST', 'CONCLUSION'].includes(semanticByStart.get(word.start)?.kind ?? '')
+          ? 'STRONG' as const : 'MEDIUM' as const }));
   const operations = [...plan.operations];
   // Without Luna the beats are whatever the deterministic scorer found. Zoom is
   // the only motion device now, so the fallback plans a real handful of them -
@@ -63,7 +73,12 @@ export function applyDeterministicEditorial(plan: EditPlan, words: TimedWord[], 
     const strength = new Map(subtitleEmphasis.map((item) => [item.startSec, item.strength]));
     const budget = semanticZoomTarget(duration);
     const chosen: TimedWord[] = [];
-    for (const word of [...picked].sort((a, b) => score(b) - score(a))) {
+    // Sentence-aware beats first (XeeFree); the word-level scorer is used only when the clip has no sentence beat at all.
+    for (const item of semantic) {
+      const word = inRange.find(candidate => candidate.start === item.word.start);
+      if (word && chosen.length < budget) chosen.push(word);
+    }
+    for (const word of semantic.length ? [] : [...picked].sort((a, b) => score(b) - score(a))) {
       if (chosen.length >= budget || score(word) < 1.4) break;
       if (word.start <= plan.clipStartSec + 1.5 || word.end >= plan.clipEndSec - 1.2) continue;
       if (chosen.some((other) => Math.abs(other.start - word.start) < ZOOM_TUNING.localPeakSpacingSec)) continue;
@@ -72,9 +87,13 @@ export function applyDeterministicEditorial(plan: EditPlan, words: TimedWord[], 
     for (const word of chosen.sort((a, b) => a.start - b.start)) {
       const numeric = /\d|\b(million|billion|percent|hundred|thousand)\b/iu.test(word.text);
       const strong = strength.get(word.start) === 'STRONG';
+      const kind = semanticByStart.get(word.start)?.kind;
+      const reasons: Record<string, string> = { PAYOFF: 'Payoff emphasis', CONCLUSION: 'Conclusion emphasis', NUMBER: 'Statistic emphasis',
+        CONTRAST: 'Contrast turn emphasis', REASON: 'Reason emphasis', ANSWER: 'Answer emphasis', QUESTION: 'Question emphasis',
+        ADVICE: 'Advice emphasis', KEY_TERM: 'Emphasis on key spoken word' };
       operations.push({ type: 'ZOOM', startSec: Math.max(plan.clipStartSec, word.start - .3),
         endSec: Math.min(plan.clipEndSec, word.end + 1.2),
-        reason: numeric ? 'Statistic emphasis' : 'Emphasis on key spoken word',
+        reason: kind ? reasons[kind] : numeric ? 'Statistic emphasis' : 'Emphasis on key spoken word',
         scale: strong ? 1.3 : 1.2, focusX: null, focusY: null, target: 'FACE', words: [],
         intensity: strong ? 'STRONG' : 'NORMAL',
         triggerText: word.text.replace(/[^\p{L}\p{N}%$' ]/gu, '') });

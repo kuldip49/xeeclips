@@ -335,8 +335,9 @@ async function main() {
     + 'I used to think every request deserved a yes. And I realized that saying yes to everyone was leaving no time for focused work. '
     + 'Protecting time for your priorities means accepting that some people will disagree with your decisions. Chasing approval makes decisions depend on others.';
   const richOffline = deterministicHookSuggestions({ mode: 'REWRITE', current: hookBeforeAi, tried: [], opening: '', transcript: richTranscript });
+  // The XeeFree engine builds hooks from the transcript's own frames; it no longer carries a hand-written reframing for this one fixture.
   assert(richOffline.length > 0 && richOffline.every((hook) => hook.source === 'DETERMINISTIC')
-    && richOffline.some((hook) => hook.text === 'Where approval ends, boundaries begin'),
+    && richOffline.some((hook) => /approval|boundaries|disagree|yes/iu.test(hook.text)),
   'when a good grounded hook CAN be produced offline it is still returned');
   const refused = await chat.plan(aiProject.id, { message: 'change the on screen hook', revision: aiProject.revision,
     selectedElementId: null, selectedTimeRange: null, playheadSec: 4.5 });

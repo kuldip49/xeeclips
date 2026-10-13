@@ -18,6 +18,7 @@ import { randomUUID } from 'crypto';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../database/prisma.service';
 import { LlmRouterService } from '../../processing/llm-router.service';
+import { projectExecutionPolicy } from '../../processing/execution-policy';
 import { aiAvailable, aiUnavailable, type AiAvailability } from '../../ai/ai-availability';
 import { EditModeService, type AssistantBundleCommand } from '../edit-mode.service';
 import { EditTemplateService } from '../edit-template.service';
@@ -98,8 +99,10 @@ export class EditAgentService {
       select: { settings: true, revision: true } });
     if (!project) throw new NotFoundException('EditProject not found');
     const agent = record(record(project.settings).agent);
+    // A XeeFree project never reaches a cloud model, so its AI state is stated plainly instead of depending on the deployment's mode.
+    const free = projectExecutionPolicy(project.settings)?.mode === 'XEEFREE';
     return { revision: project.revision, autonomy: readAutonomy(agent.autonomy),
-      runs: Array.isArray(agent.runs) ? agent.runs : [], ai: this.aiConfigured() };
+      runs: Array.isArray(agent.runs) ? agent.runs : [], ai: free ? aiUnavailable('XEEFREE') : this.aiConfigured() };
   }
 
   async setAutonomy(id: string, value: unknown) {
@@ -124,7 +127,9 @@ export class EditAgentService {
   // ===========================================================================
 
   async run(id: string, input: AgentRunInput): Promise<AgentRun> {
-    if (chatPlannerAiMode().toUpperCase() === 'ONLINE' && input.aiConsent !== true) {
+    // Consent exists to authorize sending data to a cloud model. A XeeFree project sends nothing, so it needs none (and gets no model).
+    const freeProject = projectExecutionPolicy((await this.prisma.editProject.findUnique({ where: { id }, select: { settings: true } }))?.settings)?.mode === 'XEEFREE';
+    if (!freeProject && chatPlannerAiMode().toUpperCase() === 'ONLINE' && input.aiConsent !== true) {
       throw new ForbiddenException('Allow Ask AI before sending a request.');
     }
     const message = typeof input.message === 'string' ? input.message.trim() : '';
@@ -279,7 +284,8 @@ export class EditAgentService {
         if (!plan) {
           this.settle(unit, 'UNSUPPORTED', ai.state === 'AVAILABLE'
             ? 'The AI planner did not return a plan for this clause.'
-            : `This needs the AI editor to understand. ${ai.message}`);
+            : ai.state === 'XEEFREE' ? `This request is open-ended, and XeeFree does not use an AI model to interpret it, so nothing was changed. Say the exact change instead, for example "zoom in at 5 seconds", "mute the music", "trim the first 2 seconds" or "shorten the hook".`
+              : `This needs the AI editor to understand. ${ai.message}`);
           // Keep the real availability (e.g. AUTH_FAILED), not just its sentence.
           if (ai.state !== 'AVAILABLE') unit.ai = ai;
           continue;

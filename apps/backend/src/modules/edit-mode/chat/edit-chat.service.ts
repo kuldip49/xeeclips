@@ -494,20 +494,23 @@ export class EditChatService {
     const input = { mode, current, tried, opening: context.transcript.opening,
       transcript: context.runtime.creativeEvidence?.transcript ?? context.runtime.groundingText,
       evidence: context.runtime.creativeEvidence };
-    const model = await modelHookSuggestions({ llm: this.llm, logger: this.logger, ...input });
+    // A XeeFree project is never sent to a cloud model, whatever the deployment's AI mode: its hook wording is the local engine's.
+    const freeProject = context.project.freeOnly;
+    const model = freeProject ? { suggestions: [], attempted: false, latencyMs: 0 }
+      : await modelHookSuggestions({ llm: this.llm, logger: this.logger, ...input });
     if (model.suggestions.length) {
       const suggestion = model.suggestions[0];
       if (suggestion.approvedHook && projectId) await this.editMode.saveCreativeSuggestions(projectId, context.project.revision,
         { hookLanguageGate: 'XEEPRO_V1', hooks: [suggestion.approvedHook], selectedHook: suggestion.text, status: 'ACCEPTED' });
       return { suggestion };
     }
-    const local = chatPlannerAiMode().toUpperCase() === 'ONLINE' ? [] : deterministicHookSuggestions(input);
+    const local = !freeProject && chatPlannerAiMode().toUpperCase() === 'ONLINE' ? [] : deterministicHookSuggestions(input);
     if (local.length) return { suggestion: local[0] };
     const why = mode === 'SHORTER'
       ? 'That hook is already about as short as a complete headline can be.'
       : `I couldn't find another headline that is supported by what is said in the video${
         tried.length ? ` - I have already shown you ${tried.length}` : ''}.`;
-    return { question: `${why}${model.attempted ? '' : ` ${mode === 'SHORTER'
+    return { question: `${why}${model.attempted ? '' : freeProject ? ' XeeFree writes hooks only from what is said in the video.' : ` ${mode === 'SHORTER'
       ? 'Rewording it more tightly' : 'Writing a fresh angle'} needs ONLINE AI mode; direct edits ` +
       'still work.'} You can also tell me the exact wording.`,
     route: model.attempted ? 'CREATIVE_LLM' : 'CREATIVE_DETERMINISTIC',

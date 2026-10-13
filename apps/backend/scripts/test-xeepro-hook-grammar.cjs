@@ -72,10 +72,12 @@ function judged(text, over={}) {
   const holistic=await new CreativePackageService({async generate(i){return {data:i.role==='critic'?{supported:true}: {hooks:[hook(corrected)]}};}})
     .create({external:true,hooksOnly:true,evidence});
   assert.equal(holistic.hooks.length,0);cases++;
-  // The same local baseline is preserved for XeeFree and never calls a provider.
+  // XeeFree has its own typed-slot hook engine: it never calls a provider, never carries the XeePro gate marker, and can no longer
+  // produce the stitched "What's behind X and Y?" / "X through the lens of Y" salad the old template baseline emitted for this clip.
   const free=await new CreativePackageService({generate(){throw Error('must not call');}}).create({external:false,evidence,hooksOnly:true});
   assert.equal(free.hookLanguageGate,undefined);
-  assert.deepEqual(free.hooks.map(h=>h.text),q.rank(deterministicCreative(evidence).hooks,evidence,u,'LOCAL').map(h=>h.text));cases++;
+  assert(free.hooks.every(h=>h.source==='LOCAL' && !/what['’]s behind|through the lens of|what actually matters/iu.test(h.text) && require('../dist/modules/content-intelligence/hook-language').hookLanguageProblems(h.text).length===0));
+  assert(!free.hooks.some(h=>/\b(?:tell|reason|explanation|changes)\b and\b/iu.test(h.text)),'no stitched transcript words');cases++;
   const bad=fixtures[0].oldHook, plan={...fallbackEditPlan(0,5,'9:16'),hookRequired:true,
     onScreenHook:{enabled:true,text:bad,startSec:0,endSec:5,position:'TOP',style:'TOP_HEADLINE'}};
   await assert.rejects(new VideoEditExecutorService().execute('missing.mp4','out.mp4',plan,[],[],[],[],{xeePro:true}),/grammar\/clarity review required/);cases++;

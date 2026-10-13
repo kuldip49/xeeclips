@@ -14,7 +14,7 @@
 //
 // There is no "podcast always gets five zooms" anywhere in here, by design.
 
-import { deterministicCreative } from '../../content-intelligence/creative-package.service';
+import { freeCreative } from '../../free/free-creative';
 import type { CreativeHook } from '../../content-intelligence/creative-quality.service';
 import { localUnderstanding } from '../../content-intelligence/content-understanding.service';
 import { sharedQuality } from '../../content-intelligence/creative-quality.service';
@@ -169,8 +169,8 @@ function resolveHook(policy: EditPresetPolicy, evidence: PresetEvidence,
     return { policy: 'OFF' as const, text: null };
   }
   if (override?.text) return { policy: policy.hookPolicy, text: override.text };
-  const clipEvidence = {transcript:evidence.transcriptText}, understanding = localUnderstanding(clipEvidence);
-  const scored = sharedQuality.rank(deterministicCreative(clipEvidence,understanding).hooks,clipEvidence,understanding,'LOCAL')[0];
+  // XeeFree wording: the typed-slot hook engine and its gate (no keyword template, no model).
+  const scored = freeCreative({ transcript: evidence.transcriptText }).hooks[0];
   if (!scored) {
     warnings.push('No headline could be grounded in the source words at an acceptable quality, ' +
       'so no hook is added.');

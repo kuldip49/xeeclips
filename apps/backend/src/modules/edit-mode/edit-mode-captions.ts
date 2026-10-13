@@ -96,6 +96,8 @@ export function generateCaptions(input: {
   /** Optional deterministic starting width. Automatic-plan reconstruction uses
    * the persisted maxWordsPerLine; ordinary EditMode generation keeps 5. */
   wordsPerCaption?: number;
+  /** XeeFree: never end a caption line on a weak word ("the", "to", "and"). */
+  avoidWeakEnds?: boolean;
 }): CaptionGenerationResult {
   const warnings: string[] = [];
   const usable = input.words.filter((word) => Number.isFinite(word.start) &&
@@ -108,10 +110,10 @@ export function generateCaptions(input: {
   let wordsPerCaption = Number.isInteger(input.wordsPerCaption)
     ? Math.max(1, Math.min(MAX_WORDS_PER_CAPTION, input.wordsPerCaption!))
     : DEFAULT_WORDS_PER_CAPTION;
-  let captions = build(usable, input.map, wordsPerCaption);
+  let captions = build(usable, input.map, wordsPerCaption, input.avoidWeakEnds);
   while (captions.length > input.limit && wordsPerCaption < MAX_WORDS_PER_CAPTION) {
     wordsPerCaption += 1;
-    captions = build(usable, input.map, wordsPerCaption);
+    captions = build(usable, input.map, wordsPerCaption, input.avoidWeakEnds);
   }
   if (captions.length > input.limit) {
     throw new CaptionGenerationError('TOO_MANY_SUBTITLES',
@@ -130,9 +132,9 @@ export function generateCaptions(input: {
   return { captions, wordTimings: input.wordTimings, wordsPerCaption, grouped, warnings };
 }
 
-function build(words: TimedWord[], map: TimelineMap, maxWords: number): CaptionSpec[] {
+function build(words: TimedWord[], map: TimelineMap, maxWords: number, avoidWeakEnds = false): CaptionSpec[] {
   const captions: CaptionSpec[] = [];
-  for (const grouped of buildSubtitlePhrases(words, maxWords)) {
+  for (const grouped of buildSubtitlePhrases(words, maxWords, { avoidWeakEnds })) {
     // A phrase whose first word was cut away (the clip opens just after a trimmed lead-in such as "So", or a
     // cut lands inside it) has no timeline position of its own. Caption the words that remain instead of
     // losing the whole phrase: otherwise the first spoken words of the clip would have no caption.

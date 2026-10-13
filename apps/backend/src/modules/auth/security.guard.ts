@@ -1,4 +1,6 @@
-import { CanActivate, ExecutionContext, ForbiddenException, HttpException, Injectable, Logger } from '@nestjs/common';
+import { CanActivate, ExecutionContext, ForbiddenException, HttpException, Injectable, Logger, Optional } from '@nestjs/common';
+import { PrismaService } from '../database/prisma.service';
+import { projectExecutionPolicy } from '../processing/execution-policy';
 import Redis from 'ioredis';
 import type { Request } from 'express';
 import { AuthService, digest } from './auth.service';
@@ -8,7 +10,7 @@ import { requestIdentity } from './request-context';
 @Injectable()
 export class SecurityGuard implements CanActivate {
   private readonly redis = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379', { maxRetriesPerRequest: 1 });
-  constructor(private readonly auth: AuthService) {}
+  constructor(private readonly auth: AuthService, @Optional() private readonly prisma?: PrismaService) {}
   async onModuleDestroy() { await this.redis.quit(); }
   private async limit(key: string, max: number, seconds: number) {
     const count = Number(await this.redis.eval("local n=redis.call('INCR',KEYS[1]); if n==1 then redis.call('EXPIRE',KEYS[1],ARGV[1]) end; return n", 1, 'rate:' + key, seconds));
@@ -49,7 +51,13 @@ export class SecurityGuard implements CanActivate {
     }
     const askAi = /\/agent\/run|\/chat\/(plan|apply)|\/review(\/propose)?$|\/brief/.test(path) || path.endsWith('/creative/resolve') && req.body?.useAi === true
       || /\/(post-copy|hooks)$/.test(path) && req.body?.externalAiAuthorized === true;
-    if (askAi && !user.aiProcessingConsentAt) throw new ForbiddenException({ code: 'AI_CONSENT_REQUIRED', message: 'Allow AI processing in Settings first.' });
+    if (askAi && !user.aiProcessingConsentAt) {
+      const editId = /^\/edit-mode\/projects\/([^/]+)\//.exec(path)?.[1];
+      const project = editId ? await this.prisma?.editProject.findFirst({
+        where: { id: editId, userId: user.id }, select: { settings: true } }) : null;
+      const localOnly = project && projectExecutionPolicy(project.settings)?.mode === 'XEEFREE';
+      if (!localOnly) throw new ForbiddenException({ code: 'AI_CONSENT_REQUIRED', message: 'Allow AI processing in Settings first.' });
+    }
     return true;
   }
 }

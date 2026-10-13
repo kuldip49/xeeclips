@@ -3,6 +3,7 @@ import { BadRequestException, Body, Controller, Get, NotFoundException, Param,
 import { LlmProviderError, LlmProviderService, LlmTaskRole } from './llm-provider.service';
 import { LlmRouterService } from './llm-router.service';
 import { ProviderRegistry, ProviderUpdate } from './provider-registry';
+import { createPerformanceTelemetry, performanceContext } from './performance-telemetry';
 
 const roles = new Set<LlmTaskRole>(['wholeVideoUnderstanding', 'multimodalUnderstanding',
   'clipUnderstanding', 'deepReasoning', 'candidateJudge', 'creativeGeneration',
@@ -71,13 +72,18 @@ export class AiProvidersController {
       reachable: false, modelAvailable: false, latencyMs: 0 };
     const started = Date.now();
     try {
-      await this.providerService.generateStructuredWithConfig({ ...route,
+      const connect = () => this.providerService.generateStructuredWithConfig({ ...route,
         timeoutMs: Math.min(route.timeoutMs, 8000), maxRetries: 0 }, {
         role, schemaName: 'provider_connectivity',
         schema: { type: 'object', additionalProperties: false,
           properties: { ok: { type: 'boolean' } }, required: ['ok'] },
         systemPrompt: 'Return JSON containing only {"ok":true}.',
         userPrompt: 'Connection test.', maxOutputTokens: 32 });
+      // This authenticated admin action explicitly tests a configured cloud
+      // endpoint. Give it an ONLINE scope only when there is no existing job
+      // scope; an inherited Free scope must never be upgraded.
+      if (performanceContext.getStore()) await connect();
+      else await performanceContext.run(createPerformanceTelemetry('ONLINE'), connect);
       return { provider: id, configured: true, reachable: true,
         modelAvailable: true, latencyMs: Date.now() - started };
     } catch (error) {

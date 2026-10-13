@@ -23,8 +23,10 @@ const router = { generate: async () => { requests++; throw new Error('AI unavail
 async function run() {
   const local = await generatePostCopy(router, context, false);
   assert.equal(requests, 0, 'no consent means zero OpenAI calls');
-  assert.equal(local.generatedCaptions.length, 5);
-  assert.equal(new Set(local.generatedCaptions.map(v => v.text)).size, 5);
+  assert(local.generatedCaptions.length >= 3 && local.generatedCaptions.length <= 5,
+    'Free offers only grounded alternatives supported by this short transcript');
+  assert.equal(new Set(local.generatedCaptions.map(v => v.text)).size, local.generatedCaptions.length);
+  assert(local.generatedCaptions.every(c => groundedCaption(c.text, actual + ' ' + context.visibleText + ' ' + context.subtitleText, '')));
   assert.equal(local.generatedCaptions.filter(c => c.recommended).length, 1);
   assert.deepEqual(local.generatedHashtagSets.map(s => s.label), ['Focused', 'Niche', 'Broad']);
   assert.ok(local.generatedHashtagSets.every(s => s.hashtags.length <= 8));

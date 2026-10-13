@@ -1,5 +1,6 @@
-import { creativeService, deterministicCreative } from '../../content-intelligence/creative-package.service';
-import { localUnderstanding, type ContentEvidence } from '../../content-intelligence/content-understanding.service';
+import { creativeService } from '../../content-intelligence/creative-package.service';
+import { freeUnderstanding, type ContentEvidence } from '../../content-intelligence/content-understanding.service';
+import { freeCreative } from '../../free/free-creative';
 import { sharedQuality, hookMeetsThreshold, type CreativeHook } from '../../content-intelligence/creative-quality.service';
 // Workstream G: creative hook rewriting, grounded.
 //
@@ -171,8 +172,12 @@ export function rankHookCandidates(input: { mode: HookMode; current: string | nu
 export function deterministicHookSuggestions(input: { mode: HookMode; current: string | null;
   tried: string[]; opening: string; transcript: string; evidence?: ContentEvidence }): HookSuggestion[] {
   const evidence = { ...input.evidence, transcript: input.transcript };
-  const u = localUnderstanding(evidence), draft = deterministicCreative(evidence, u);
-  const ranked = sharedQuality.rank(draft.hooks, evidence, u, 'LOCAL', [...input.tried, input.current ?? '']).filter(hookMeetsThreshold)
+  const u = freeUnderstanding(evidence);
+  // The free engine honours the mode as a ranking preference (shorter, bolder, question, curiosity...), never as a relaxation of its gate.
+  const free = freeCreative(evidence, { exclude: [...input.tried, input.current ?? ''], direction: MODE_BRIEF[input.mode], rewrite: true });
+  // Every hook the free engine returns already passed its own twelve-point gate; the XeePro clickability bar is not applied on top, so
+  // "try another" always has real alternatives while any grounded angle remains.
+  const ranked = free.hooks
     .map(h => ({ text: h.text, source: 'DETERMINISTIC' as const, mechanism: h.category, score: h.score / 10 }));
   if (input.mode !== 'SHORTER' || !input.current) return ranked;
   // "Shorter" tightens the SAME line by removing words; a different, longer local reframing is not shorter.

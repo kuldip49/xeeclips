@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { LlmRouterService } from '../processing/llm-router.service';
 import { bare, CLAUSE_WORD, continuation, dangling, endingSignals, newTopic, storySetup, terminal } from './boundary-semantics';
+import { nextBoundaryStep, sentenceBoundaryQa } from '../free/free-boundary';
 import { applyCorrection, assessEnding, closeSentence, decideTailCorrection, isTruncatedToken, type Correction, type EndingEvidence, type EofPolicy, type TailPass } from './ending-evidence';
 
 /** `confidence` is faster-whisper's word probability when the transcript has it (null/absent otherwise - never guessed).
@@ -30,6 +31,8 @@ export type BoundaryRepair = { startTime: number; endTime: number; transcriptTex
   strongTail?: TailPass };
 export type BoundaryOptions = { preRoll?: number; extension?: number; minDuration?: number;
   maxDuration?: number; sourceDuration?: number;
+  /** Free ranges may already include post-word room; preserve a complete retained final word when re-validating. */
+  preserveCompleteTargetEnd?: boolean;
   /** Called at most once per repairSemantic when only the final token's reliability stands between a clip and a verdict. */
   verifyTail?: (request: TailRequest) => Promise<TailPass | null>;
   /** At most one per repairSemantic: a stronger model over the same bounded tail window. Only for an ending accepted despite an unreliable last word. */
@@ -242,7 +245,13 @@ export class ClipBoundaryService {
       (topicBoundary === undefined || i < topicBoundary) && naturalEnd(i) && w.end - startTime >= min - .001 && thoughtResolved(i));
     // First complete thought at/after the target; if too long, choose the last complete earlier thought.
     let selected: typeof ends[number] | undefined;
+    if (options.preserveCompleteTargetEnd) {
+      let lastSpoken = words.length - 1;
+      while (lastSpoken >= 0 && (words[lastSpoken].start >= candidate.endTime - .001 || words[lastSpoken].end <= startTime)) lastSpoken--;
+      selected = ends.find(({ w, i }) => i === lastSpoken && w.end <= candidate.endTime + .001);
+    }
     for (const stage of [...BOUNDARY_POLICY.stages.filter(s => s <= after), after]) {
+      if (selected) break;
       selected = ends.find(({w}) => w.end >= candidate.endTime - .001 && w.end <= candidate.endTime + stage + .001);
       if (selected) break;
     }
@@ -295,6 +304,31 @@ export class ClipBoundaryService {
    */
   async repairSemantic(candidate: { startTime: number; endTime: number; transcriptText: string }, rawWords: BoundaryWord[],
     router: LlmRouterService, external: boolean, options: BoundaryOptions = {}): Promise<BoundaryRepair> {
+    options = { ...options, preserveCompleteTargetEnd: options.preserveCompleteTargetEnd ?? !external };
+    let result = await this.repairSemanticCore(candidate, rawWords, router, external, options);
+    if (external || !result.evidenceAvailable) return result;
+    // XeeFree: re-read the repaired range with the sentence layer and take up to two bounded steps toward a finished thought
+    // (earlier by at most the pre-roll, later by at most the ordinary extension), then report what is still wrong, if anything.
+    const budget = { originalStart: candidate.startTime, originalEnd: candidate.endTime, preRoll: options.preRoll ?? BOUNDARY_POLICY.preRoll, extension: options.extension ?? BOUNDARY_POLICY.ordinaryExtension,
+      sourceEnd: options.sourceDuration ?? rawWords.at(-1)?.end ?? candidate.endTime, maxDuration: options.maxDuration ?? BOUNDARY_POLICY.maxDuration };
+    let steps = 0;
+    for (; steps < 2; steps++) {
+      const qa = sentenceBoundaryQa(rawWords, result.startTime, result.endTime);
+      const next = nextBoundaryStep(qa, result.startTime, result.endTime, budget);
+      if (!next) break;
+      const stepped = await this.repairSemanticCore({ ...candidate, startTime: next.start, endTime: next.end }, rawWords, router, external, options);
+      if (!stepped.evidenceAvailable || stepped.endTime - stepped.startTime > budget.maxDuration + .001) break;
+      result = { ...stepped, reasons: [...stepped.reasons, `FREE_STEP_${next.moved}`] };
+    }
+    const final = sentenceBoundaryQa(rawWords, result.startTime, result.endTime);
+    const failing = final.reasons.filter(r => /^FREE_(?:START_(?:CONTINUATION_START|DEPENDENT_OPENING|UNRESOLVED_PRONOUN_OPENING|NO_FINITE_VERB|DANGLING_END)|END_(?:MID_SENTENCE|MID_LIST|BEFORE_DISAGREEMENT_RESPONSE|DANGLING_END|NO_FINITE_VERB|TOO_SHORT|UNANSWERED_QUESTION))$/u.test(r));
+    if (!failing.length) return { ...result, reasons: [...result.reasons, ...(steps ? [] : []), 'FREE_SENTENCE_QA_PASSED'] };
+    const startFailed = failing.some(r => r.startsWith('FREE_START_')), endFailed = failing.some(r => r.startsWith('FREE_END_'));
+    return { ...result, valid: false, qa: { ...result.qa, START_COMPLETE: result.qa.START_COMPLETE && !startFailed, END_COMPLETE: result.qa.END_COMPLETE && !endFailed },
+      reasons: [...result.reasons, ...failing] };
+  }
+  private async repairSemanticCore(candidate: { startTime: number; endTime: number; transcriptText: string }, rawWords: BoundaryWord[],
+    router: LlmRouterService, external: boolean, options: BoundaryOptions = {}): Promise<BoundaryRepair> {
     const opts: BoundaryOptions = { ...options, reviewAvailable: external };
     let words = rawWords;
     let baseline = this.repair(candidate, words, opts);
@@ -304,8 +338,9 @@ export class ClipBoundaryService {
     const pending = initial?.verdict === 'INCONCLUSIVE' || (initial?.verdict === 'COMPLETE'
       && initial.state !== 'ASR_RELIABLE' && !initial.tail) ? initial : baseline.requestedEndEvidence;
     const needsAcoustics = !!pending?.reasons.includes('NEEDS_EOF_ACOUSTICS');
-    // The probe for an unreliable word runs only when the semantic review will follow; the waveform probe is not an LLM call.
-    if (pending && options.verifyTail && (external || needsAcoustics)) {
+    // The probe for an unreliable word runs when a semantic review will follow (XeePro) or, for XeeFree, always: the tail pass is a
+    // bounded LOCAL re-transcription (faster-whisper), not a model call, and there is no reviewer to decide the word instead.
+    if (pending && options.verifyTail) {
       const pass = await options.verifyTail({ wordStart: pending.wordStart, wordEnd: pending.wordEnd,
         windowStart: Math.max(0, pending.wordEnd - 8), windowEnd: pending.wordEnd + 1 }).catch(() => null);
       if (pass) {
@@ -321,6 +356,21 @@ export class ClipBoundaryService {
     const rejected = result.reasons.includes('SEMANTIC_BOUNDARY_REJECTED');
     if (!rejected) {
       if (!result.valid) return result;
+      // XeeFree has no semantic reviewer. An ending accepted only through an uncertain last word gets ONE bounded pass of the optional local
+      // stronger Whisper model over the same window; its reading is compared with the base ASR by decideTailCorrection (consensus only):
+      //   confirm / adopt -> the clip is accepted with provenance; no consensus -> the clip is held for review, never shipped with a doubtful word.
+      if (!external && ev?.tail) {
+        const strongLocal = await options.verifyStrongTail({ wordStart: ev.wordStart, wordEnd: ev.wordEnd,
+          windowStart: Math.max(0, ev.wordEnd - 8), windowEnd: ev.wordEnd + 1 }).catch(() => null);
+        const verdict = decideTailCorrection(words, index, strongLocal);
+        if (verdict.correction && strongLocal && verdict.kind !== 'UNRESOLVED') {
+          const corrected = applyCorrection(words, verdict.correction, strongLocal);
+          const rebuilt = this.repair(candidate, corrected, opts);
+          return { ...rebuilt, correction: verdict.correction, strongTail: strongLocal, reasons: [...rebuilt.reasons, verdict.reason] };
+        }
+        return { ...result, valid: false, qa: { ...result.qa, VIEWER_SATISFIED_END: false }, ...(strongLocal ? { strongTail: strongLocal } : {}),
+          reasons: [...result.reasons, verdict.reason, 'NEEDS_REVIEW_UNVERIFIED_FINAL_WORD'] };
+      }
       return { ...result, valid: false, qa: { ...result.qa, VIEWER_SATISFIED_END: false },
         reasons: [...result.reasons, 'NEEDS_REVIEW_UNVERIFIED_FINAL_WORD'] };
     }

@@ -1,7 +1,8 @@
 import { createHash } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { assertLlmCallBudget, countLlmFailure, countLlmRequest, countLlmSuccess,
-  countPerformance } from './performance-telemetry';
+  countPerformance, currentExecutionPolicy, recordBlockedProviderAttempt } from './performance-telemetry';
+import { providerViolation, XEEFREE_PROVIDER_VIOLATION } from './execution-policy';
 
 export type StrictJsonSchema = Readonly<Record<string, unknown>>;
 export type LlmTaskRole = 'multimodalUnderstanding' | 'wholeVideoUnderstanding' |
@@ -43,6 +44,30 @@ export class LlmProviderError extends Error {
     super(message);
     this.name = 'LlmProviderError';
   }
+}
+
+/**
+ * Thrown when a XeeFree execution context reaches a cloud provider surface. `kind` stays AI_MODE_FALLBACK_ONLY so every existing
+ * "provider unavailable, use the deterministic path" handler keeps working; `code` and the message prefix identify the violation
+ * for audits and tests. It is never retried and never falls back to a Pro route.
+ */
+export class XeeFreeProviderViolation extends LlmProviderError {
+  readonly code = XEEFREE_PROVIDER_VIOLATION;
+  constructor(readonly surface: 'router' | 'provider', readonly role: string) {
+    super('AI_MODE_FALLBACK_ONLY', XEEFREE_PROVIDER_VIOLATION + ': a XeeFree job attempted a cloud model call ('
+      + surface + ', ' + role + ')');
+    this.name = 'XeeFreeProviderViolation';
+  }
+}
+
+/** Fails closed before any request is built. Shared by the router and the provider so neither can be bypassed alone. */
+export function assertCloudCallAllowed(surface: 'router' | 'provider', role: string,
+  route?: { provider?: string; model?: string }, escalation = false) {
+  const violation = providerViolation(currentExecutionPolicy(), { surface, role, provider: route?.provider,
+    model: route?.model, escalation });
+  if (!violation) return;
+  recordBlockedProviderAttempt(surface + ':' + role);
+  throw new XeeFreeProviderViolation(surface, role);
 }
 
 const trimSlash = (value: string) => value.replace(/\/+$/u, '');
@@ -318,6 +343,8 @@ export class LlmProviderService {
   }
   async generateStructuredWithConfig<T>(config: LlmEndpointConfig,
     request: StructuredGenerationRequest): Promise<T> {
+    // Provider-level policy: a XeeFree context (or no context at all) can never reach a network request from here.
+    assertCloudCallAllowed('provider', request.role || request.schemaName, config);
     if (!this.isConfigured(config)) throw new LlmProviderError('CONFIGURATION_FAILURE',
       config.provider + '/' + (config.model || 'unconfigured') + ' is not fully configured');
     const key = this.requestKey(config, request);

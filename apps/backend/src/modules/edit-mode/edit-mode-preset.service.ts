@@ -22,6 +22,7 @@ import { PrismaService } from '../database/prisma.service';
 import { EditModeService } from './edit-mode.service';
 import { validatePresetCommands, type PresetPlan } from './presets/edit-preset-commands';
 import { buildPresetEvidence } from './presets/edit-preset-evidence';
+import { projectExecutionPolicy } from '../processing/execution-policy';
 import { planPreset, type PlannerAsset, type PlannerElement } from './presets/edit-preset-planner';
 import {
   EDIT_PRESETS, editPresetList, isEditPresetId, readEditPresetRun, readEditProjectStyle,
@@ -126,10 +127,12 @@ export class EditModePresetService {
 
     const currentHook = elements.find(element => element.type === 'TEXT' &&
       (element.properties.presetRole === 'HOOK' || element.properties.templateRole === 'HOOK'));
-    const hookOverride = await this.llmHook(policy.hookPolicy, evidence.transcriptText,
+    // XeeFree projects never take the model-assisted headline path; the local engine's wording is used instead.
+    const freeProject = projectExecutionPolicy(project.settings)?.mode === 'XEEFREE';
+    const hookOverride = freeProject ? null : await this.llmHook(policy.hookPolicy, evidence.transcriptText,
       policy.automatic, currentHook ? String(currentHook.properties.content ?? '') : '');
     const proposal = planPreset({ policy, evidence, elements, assets, currentStyle, previousRun,
-      hookOverride, requireLanguageReview: chatPlannerAiMode().toUpperCase() === 'ONLINE' });
+      hookOverride, requireLanguageReview: !freeProject && chatPlannerAiMode().toUpperCase() === 'ONLINE' });
     // A generated plan is validated before it can reach the canonical layer,
     // whichever path produced it.
     const commands = validatePresetCommands(proposal.commands);

@@ -200,6 +200,10 @@ async function main() {
   process.env.LLM_RETRY_JITTER_MS = '0';
   process.env.LLM_RETRY_MAX_DELAY_MS = '1';
   const providerService = new LlmProviderService();
+  // The provider fails closed without an execution context (see execution-policy.ts); these cloud-transport checks run as XeePro.
+  await assert.rejects(() => providerService.generateStructuredWithConfig(endpoint, request('no-context')),
+    error => error.code === 'XEEFREE_PROVIDER_VIOLATION');
+  await performanceContext.run(createPerformanceTelemetry('ONLINE'), async () => {
   let wireCalls = 0;
   global.fetch = async () => { wireCalls++;
     return new Response('{"error":{"message":"temporary"}}', { status: 503 }); };
@@ -228,6 +232,7 @@ async function main() {
     request('hard-schema')), error => error.kind === 'SCHEMA_FAILURE');
   assert.equal(wireCalls, 1, 'schema failures must not retry');
   global.fetch = originalFetch;
+  });
 
   console.log('AI processing mode tests passed: three isolated modes; fallback-only made zero LLM calls.');
 }

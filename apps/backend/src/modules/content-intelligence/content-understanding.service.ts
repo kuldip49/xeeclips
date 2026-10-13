@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import { Injectable } from '@nestjs/common';
 import type { LlmRouterService } from '../processing/llm-router.service';
 import type { BoundaryQa } from './clip-boundary.service';
+import { cachedAnalysis } from '../free/free-analysis';
 
 export const INTELLIGENCE_VERSION = 'content-intelligence-v2';
 export type ContentEvidence = { sourceId?: string; startTime?: number; endTime?: number;
@@ -70,6 +71,26 @@ export function localUnderstanding(raw: ContentEvidence): ContentUnderstanding {
     keyEntities: [...new Set(names)], question: sentences.find(s => /\?/u.test(s)) ?? '', payoff,
     bestAngle: payoff, watchReason: '', supportedClaims: Array.isArray(analysis.supportedClaims) && analysis.supportedClaims.length ? analysis.supportedClaims as string[] : sentences.slice(0, 8) };
 }
+/**
+ * XeeFree understanding: the structured free analysis (sentence reconstruction, typed frames, noun phrases) mapped onto the shared
+ * ContentUnderstanding shape. Fields the analysis cannot support stay empty; identities come only from text, never appearance.
+ */
+export function freeUnderstanding(raw: ContentEvidence): ContentUnderstanding {
+  const e = compactEvidence(raw), base = localUnderstanding(e);
+  const a = cachedAnalysis({ transcript: e.transcript || e.visibleText || '', speakerTurns: e.speakerTurns, visibleText: e.visibleText, visualSummary: e.visualSummary,
+    sceneType: e.sceneType, sourceTitle: e.sourceTitle, sourceCaption: e.sourceCaption });
+  const reveal = a.frames.find(f => f.type === 'REVEAL');
+  const advice = a.frames.find(f => f.type === 'ADVICE' || f.type === 'WARNING');
+  const pick = (value: string, fallback: string) => value && value.trim() ? value : fallback;
+  return { ...base, version: INTELLIGENCE_VERSION + '-xeefree', evidenceKey: base.evidenceKey + ':free',
+    mainTopic: pick(a.topic, base.mainTopic), subtopic: a.subtopic, centralClaim: pick(a.mainClaim, base.centralClaim), tension: pick(a.tension, base.tension),
+    keyInsight: pick(a.conclusion || a.payoff, base.keyInsight), surprisingPoint: reveal?.slots.rest?.text ?? reveal?.slots.phrase?.text ?? base.surprisingPoint,
+    question: pick(a.question, base.question), payoff: pick(a.payoff, base.payoff), bestAngle: pick(a.conclusion || a.payoff, base.bestAngle),
+    conclusion: a.conclusion || undefined, keyEntities: a.entities.length ? a.entities : base.keyEntities,
+    supportedClaims: a.supportedClaims.length ? a.supportedClaims : base.supportedClaims,
+    watchReason: pick(advice?.slots.vp?.text ? `How to ${advice.slots.vp.text}` : a.question, base.watchReason),
+    conversationRelationship: base.conversationRelationship || (a.frames.some(f => f.type === 'DISAGREEMENT') ? 'disagreement' : '') };
+}
 const fields = ['mainTopic', 'subtopic', 'centralClaim', 'tension', 'keyInsight', 'surprisingPoint', 'emotionalAngle', 'speakerIntent', 'audience', 'conversationRelationship', 'question', 'payoff', 'bestAngle', 'watchReason', 'subject', 'action', 'consequence', 'conclusion'];
 const schema = { type: 'object', additionalProperties: false, required: fields, properties: Object.fromEntries(fields.map(k => [k, { type: 'string' }])) };
 
@@ -78,8 +99,9 @@ export class ContentUnderstandingService {
   private readonly cache = new Map<string, ContentUnderstanding>();
   private readonly pending = new Map<string, Promise<ContentUnderstanding>>();
   async understand(raw: ContentEvidence, router?: LlmRouterService, external = false) {
-    const e = compactEvidence(raw), local = localUnderstanding(e), key = local.evidenceKey + ':' + (external
-      ? 'AI:' + (process.env.XEEPRO_HOOK_REVIEW_MODEL?.trim() || process.env.CREATIVE_ESCALATION_MODEL?.trim() || '') : 'LOCAL');
+    // XeeFree (external=false) uses the free structured analysis; XeePro keeps its original local baseline under the model.
+    const e = compactEvidence(raw), local = external ? localUnderstanding(e) : freeUnderstanding(e), key = local.evidenceKey + ':' + (external
+      ? 'AI:' + (process.env.XEEPRO_HOOK_REVIEW_MODEL?.trim() || process.env.CREATIVE_ESCALATION_MODEL?.trim() || '') : 'FREE');
     const cached = this.cache.get(key); if (cached) return cached;
     const pending = this.pending.get(key); if (pending) return pending;
     const task = (async () => {

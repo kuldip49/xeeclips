@@ -43,7 +43,10 @@ async function main() {
     if(f.id.startsWith('E')) assert.equal(u.humorSupported,false);
     const ep={transcript:text,visibleText:f.visibleText,sourceCaption:f.sourceCaption,tone:f.tone};
     const creative=await localService.create({evidence:ep,external:false});
-    assert.ok(creative.hooks.length && creative.hooks.every(h=>!transcriptSimilarity(h.text,text).copied && h.text.length<=64),f.id+' novel bounded hooks');
+    // XeeFree hooks: a hook may quote ONE short line of the clip (flagged directQuote, at most ten words) but never stitches or copies a longer run;
+    // length follows the hook policy (up to 22 words), not a character cap.
+    assert.ok(creative.hooks.length || /^[GH]-/u.test(f.id) === false,f.id+' has hooks unless the clip has no hookable structure');
+    assert.ok(creative.hooks.every(h=>(h.directQuote || transcriptSimilarity(h.text,text).longestRun<=12) && h.text.split(/\s+/u).length<=22),f.id+' novel bounded hooks');
     assert.ok(creative.synopsis.length>20 && creative.captions.length>0,f.id+' specific synopsis and captions');
     assert.ok(creative.captions.every(c=>require('../dist/modules/content-intelligence/creative-quality.service').grounded(c.text,ep)),f.id+' captions grounded in video');
     assert.ok(creative.hashtagSets.length===3 && creative.hashtagSets.every(s=>s.hashtags.length && s.hashtags.every(t=>!/^#(?:viral|fyp|trending)$/iu.test(t))),f.id+' focused relevant tags');

@@ -128,6 +128,8 @@ export async function planClausesWithOpenAi(input: { llm: LlmRouterService; logg
   message: string; clauses: Array<{ index: number; clause: string }>; context: ChatContext }):
   Promise<{ plans: ClausePlan[]; ai: AiAvailability }> {
   if (!input.clauses.length) return { plans: [], ai: aiAvailable() };
+  // XeeFree project: no model is consulted. The caller reports what is and is not supported.
+  if (input.context.project.freeOnly) return { plans: [], ai: aiUnavailable('XEEFREE') };
   const telemetry = createPerformanceTelemetry(chatPlannerAiMode());
   try {
     const result = await performanceContext.run(telemetry, async () => {

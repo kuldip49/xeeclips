@@ -1,8 +1,9 @@
 import type { ScoredClipCandidate } from '../processing/clip-candidates';
 import type { GeneratedContent, HookStrategy } from '../processing/openai-clip-judge.service';
 import type { ContentEvidence } from './content-understanding.service';
-import { localUnderstanding } from './content-understanding.service';
-import { deterministicCreative, type CreativePackage } from './creative-package.service';
+import { freeUnderstanding } from './content-understanding.service';
+import type { CreativePackage } from './creative-package.service';
+import { freeCreative } from '../free/free-creative';
 import { sharedQuality } from './creative-quality.service';
 import type { HookCategory } from './creative-quality.service';
 import type { BoundaryQa } from './clip-boundary.service';
@@ -37,9 +38,10 @@ export function candidateContent(p: Pick<CreativePackage, 'hooks' | 'synopsis' |
     creativeCandidates: { sharedPackage: p } };
 }
 export function fallbackCandidateContent(c: ScoredClipCandidate, platform?: string | null): GeneratedContent {
-  const evidence = candidateEvidence(c), understanding = localUnderstanding(evidence), draft = deterministicCreative(evidence, understanding);
+  // XeeFree: typed-slot hooks and grounded copy; the old keyword template baseline is no longer used for candidates.
+  const evidence = candidateEvidence(c), understanding = freeUnderstanding(evidence), free = freeCreative(evidence), draft = free.draft;
   const style = platform === 'INSTAGRAM_REELS' ? 'Engaging' : platform === 'TIKTOK' ? 'Concise' : 'Professional';
-  const hooks = sharedQuality.rank(draft.hooks,evidence,understanding,'LOCAL'), quality = sharedQuality.evaluate(draft,hooks,evidence);
+  const hooks = free.hooks, quality = sharedQuality.evaluate(draft,hooks,evidence);
   const p: CreativePackage = {...draft,captions:[...draft.captions].sort((a,b)=>Number(b.style===style)-Number(a.style===style))
     .map((c,i)=>({...c,recommended:i===0})),version:2,understanding,hooks,selectedHook:hooks[0]?.text ?? '',quality,
     status:quality.passed?'ACCEPTED':'NEEDS_REVIEW',warnings:quality.passed?[]:['Review the limited local suggestions.'],

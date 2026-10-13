@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'async_hooks';
 import { AiProcessingMode, normalizeAiProcessingMode } from './ai-processing-mode';
+import { executionPolicyFor, XEEFREE_POLICY, type ExecutionMode, type ExecutionPolicy } from './execution-policy';
 import { DEFAULT_PROCESSING_TYPE, DEFAULT_OUTPUT_ASPECT_RATIO,
   ProcessingType, OutputAspectRatio } from './processing-type';
 
@@ -14,6 +15,10 @@ export function createPerformanceTelemetry(aiMode: unknown = AiProcessingMode.FA
   const effectiveAiMode = normalizeAiProcessingMode(aiMode);
   return { ...Object.fromEntries(timingFields.map(key => [key, 0])) as Record<typeof timingFields[number], number>,
     requestedAiMode: effectiveAiMode, effectiveAiMode,
+    // Internal audit of the execution policy (never sent to clients). A XEEFREE job must finish with all three at 0.
+    executionMode: executionPolicyFor(effectiveAiMode).mode as ExecutionMode,
+    openAiCalls: 0, proEscalations: 0, blockedProviderAttempts: 0,
+    blockedProviderSurfaces: [] as string[],
     processingType, editingRequested: processingType === 'EDITED_CLIPS',
     editingExecuted: false, editingPlanProvider: '', editingPlanModel: '',
     editDecisionSource: '' as '' | 'LUNA' | 'DETERMINISTIC_FALLBACK',
@@ -76,6 +81,23 @@ export const performanceContext = new AsyncLocalStorage<ReturnType<typeof create
 export function currentAiProcessingMode() {
   return performanceContext.getStore()?.effectiveAiMode ?? AiProcessingMode.FALLBACK_ONLY;
 }
+/** The policy in force for the current async context. No context means XeeFree: fail closed. */
+export function currentExecutionPolicy(): ExecutionPolicy {
+  const store = performanceContext.getStore();
+  return store ? executionPolicyFor(store.effectiveAiMode) : XEEFREE_POLICY;
+}
+/** A cloud call the policy refused. It never reached the network; this is the audit trail of the attempt. */
+export function recordBlockedProviderAttempt(surface: string) {
+  const current = performanceContext.getStore();
+  if (!current) return;
+  current.blockedProviderAttempts++;
+  if (current.blockedProviderSurfaces.length < 20) current.blockedProviderSurfaces.push(surface);
+}
+/** A request that actually left for a Pro-only escalation route. Always 0 for XeeFree. */
+export function countProEscalation() {
+  const current = performanceContext.getStore();
+  if (current) current.proEscalations++;
+}
 const unavailableProviderModels = new WeakMap<object, Set<string>>();
 export function markProviderModelUnavailable(key: string) {
   const current = performanceContext.getStore();
@@ -105,6 +127,7 @@ export function countLlmRequest(role: string, provider: string) {
   if (!current) return;
   const local = ['ollama', 'local'].includes(provider.trim().toLowerCase());
   current.totalLlmCalls++;
+  if (provider.trim().toLowerCase().includes('openai')) current.openAiCalls++;
   if (local) current.localLlmCalls++;
   else {
     current.cloudLlmCalls++;

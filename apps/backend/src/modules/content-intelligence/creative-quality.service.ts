@@ -14,7 +14,13 @@ export type HookCategory = typeof HOOK_CATEGORIES[number];
 export type HookReview = { approved: boolean; clickability: number; context: number; grounding: number;
   misleadingRisk: number; specificity: number; naturalness: number; summaryLike: boolean; unclearReference: boolean; issue: string; why: string;
   language?: HookLanguage };
-export type CreativeHook = { text: string; category: HookCategory; score: number; recommended: boolean; source: 'OPENAI' | 'LOCAL';
+/**
+ * XeeFree hooks are scored by a deterministic proxy, not a reviewer model, so their clickability and novelty sit on their own scale. A hook that
+ * passed all twelve XeeFree gates is accepted at these bars instead of the reviewer-calibrated ones above; grounding, context and misleading-risk
+ * bars are the same. (A hook is only ever judged by the scorer that produced it: XeePro hooks keep the original bars.)
+ */
+export const FREE_HOOK_POLICY = { clickabilityThreshold: 60, noveltyThreshold: 50, specificityThreshold: 40 } as const;
+export type CreativeHook = { text: string; category: HookCategory; score: number; recommended: boolean; source: 'OPENAI' | 'LOCAL'; engine?: 'XEEFREE';
   components?: Record<string, number>; CLICKABILITY_SCORE?: number; CONTEXT_SCORE?: number;
   directQuote?: boolean; support?: string; review?: HookReview; existing?: boolean };
 export type HookCandidate = { text: string; category: HookCategory; directQuote?: boolean; support?: string; review?: HookReview };
@@ -132,10 +138,11 @@ const relevantTag = (tag: string, e: ContentEvidence) => terms(evidenceText(e)).
 const summaryHook = /^(?:how .+ works?|they (?:talk|discuss)|.+ is important|this is why .+ matters|an? (?:overview|guide|discussion) (?:of|about))/iu;
 const leadingPronoun = /^[^\p{L}]*(?:they|them|their|theirs|he|him|his|she|her|hers)(?![\p{L}])/iu;
 const pct = (v: number | undefined) => Math.round((v ?? 0) * 100);
-export const hookMeetsThreshold = (h: CreativeHook) => (h.CLICKABILITY_SCORE ?? 0) >= HOOK_POLICY.clickabilityThreshold
+const bars = (h: Pick<CreativeHook, 'engine'>) => h.engine === 'XEEFREE' ? FREE_HOOK_POLICY : HOOK_POLICY;
+export const hookMeetsThreshold = (h: CreativeHook) => (h.CLICKABILITY_SCORE ?? 0) >= bars(h).clickabilityThreshold
   && (!h.review || languageApproved(h.review.language))
-  && (h.CONTEXT_SCORE ?? 0) >= HOOK_POLICY.contextThreshold && pct(h.components?.specificity) >= HOOK_POLICY.specificityThreshold
-  && pct(h.components?.novelty) >= HOOK_POLICY.noveltyThreshold
+  && (h.CONTEXT_SCORE ?? 0) >= HOOK_POLICY.contextThreshold && pct(h.components?.specificity) >= bars(h).specificityThreshold
+  && pct(h.components?.novelty) >= bars(h).noveltyThreshold
   && (h.components?.factualGrounding === undefined || pct(h.components.factualGrounding) >= HOOK_POLICY.groundingThreshold)
   && (h.components?.misleadingRisk === undefined || pct(h.components.misleadingRisk) <= HOOK_POLICY.misleadingRiskMax)
   && (!h.review || pct(h.components?.clarity) >= HOOK_POLICY.naturalnessThreshold) && !h.review?.unclearReference;
@@ -405,10 +412,10 @@ export class CreativeQualityService {
     // One approved hook is a complete result: alternates are a convenience, not a quality property.
     if (!hooks.length) failures.push('NO_NOVEL_GROUNDED_HOOK');
     if (hooks[0]) {
-      if ((hooks[0].CLICKABILITY_SCORE ?? 0) < HOOK_POLICY.clickabilityThreshold) failures.push('HOOK_LOW_CLICKABILITY');
+      if ((hooks[0].CLICKABILITY_SCORE ?? 0) < bars(hooks[0]).clickabilityThreshold) failures.push('HOOK_LOW_CLICKABILITY');
       if ((hooks[0].CONTEXT_SCORE ?? 0) < HOOK_POLICY.contextThreshold) failures.push('HOOK_LOW_CONTEXT');
-      if (pct(hooks[0].components?.specificity) < HOOK_POLICY.specificityThreshold) failures.push('HOOK_LOW_SPECIFICITY');
-      if (pct(hooks[0].components?.novelty) < HOOK_POLICY.noveltyThreshold) failures.push('HOOK_LOW_NOVELTY');
+      if (pct(hooks[0].components?.specificity) < bars(hooks[0]).specificityThreshold) failures.push('HOOK_LOW_SPECIFICITY');
+      if (pct(hooks[0].components?.novelty) < bars(hooks[0]).noveltyThreshold) failures.push('HOOK_LOW_NOVELTY');
       if (hooks[0].components?.factualGrounding !== undefined && pct(hooks[0].components.factualGrounding) < HOOK_POLICY.groundingThreshold) failures.push('HOOK_LOW_GROUNDING');
       if (hooks[0].components?.misleadingRisk !== undefined && pct(hooks[0].components.misleadingRisk) > HOOK_POLICY.misleadingRiskMax) failures.push('HOOK_MISLEADING');
     }

@@ -63,6 +63,7 @@ import { interpretBrief } from './styles/creative-brief';
 import { GenerationStylingService } from './styles/generation-styling.service';
 import { ReferenceAnalysisService } from './styles/reference-analysis.service';
 import { SavedStylesService } from './styles/saved-styles.service';
+import { projectExecutionPolicy } from '../processing/execution-policy';
 import { LlmRouterService } from '../processing/llm-router.service';
 import { chatPlannerAiMode } from './chat/edit-chat-planner';
 
@@ -86,7 +87,8 @@ export class EditModeController {
   async sharedHooks(@Param('id') id:string,@Body() body:Record<string,unknown>) {
     const project=await this.editMode.get(id);
     if (body.revision!==project.revision) throw new BadRequestException('Your edits changed. Refresh before generating suggestions.');
-    const external=body.externalAiAuthorized===true;
+    // A XeeFree project is never sent to a cloud model: a request flag cannot opt it in.
+    const external=body.externalAiAuthorized===true && projectExecutionPolicy(project.settings)?.mode!=='XEEFREE';
     const currentHook=project.elements.find(element=>element.type==='TEXT' && element.properties &&
       ['presetRole','templateRole'].some(role=>(element.properties as Record<string,unknown>)[role]==='HOOK'));
     const currentText=currentHook ? String((currentHook.properties as Record<string,unknown>).content ?? '').trim() : '';

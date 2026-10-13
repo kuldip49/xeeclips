@@ -7,6 +7,7 @@ const { VideoProcessorService } = require('../dist/modules/processing/video-proc
 const { ProcessingQueueService } = require('../dist/modules/processing/processing-queue.service');
 const { VideosService } = require('../dist/modules/videos/videos.service');
 const { VideosController } = require('../dist/modules/videos/videos.controller');
+const { VideoUploadSessionService } = require('../dist/modules/videos/video-upload-session.service');
 const { PROCESS_VIDEO_JOB } = require('../dist/modules/processing/processing.constants');
 
 async function main() {
@@ -30,7 +31,8 @@ async function main() {
   });
   const videos = new VideosService(prisma, storage, queueService);
   const module = await Test.createTestingModule({
-    controllers: [VideosController], providers: [{ provide: VideosService, useValue: videos }]
+    controllers: [VideosController], providers: [{ provide: VideosService, useValue: videos },
+      { provide: VideoUploadSessionService, useValue: {} }]
   }).compile();
   const app = module.createNestApplication();
   await app.listen(0, '127.0.0.1');
@@ -60,6 +62,7 @@ async function main() {
       projectId: project.id, originalName: 'resume-fixture.mp4',
       objectKey: 'resume-tests/' + randomUUID(), bucket: 'unused', mimeType: 'video/mp4',
       sizeBytes: 1n, duration: 6, width: 320, height: 240, fps: 25, codec: 'h264',
+      hasVideo: true, hasAudio: true,
       bitrate: 1000n,
       audioBucket: 'unused', audioObjectKey: 'persisted.wav',
       processingJobs: { create: {} }

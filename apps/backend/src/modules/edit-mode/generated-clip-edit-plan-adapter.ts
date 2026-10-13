@@ -2,6 +2,7 @@
 // EditMode's canonical element model. This is deliberately pure: materialising
 // a project must not call an LLM, re-run analysis, or reinterpret the source.
 
+import { cleanCaptionWords } from '../free/free-captions';
 import { Prisma } from '@prisma/client';
 import type { EditPlan, TimedWord } from '../editing/edit-plan';
 import { generateCaptions } from './edit-mode-captions';
@@ -193,6 +194,8 @@ export function adaptAutomaticEditPlan(input: {
   sourceDuration: number;
   transcriptSegments: TranscriptSegment[];
   idFactory: IdFactory;
+  /** XeeFree clips: repair duplicated words, punctuation tokens and sentence casing in the generated captions (never in the source transcript). */
+  cleanCaptions?: boolean;
 }): AutomaticEditResult {
   const raw = record(input.editPlan);
   if (raw.version !== undefined && raw.version !== 1) {
@@ -295,12 +298,13 @@ export function adaptAutomaticEditPlan(input: {
 
   let captionCount = 0;
   if (plan.subtitleStyle.enabled) {
-    const transcript = transcriptWords(input.transcriptSegments);
+    const rawTranscript = transcriptWords(input.transcriptSegments);
+    const transcript = input.cleanCaptions ? { ...rawTranscript, words: cleanCaptionWords(rawTranscript.words).words } : rawTranscript;
     if (!transcript.words.length) return fallback('CAPTIONS_REQUIRE_TRANSCRIPT',
       'The automatic plan requires captions but the original Video has no timed transcript');
     try {
       const generated = generateCaptions({ words: transcript.words, wordTimings: transcript.exact,
-        map, limit: 400, wordsPerCaption: Math.max(2,
+        map, limit: 400, avoidWeakEnds: input.cleanCaptions === true, wordsPerCaption: Math.max(2,
           Math.min(5, plan.subtitleStyle.maxWordsPerLine)) });
       const preset = captionStylePreset(captionPreset(plan));
       const captionBox = plan.subtitleStyle.position === 'CENTER'

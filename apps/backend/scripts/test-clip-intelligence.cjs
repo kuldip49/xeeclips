@@ -349,4 +349,4 @@ async function main() {
     criticBatching: true, highConfidenceGateTelemetry: true }));
 }
 
-main().catch((error) => { console.error(error); process.exitCode = 1; });
+performanceContext.run(createPerformanceTelemetry('ONLINE'), main).catch((error) => { console.error(error); process.exitCode = 1; });

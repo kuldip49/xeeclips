@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { BoundaryQa } from './clip-boundary.service';
 import type { LlmRouterService, LlmRouteMetadata } from '../processing/llm-router.service';
 import { HOOK_LANGUAGE_CHECKS, xeeProHookApproved } from './hook-language';
+import { freeCreative, type FreeCreativeTrace } from '../free/free-creative';
 import { compactEvidence, evidenceText, localUnderstanding, normalize, sharedUnderstanding, terms,
   topicTerms, spokenRegister, type ContentEvidence, type ContentUnderstanding } from './content-understanding.service';
 import { factual, grounded, hookMeetsThreshold, HOOK_CATEGORIES, HOOK_POLICY, HOOK_RUBRIC, normalizeTags, parseHookReview, rejectionGuidance, SEMANTIC_REVIEWABLE_FAILURES, sharedQuality,
@@ -22,13 +23,13 @@ export type CreativePackage = { version: 1 | 2; understanding: ContentUnderstand
   quality: QualityResult; status: 'ACCEPTED' | 'NEEDS_REVIEW'; warnings: string[];
   boundaryQa?: BoundaryQa;
   internal: { routes: LlmRouteMetadata[]; escalations: number; understandingVersion: string; trace?: AttemptTrace[];
-    timings?: { understandingMs: number; totalMs: number } } };
+    timings?: { understandingMs: number; totalMs: number }; free?: FreeCreativeTrace } };
 export type CreativeRequest = { evidence: ContentEvidence; external: boolean; hooksOnly?: boolean;
   exclude?: string[]; direction?: string; category?: HookCategory; selectedHook?: string;
   /** Explicit wording changes exclude the current hook, even when it already scores well. */
   changeHook?: boolean;
   /** A hook already on the clip. It is judged by the same screen and reviewer and is kept unless a generated hook beats it by a meaningful margin or it has a known problem. */
-  existingHook?: { text: string; category?: HookCategory } };
+  existingHook?: { text: string; category?: HookCategory; /** The user typed or edited this hook: XeeFree keeps it unless a rewrite is explicitly requested. */ manual?: boolean } };
 /** The exact reasons an attempt failed, handed to the stronger model so the repair is targeted, not a blind regenerate. */
 export type ReviewerFeedback = { outcome: string; problems: Array<{ hook: string; category?: string; verdict: string[]; detail: string; scores?: HookRejection['scores'] }>;
   instructions: string[]; keep: string[]; copyFailures: string[]; bar: string };
@@ -338,7 +339,14 @@ export class CreativePackageService {
       groundingReview: process.env.CREATIVE_GROUNDING_REVIEW });
     const cached = this.cache.get(key); if (cached) return structuredClone(cached);
     const warnings: string[] = [], routes: LlmRouteMetadata[] = [], trace: AttemptTrace[] = [];
-    let draft = deterministicCreative(e, u), hooks = input.external ? [] : sharedQuality.rank(draft.hooks, e, u, 'LOCAL', input.exclude);
+    // XeeFree: the local typed-slot hook engine and grounded copy builder (no model, no Pro route). XeePro keeps its original baseline.
+    let draft: CreativeDraft, hooks: CreativeHook[], freeTrace: FreeCreativeTrace | undefined;
+    if (input.external) { draft = deterministicCreative(e, u); hooks = []; }
+    else {
+      const free = freeCreative(e, { exclude: input.exclude, direction: input.direction, category: input.category, hooksOnly: input.hooksOnly,
+        existingHook: input.existingHook, rewrite: !!input.changeHook });
+      draft = free.draft; hooks = free.hooks; freeTrace = free.trace;
+    }
     let quality = sharedQuality.evaluate(draft, hooks, e, input.hooksOnly), escalations = 0, semanticSupported = false;
     const configuredAttempts = Number(process.env.CREATIVE_MAX_ESCALATION_ATTEMPTS ?? 1);
     const attempts = Number.isFinite(configuredAttempts) ? Math.max(0, Math.min(1, configuredAttempts)) : 1;
@@ -438,6 +446,7 @@ export class CreativePackageService {
       }
     }
     if (!quality.passed) warnings.push('Some creative suggestions did not pass quality checks. Review or rewrite before publishing.');
+    if (freeTrace?.languageUnverified) warnings.push(`Hook wording checks are English-only. This clip sounds ${freeTrace.languageUnverified}; review the hook before publishing.`);
     // A failed semantic review must not leak the rejected claims into a renderer or suggestion panel.
     if (!quality.passed && input.external) {
       // Hooks the reviewer approved on every bar are safe and better than any local template, so a package that misses only the
@@ -471,7 +480,8 @@ export class CreativePackageService {
       hashtagSets: sets, supportingLine: draft.supportingLine && supported(draft.supportingLine) ? draft.supportingLine : '',
       tone: u.emotionalAngle, contextSummary: [u.centralClaim, u.payoff].filter(Boolean).join(' '), quality,
       status: quality.passed ? 'ACCEPTED' : 'NEEDS_REVIEW', warnings,
-      internal: { routes, escalations, understandingVersion: u.version, trace, timings: { understandingMs, totalMs: Date.now() - startedAt } } };
+      internal: { routes, escalations, understandingVersion: u.version, trace, timings: { understandingMs, totalMs: Date.now() - startedAt },
+        ...(freeTrace ? { free: freeTrace } : {}) } };
     if (input.category && hooks.some(h => h.category === input.category && hookMeetsThreshold(h))) {
       hooks.sort((a,b) => Number(b.category === input.category && hookMeetsThreshold(b)) - Number(a.category === input.category && hookMeetsThreshold(a)) || b.score-a.score);
       hooks.forEach((h,i) => { h.recommended = i === 0; });

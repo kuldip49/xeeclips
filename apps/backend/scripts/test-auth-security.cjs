@@ -36,6 +36,7 @@ async function main() {
   assert.equal((await req('/auth/login', null, 'POST', { email: a.body.email, password: 'wrong password' })).status, 401);
   assert.equal((await req('/auth/signup', null, 'POST', { email: a.body.email, password })).status, 409);
   assert.equal((await req('/projects')).status, 401); assert.equal((await req('/admin/stats', a.cookie)).status, 403); assert.equal((await req('/admin/stats', owner.cookie)).status, 200);
+  assert.equal((await req('/ai-providers/openai/test', a.cookie, 'POST', {})).status, 403);
   passed('login, wrong password, duplicate email, protected API and admin authorization');
   assert.equal((await req('/auth/signup', null, 'POST', { email: 'policy-short@example.com', password: 'a'.repeat(7) })).status, 400);
   assert.equal((await req('/auth/signup', null, 'POST', { email: 'policy-long@example.com', password: 'a'.repeat(129) })).status, 400);
@@ -72,12 +73,79 @@ async function main() {
   assert.equal((await req('/history/clips', a.cookie)).body.length, 1); assert.equal((await req('/history/clips', b.cookie)).body[0].id, cb.id);
   const download = await fetch(base + '/generated-clips/' + ca.id + '/file?download=1', { headers: { Cookie: a.cookie, Origin: origin } }); assert.equal(download.status, 200); await download.arrayBuffer();
   assert.equal((await req('/auth/session', a.cookie)).body.creditBalance, 5);
-  const anonymousStorage = await fetch('http://localhost:9000/' + process.env.MINIO_BUCKET + '/' + ca.objectKey); assert.equal(anonymousStorage.status, 403);
+  const anonymousStorage = await fetch((process.env.TEST_MINIO_ORIGIN || 'http://localhost:9000') + '/' + process.env.MINIO_BUCKET + '/' + ca.objectKey); assert.equal(anonymousStorage.status, 403);
   passed('owned byte-range playback, private MinIO, reciprocal History and free downloads');
+  // The clip tier belongs to its generation, even when its video is analysed again.
+  await db.generatedClip.update({ where: { id: ca.id }, data: { editTelemetry: { effectiveAiMode: 'FALLBACK_ONLY' } } });
+  await db.generatedClip.update({ where: { id: cb.id }, data: { editTelemetry: { effectiveAiMode: 'ONLINE' } } });
+  const newerJob = await db.processingJob.create({ data: { videoId: va.id, aiMode: 'ONLINE', status: 'COMPLETED', telemetry: { effectiveAiMode: 'ONLINE' } } });
+  assert.equal((await req('/history/clips', a.cookie)).body[0].mode, 'XeeFree');
+  assert.equal((await req('/history/clips', b.cookie)).body[0].mode, 'XeePro');
+  await db.processingJob.delete({ where: { id: newerJob.id } });
+  passed('History keeps each clip tier when a newer job uses another tier');
   const session = await req('/projects/' + pa.body.id + '/videos/upload-sessions', a.cookie, 'POST', { name: 'a.mp4', mimeType: 'video/mp4', size: 1 });
   assert.equal(session.status, 201); assert.equal((await req('/upload-sessions/' + session.body.id + '/complete', b.cookie, 'POST')).status, 404);
   passed('disk upload sessions are account-owned');
   assert.equal((await req('/edit-mode/projects/' + ea.body.id + '/agent/run', a.cookie, 'POST', { prompt: 'edit' })).status, 403);
+  await db.editProject.update({ where: { id: ea.body.id }, data: { settings: { origin: { originKind: 'GENERATED_CLIP', aiMode: 'FALLBACK_ONLY' } } } });
+  const localEdit = await req('/edit-mode/projects/' + ea.body.id + '/agent/run', a.cookie, 'POST', { message: 'mute the music', aiConsent: false });
+  assert.equal(localEdit.status, 400, JSON.stringify(localEdit.body));
+  assert.equal(localEdit.body.code, 'NO_SOURCE', 'the owned Free request reaches local editing, past cloud consent');
+  assert.equal((await req('/edit-mode/projects/' + eb.body.id + '/agent/run', a.cookie, 'POST', { message: 'mute the music' })).status, 403);
+  passed('owned Free commands work without cloud consent; foreign projects cannot bypass consent');
+  // Both HTTP saves read the same revision before either writes. The writes
+  // still use real PostgreSQL Serializable transactions, so this exercises
+  // the conflict path rather than relying on request timing.
+  const transaction = db.$transaction.bind(db);
+  let reads = 0, releaseReads;
+  const bothRead = new Promise(resolve => { releaseReads = resolve; });
+  db.$transaction = (action, options) => typeof action !== 'function' ? transaction(action, options)
+    : transaction(tx => action(new Proxy(tx, { get(target, key) {
+      if (key !== 'editProject') return Reflect.get(target, key);
+      return new Proxy(target.editProject, { get(delegate, method) {
+        if (method !== 'findUnique') return Reflect.get(delegate, method);
+        return async args => {
+          const row = await delegate.findUnique(args);
+          if (args.where.id === ea.body.id && reads < 2) {
+            if (++reads === 2) releaseReads();
+            await bothRead;
+          }
+          return row;
+        };
+      } });
+    } })), options);
+  let saves;
+  try {
+    saves = await Promise.all(['First save', 'Second save'].map(name =>
+      req('/edit-mode/projects/' + ea.body.id, a.cookie, 'PATCH', {
+        revision: ea.body.revision, name, settings: { origin: { aiMode: 'ONLINE' } }
+      })));
+  } finally { db.$transaction = transaction; }
+  assert.deepEqual(saves.map(result => result.status).sort(), [200, 409], JSON.stringify(saves));
+  const saved = await db.editProject.findUniqueOrThrow({ where: { id: ea.body.id } });
+  assert.equal(saved.revision, ea.body.revision + 1);
+  assert.equal(saved.settings.origin.aiMode, 'FALLBACK_ONLY');
+  assert.equal(await db.editHistory.count({ where: { editProjectId: ea.body.id, action: 'PROJECT_UPDATED' } }), 1);
+  passed('concurrent editor saves commit once, keep Free provenance and return a stale-revision conflict');
+  const { Prisma } = require('@prisma/client');
+  let conflictAttempts = 0;
+  db.$transaction = () => {
+    conflictAttempts++;
+    return Promise.reject(new Prisma.PrismaClientKnownRequestError('Concurrent save', {
+      code: 'P2034', clientVersion: Prisma.prismaVersion.client
+    }));
+  };
+  let busySave;
+  try {
+    busySave = await req('/edit-mode/projects/' + ea.body.id, a.cookie, 'PATCH', {
+      revision: saved.revision, name: 'Never committed'
+    });
+  } finally { db.$transaction = transaction; }
+  assert.equal(busySave.status, 409);
+  assert.equal(conflictAttempts, 3, 'repeated contention must stop after bounded retries');
+  assert.equal((await db.editProject.findUniqueOrThrow({ where: { id: ea.body.id } })).name, saved.name);
+  assert.equal(await db.editHistory.count({ where: { editProjectId: ea.body.id, action: 'PROJECT_UPDATED' } }), 1);
+  passed('repeated editor contention is bounded, returns a conflict and writes no extra history');
   assert.equal((await req('/auth/preferences', a.cookie, 'PATCH', { aiProcessingConsent: true })).body.aiProcessingConsentAt !== null, true);
   assert.equal((await req('/auth/preferences', a.cookie, 'PATCH', { aiProcessingConsent: false })).body.aiProcessingConsentAt, null); passed('Ask AI consent is account-owned and revocable');
   const credit = async (mode, amount) => req('/admin/users/' + a.body.id + '/credits', owner.cookie, 'POST', { mode, amount, reason: 'Security integration test' });
@@ -134,7 +202,7 @@ async function main() {
 }
 main().catch(e => { console.error(e); process.exitCode = 1; }).finally(async () => {
   if (process.env.MINIO_BUCKET?.startsWith('xeeclip-auth-test-')) {
-    const client = new Client({ endPoint: 'localhost', port: 9000, useSSL: false, accessKey: process.env.MINIO_ROOT_USER, secretKey: process.env.MINIO_ROOT_PASSWORD });
+    const client = new Client({ endPoint: process.env.MINIO_ENDPOINT || 'localhost', port: 9000, useSSL: false, accessKey: process.env.MINIO_ROOT_USER, secretKey: process.env.MINIO_ROOT_PASSWORD });
     const objects = []; for await (const o of client.listObjectsV2(process.env.MINIO_BUCKET, '', true)) objects.push(o.name);
     if (objects.length) await client.removeObjects(process.env.MINIO_BUCKET, objects); await client.removeBucket(process.env.MINIO_BUCKET);
   }

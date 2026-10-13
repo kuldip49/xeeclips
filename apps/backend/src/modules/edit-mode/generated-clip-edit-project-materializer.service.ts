@@ -1,3 +1,4 @@
+import { executionPolicyFor } from '../processing/execution-policy';
 import { ConflictException, Injectable, NotFoundException,
   UnprocessableEntityException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -59,6 +60,9 @@ export class GeneratedClipEditProjectMaterializerService {
     }
 
     const normalOriginalSource = clip.processingType === 'NORMAL_CLIPS';
+    const renderMode = clip.editTelemetry && typeof clip.editTelemetry === 'object' && !Array.isArray(clip.editTelemetry)
+      ? (clip.editTelemetry as Record<string, unknown>).effectiveAiMode : undefined;
+    const aiMode = renderMode ?? clip.video.processingJobs?.[0]?.aiMode;
     const originalDuration = Number(clip.video.duration);
     const projectId = randomUUID();
     const assetId = randomUUID();
@@ -66,7 +70,8 @@ export class GeneratedClipEditProjectMaterializerService {
       ? adaptAutomaticEditPlan({ editPlan: clip.editPlan, editTelemetry: clip.editTelemetry,
         sourceAssetId: assetId, sourceDuration: originalDuration,
         transcriptSegments: clip.video.transcript?.segments ?? [],
-        idFactory: () => randomUUID() })
+        idFactory: () => randomUUID(),
+        cleanCaptions: executionPolicyFor(aiMode).mode === 'XEEFREE' })
       : null;
     const reconstructed = automatic?.mode === 'CANONICAL';
     if (clip.templateId === 'AUTOMATIC_3_STYLE_TWO' && !reconstructed && !normalOriginalSource) {
@@ -123,7 +128,7 @@ export class GeneratedClipEditProjectMaterializerService {
         // Compatibility aliases retained for already-shipped Step 2 readers.
         fullVideoSourceStart: clip.startTime, fullVideoSourceEnd: clip.endTime,
         generatedDuration: duration, processingType: clip.processingType,
-        aiMode: clip.video.processingJobs?.[0]?.aiMode,
+        aiMode,
         ...(clip.templateId === 'AUTOMATIC_3_STYLE_TWO' ? { templateId: clip.templateId } : {}),
         aspectRatio: clip.aspectRatio, targetPlatform: clip.targetPlatform,
         variantKey: clip.variantKey, editPlan: clip.editPlan,

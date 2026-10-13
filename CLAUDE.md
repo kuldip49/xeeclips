@@ -115,6 +115,15 @@ deterministic (non-LLM) path rather than failing the job — intentional, exerci
 AI failure states (401/429/timeout/network/5xx) come from `src/modules/ai/ai-availability.ts`. Never hardcode a
 model identifier or API key.
 
+### XeeFree (free tier) is a hard policy, not a fallback
+
+XeeFree (`FALLBACK_ONLY`, legacy `OFFLINE`) must never reach OpenAI, any cloud LLM or a XeePro model. `processing/execution-policy.ts` is the single
+definition; `LlmRouterService.generate` and `LlmProviderService.generateStructuredWithConfig` both throw `XEEFREE_PROVIDER_VIOLATION` (a missing
+execution context is XeeFree too), and editor surfaces key off the project's recorded tier (`projectExecutionPolicy`). When adding any code a
+XeeFree job or XeeFree project can reach, take the deterministic path directly instead of attempting a model call. The free reasoning layer
+(sentence reconstruction, typed frames, moment scoring, the typed-slot hook engine and its 12-point gate, caption/speaker/zoom helpers) lives in
+`src/modules/free/`; see `docs/xeefree-pipeline.md`. Run `npm --workspace apps/backend run test:xeefree` after touching it.
+
 ### Data model
 
 Prisma schema: `apps/backend/prisma/schema.prisma`. One row per pipeline stage per chunk/video

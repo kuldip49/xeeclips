@@ -22,6 +22,8 @@ import {
 
 const execFileAsync = promisify(execFile);
 import { buildTranscriptChunks } from './transcript-chunks';
+import { executionPolicyFor } from './execution-policy';
+import { FreeTranscriptIndex, rescoreFreePool, sentenceChunks, FREE_CANDIDATE_POOL } from '../free/free-moments';
 import {
   extractAudioToWav,
   hasTrustworthyMediaMetadata,
@@ -31,7 +33,7 @@ import {
   probeMedia
 } from './media-probe';
 import { analyzeTranscriptChunk } from './chunk-analysis';
-import { calculateClipRecommendation, generateCandidateRanges, isEligibleForCreativeGeneration,
+import { calculateClipRecommendation, calculateContentPotential, generateCandidateRanges, isEligibleForCreativeGeneration, MAX_CANDIDATES,
   maximumClipCountForDuration, PRIMARY_CLIP_SCORE, recommendationTierForScore, suppressOverlapAndRank,
   shortlistForUnderstanding, shortlistForCreative, ScoredClipCandidate } from './clip-candidates';
 import { createPerformanceTelemetry, performanceContext, PerformanceStageClock,
@@ -839,12 +841,31 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       const preliminaryChunks = await this.prisma.transcriptChunk.findMany({
         where: { videoId }, include: { analysis: true }, orderBy: { position: 'asc' }
       });
-      const preliminaryCandidates = generateCandidateRanges(videoId, preliminaryChunks,
-        understanding ? {
-          mainTopic: understanding.mainTopic, topics: understanding.topics,
-          summary: understanding.summary, keyClaims: understanding.keyClaims,
-          questions: understanding.questions, chapters: understanding.chapters
-        } : null);
+      // Word-timed transcript, loaded once and shared by the free moment model, boundary repair and the ending checks below.
+      const rawTranscriptSegments = await this.prisma.transcriptSegment.findMany({
+        where: { transcript: { videoId } }, select: { id: true, start: true, end: true, text: true, words: true, speaker: true }
+      });
+      const transcriptWords = transcriptBoundaryWords(rawTranscriptSegments);
+      // XeeFree widens the window pool and re-scores every window with the free moment model (sentence structure, typed frames,
+      // payoff, context, speaker turns). XeePro keeps its original pool and scoring untouched.
+      const xeeFree = executionPolicyFor(performance.effectiveAiMode).mode === 'XEEFREE';
+      const candidateContext = understanding ? {
+        mainTopic: understanding.mainTopic, topics: understanding.topics,
+        summary: understanding.summary, keyClaims: understanding.keyClaims,
+        questions: understanding.questions, chapters: understanding.chapters
+      } : null;
+      const freeIndex = xeeFree && transcriptWords.length ? new FreeTranscriptIndex({ words: transcriptWords }) : null;
+      // XeeFree windows are built from reconstructed sentences (one beat can be isolated); XeePro keeps its original chunk windows.
+      const sentenceWindows = freeIndex ? sentenceChunks(freeIndex).map(chunk => ({ ...chunk, analysis: analyzeTranscriptChunk({ text: chunk.text,
+        duration: chunk.duration }) })) : [];
+      let preliminaryCandidates = generateCandidateRanges(videoId, sentenceWindows.length ? sentenceWindows : preliminaryChunks,
+        candidateContext, xeeFree ? FREE_CANDIDATE_POOL : undefined);
+      if (freeIndex) {
+        const freeStartedAt = Date.now();
+        preliminaryCandidates = rescoreFreePool(preliminaryCandidates, freeIndex, calculateContentPotential)
+          .slice(0, MAX_CANDIDATES);
+        this.logger.log(JSON.stringify({ event: 'xeefree_moment_scoring', videoId, windows: preliminaryCandidates.length, ms: Date.now() - freeStartedAt }));
+      }
       performance.rawCandidateCount = preliminaryCandidates.length;
       performance.preScoredCandidateCount = preliminaryCandidates.length;
       const shortlistStartedAt = Date.now();
@@ -854,10 +875,6 @@ export class VideoProcessorService implements OnModuleInit, OnModuleDestroy {
       performance.aiShortlistCount = shortlistBeforeBoundaries.length;
       performance.shortlistCount = shortlistBeforeBoundaries.length;
 
-      const rawTranscriptSegments = await this.prisma.transcriptSegment.findMany({
-        where: { transcript: { videoId } }, select: { id: true, start: true, end: true, text: true, words: true, speaker: true }
-      });
-      const transcriptWords = transcriptBoundaryWords(rawTranscriptSegments);
       const boundaryStartedAt = Date.now();
       const preliminaryShortlist: ScoredClipCandidate[] = [];
       // Bounded tail checks (cached per ending and model), shared with export. See ending-tail-probe.ts.

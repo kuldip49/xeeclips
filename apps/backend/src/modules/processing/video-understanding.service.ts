@@ -1,3 +1,4 @@
+import { isXeeFree } from './execution-policy';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { StrictJsonSchema, StructuredGenerationRequest } from './llm-provider.service';
 import { LlmRouteMetadata, LlmRouterService } from './llm-router.service';
@@ -563,7 +564,8 @@ export class VideoUnderstandingService {
   }
 
   async analyzeWithFallback(parts: TranscriptPart[], languageHint?: string | null) {
-    if (currentAiProcessingMode() === AiProcessingMode.OFFLINE) {
+    // XeeFree never attempts a model call (legacy OFFLINE normalises to it): the transcript-extractive analysis is the path, not a fallback.
+    if (isXeeFree(currentAiProcessingMode())) {
       this.logger.log(JSON.stringify({ event: 'offline_deterministic_role',
         role: 'wholeVideoUnderstanding' }));
       return this.deterministicAnalysis(parts, languageHint);

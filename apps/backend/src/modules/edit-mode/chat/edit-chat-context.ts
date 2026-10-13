@@ -1,5 +1,6 @@
 // The bounded, structured view of a project that a chat turn reasons over.
 import type { ContentEvidence } from '../../content-intelligence/content-understanding.service';
+import { projectExecutionPolicy } from '../../processing/execution-policy';
 //
 // The whole project is never sent to a model. What goes out is a compact
 // catalogue of addressable OBJECTS - the hook, the logo, the music, the caption
@@ -119,6 +120,8 @@ export type ChatContext = {
     hasTranscript: boolean;
     hasWordTimings: boolean;
     hasAnalysis: boolean;
+    /** The project was created by XeeFree: no cloud model may ever plan, write or review anything for it. */
+    freeOnly: boolean;
   };
   elements: ChatElementView[];
   assets: ChatAssetView[];
@@ -575,7 +578,8 @@ export function buildChatContext(input: ChatContextInput): ChatContext {
         : null,
       hasTranscript: input.evidence.transcriptAvailable,
       hasWordTimings: input.evidence.wordTimingsAvailable,
-      hasAnalysis: input.evidence.analysisAvailable
+      hasAnalysis: input.evidence.analysisAvailable,
+      freeOnly: projectExecutionPolicy(input.settings)?.mode === 'XEEFREE'
     },
     elements: views,
     assets,

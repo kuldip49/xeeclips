@@ -529,7 +529,7 @@ async function main() {
   }));
 }
 
-main().catch((error) => {
+performanceContext.run(createPerformanceTelemetry('ONLINE'), main).catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });

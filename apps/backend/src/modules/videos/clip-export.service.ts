@@ -1,3 +1,6 @@
+import { cleanCaptionWords } from '../free/free-captions';
+import { executionPolicyFor } from '../processing/execution-policy';
+import { stabilizeSpeakerChanges } from '../free/free-speakers';
 import { ClipBoundaryService, transcriptBoundaryWords } from '../content-intelligence/clip-boundary.service';
 import { EndingTailProbe } from '../processing/ending-tail-probe';
 import { type CreativePackage } from '../content-intelligence/creative-package.service';
@@ -573,9 +576,12 @@ export class ClipExportService {
         chunks: { where: { startTime: { lt: windowEnd }, endTime: { gt: windowStart } },
           select: { startTime: true, endTime: true, visualAnalysis: true } } } });
     const segments = (context.transcript?.segments ?? []) as TimedSegment[];
-    const words = timedWords(segments, candidate.startTime, candidate.endTime);
-    const windowWords = timedWords(segments, windowStart, windowEnd)
-      .filter((word) => word.start >= windowStart && word.end <= windowEnd);
+    // XeeFree captions are the transcript with only mechanically safe repairs (duplicated words, punctuation tokens, sentence casing).
+    const freeExport = executionPolicyFor(job?.aiMode).mode === 'XEEFREE';
+    const cleaned = <T extends { text: string; start: number; end: number; confidence?: number | null }>(list: T[]) => freeExport ? cleanCaptionWords(list).words : list;
+    const words = cleaned(timedWords(segments, candidate.startTime, candidate.endTime));
+    const windowWords = cleaned(timedWords(segments, windowStart, windowEnd)
+      .filter((word) => word.start >= windowStart && word.end <= windowEnd));
     // Transcript-only rejection precedes even the intermediate FFmpeg encode.
     const boundaryPrecheck = optimizeEditBoundaries({ words: windowWords,
       candidateStart: candidate.startTime, candidateEnd: candidate.endTime, windowStart, windowEnd,
@@ -604,6 +610,10 @@ export class ClipExportService {
         speakerChangeTimes.push(segment.start);
       lastSpeaker = segment.speaker;
     }
+    // XeeFree: a diarization blip (A -> B -> A within 1.6 s) is not a camera switch. The raw list stays untouched for XeePro.
+    const stability = freeExport ? stabilizeSpeakerChanges(speakerChangeTimes) : { times: speakerChangeTimes, dropped: 0 };
+    const stableSpeakerChanges = stability.times;
+    if (stability.dropped) this.logger.log(JSON.stringify({ event: 'xeefree_speaker_stabilized', candidateId: candidate.id, raw: speakerChangeTimes.length, kept: stableSpeakerChanges.length }));
     const analysisStarted = Date.now();
     const dense = await requestDenseAnalysis(this.storage, windowPath, windowStart, windowEnd, this.logger);
     const analysis: EditAnalysis = dense ?? { ...analysisFromStoredChunks(
@@ -629,7 +639,7 @@ export class ClipExportService {
       cuts: boundaryPrecheck.cuts });
     const structuralPreflight = this.executor.preflightStructure({ analysis,
       timeline: preflightTimeline, sourceWidth: window.width, sourceHeight: window.height,
-      speakerChangeTimes, platformPreset: targetPlatform ?? 'UNIVERSAL' });
+      speakerChangeTimes: stableSpeakerChanges, platformPreset: targetPlatform ?? 'UNIVERSAL' });
     if (structuralPreflight.classification === 'SKIP_BEFORE_RENDER') {
       const reasons = structuralPreflight.failures.map((failure) => failure.reason);
       throw new EditQualityError('Edited clip rejected before planning: impossible camera geometry', {
@@ -723,7 +733,8 @@ export class ClipExportService {
         boundary = applySponsorTrim(decide(true));
         timeline = toTimeline(boundary);
       }
-      const boundaryOpts = { sourceDuration: video.duration ?? undefined, eofAcoustics: { required: true }, reviewAvailable: aiMode === 'ONLINE' };
+      const boundaryOpts = { sourceDuration: video.duration ?? undefined, eofAcoustics: { required: true },
+        reviewAvailable: aiMode === 'ONLINE', preserveCompleteTargetEnd: freeExport };
       let finalBoundaryQa = new ClipBoundaryService().validate({startTime:timeline.editedStart,endTime:timeline.editedEnd,
         transcriptText:candidate.transcriptText}, transcriptBoundaryWords(segments), boundaryOpts);
       if (finalBoundaryQa.evidenceAvailable && !finalBoundaryQa.valid && !sponsor.trimmed) {
@@ -807,7 +818,7 @@ export class ClipExportService {
     // discards) neither runs nor rejects the candidate. Automatic 1 is unchanged.
     const temporaryPreview = templateId === 'AUTOMATIC_2' || templateId === 'AUTOMATIC_3_STYLE_TWO';
     const render = (input: PreparedEdit) => this.executor.execute(windowPath, outputPath,
-      input.plan, windowWords, [], [], speakerChangeTimes, { inputOffsetSec: windowStart,
+      input.plan, windowWords, [], [], stableSpeakerChanges, { inputOffsetSec: windowStart,
         xeePro: aiMode === EditAiMode.ONLINE,
         approvedHook: contentPackaging.sharedPackage?.hooks.find(h => h.text === input.plan.onScreenHook.text),
         timeline: input.timeline, analysis, boundary: input.boundary, loop: input.loop,

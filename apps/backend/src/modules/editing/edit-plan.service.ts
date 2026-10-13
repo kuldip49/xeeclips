@@ -109,7 +109,12 @@ export class EditPlanService {
     if (context.packaging?.sharedPackage) {
       const p = context.packaging.sharedPackage;
       const evidence = { transcript: context.transcript, sourceTitle: context.title, visibleText: context.packaging.sharedPackage.understanding.visibleText };
-      const ranked = sharedQuality.rank(p.hooks, evidence, p.understanding, p.hooks.some(h=>h.source==='OPENAI') ? 'OPENAI' : 'LOCAL', context.usedHookTexts);
+      // XeeFree hooks already passed the twelve-point deterministic gate and carry its scores; re-ranking them with the old keyword
+      // screen would discard those scores and reject the quoted-claim hooks the gate allows. Only reuse across a batch is enforced here.
+      const used = new Set((context.usedHookTexts ?? []).map(t => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()));
+      const free = context.aiMode !== AiProcessingMode.ONLINE && !p.hooks.some(h => h.source === 'OPENAI');
+      const ranked = free ? p.hooks.filter(h => !used.has(h.text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim()))
+        : sharedQuality.rank(p.hooks, evidence, p.understanding, p.hooks.some(h=>h.source==='OPENAI') ? 'OPENAI' : 'LOCAL', context.usedHookTexts);
       const eligible = context.aiMode === AiProcessingMode.ONLINE ? ranked.filter(xeeProHookApproved) : ranked;
       const selected = eligible.find(h => h.text === p.selectedHook) ?? eligible[0];
       const text = selected?.text ?? '';
@@ -213,7 +218,7 @@ export class EditPlanService {
     const fallback = (reason: string, provider = '', model = ''): EditPlanResult => {
       const base = applyDeterministicEditorial(
         fallbackEditPlan(context.start, context.end, context.aspectRatio),
-        context.words, context.transcript);
+        context.words, context.transcript, { semantic: context.aiMode !== AiProcessingMode.ONLINE });
       // Luna is gone, but the headline is not optional: build one from the clip.
       const hook = this.applyHook(base, context, []);
       return { plan: hook.plan,

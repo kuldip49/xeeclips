@@ -1,6 +1,6 @@
 import { createHash } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
-import { countPerformance, currentAiProcessingMode, isProviderModelUnavailable,
+import { countPerformance, countProEscalation, currentAiProcessingMode, isProviderModelUnavailable,
   recordProviderChain,
   markProviderModelUnavailable, resetProviderModelAvailability } from './performance-telemetry';
 import {
@@ -8,6 +8,7 @@ import {
   LlmFailureKind,
   LlmProviderError,
   LlmProviderService,
+  assertCloudCallAllowed,
   LlmTaskRole,
   StructuredGenerationRequest
 } from './llm-provider.service';
@@ -133,9 +134,15 @@ export class LlmRouterService {
   async generate<T>(input: { role: LlmTaskRole; request: StructuredGenerationRequest; creativeTier?: 'PRIMARY' | 'ESCALATION' }):
     Promise<LlmRouteResult<T>> {
     const aiMode = currentAiProcessingMode();
-    if (aiMode !== AiProcessingMode.ONLINE) {
+    // Central execution policy: a XeeFree job fails closed here (XEEFREE_PROVIDER_VIOLATION) and is never routed or escalated.
+    try {
+      assertCloudCallAllowed('router', input.role, undefined, input.creativeTier === 'ESCALATION');
+    } catch (error) {
       this.logger.log(JSON.stringify({ event: 'llm_skipped', role: input.role,
-        reason: 'AI_MODE_FALLBACK_ONLY', aiMode }));
+        reason: 'XEEFREE_PROVIDER_VIOLATION', aiMode }));
+      throw error;
+    }
+    if (aiMode !== AiProcessingMode.ONLINE) {
       throw new LlmProviderError('AI_MODE_FALLBACK_ONLY',
         'Generative model routing is disabled for FALLBACK_ONLY');
     }
@@ -203,6 +210,7 @@ export class LlmRouterService {
         maxRetries: 0 };
       if (attempts.length) countPerformance('failoverCount');
       recordProviderChain(route.provider);
+      if (input.creativeTier === 'ESCALATION') countProEscalation();
       try {
         const request = {
           ...input.request,

@@ -336,10 +336,19 @@ async function main() {
     const h = await seedRichProject();
     const hookId = hookOf(h.project).id;
     const seen = new Set([hookOf(h.project).properties.content]);
+    let declined = 0;
     for (const [turn, check] of [['change the on screen hook', null],
       ['make it shorter', 'shorter'], ['more curiosity based', null], ['try another', null]]) {
       const before = hookOf(h.project).properties.content;
-      const { planned } = await h.sayAndApply(turn);
+      const planned = await h.say(turn);
+      if (planned.proposal.needsClarification) {
+        assert.match(planned.proposal.clarificationQuestion, /supported|already shown|wording/iu);
+        assert.equal(hookOf(await h.refresh()).properties.content, before, 'exhaustion leaves the hook unchanged');
+        assert.equal(h.llm.calls, 0, 'exhaustion does not escalate a local rewrite');
+        declined++;
+        continue;
+      }
+      await h.apply(planned);
       assert.ok(planned.proposal.route.startsWith('CREATIVE'), `${turn}: creative route`);
       const after = els(h.project, 'TEXT').filter((element) =>
         element.properties.presetRole === 'HOOK');
@@ -352,7 +361,23 @@ async function main() {
       }
       seen.add(after[0].properties.content);
     }
-    ok('30 hook: change -> shorter -> curiosity -> "try another" all edit ONE hook, no repeats');
+    for (let attempt = 0; declined === 0 && attempt < 12; attempt++) {
+      const before = hookOf(h.project).properties.content;
+      const planned = await h.say('try another');
+      if (planned.proposal.needsClarification) {
+        assert.match(planned.proposal.clarificationQuestion, /supported|already shown|wording/iu);
+        assert.equal(hookOf(await h.refresh()).properties.content, before);
+        assert.equal(h.llm.calls, 0);
+        declined++;
+      } else {
+        await h.apply(planned);
+        const text = hookOf(h.project).properties.content;
+        assert.ok(!seen.has(text), 'additional local options never repeat');
+        seen.add(text);
+      }
+    }
+    assert.ok(seen.size >= 2 && declined >= 1, 'the finite grounded pool rewrites then explicitly declines');
+    ok('30 hook: rewrites edit ONE hook without repeats; an exhausted grounded pool explicitly declines');
 
     // 31/32. undo / redo through chat are the Undo/Redo buttons
     const revision = h.project.revision;
@@ -400,6 +425,9 @@ async function main() {
     const hookAfter = stripVolatile(hookOf(s.project));
     const { content: _a, ...hookRest } = hookAfter.properties;
     const { content: _b, ...hookWas } = hookBefore.properties;
+    // The text setter canonicalises an absent run list to []; both represent
+    // no per-word styling. All actual styling and geometry still must match.
+    if (Array.isArray(hookRest.textRuns) && hookRest.textRuns.length === 0 && hookWas.textRuns === undefined) delete hookRest.textRuns;
     assert.deepEqual(hookRest, hookWas, 'only the hook wording may change');
     assert.deepEqual({ ...hookAfter, properties: null }, { ...hookBefore, properties: null });
     ok('33 minimal mutation: "change the hook" leaves crop, logo, caption edit, music, colour ' +
@@ -754,11 +782,19 @@ async function main() {
     const stub = { calls: 0, isAnyConfigured: () => true,
       generate: async ({ request }) => {
         stub.calls += 1;
-        if (request.schemaName === 'edit_mode_chat_hook') {
-          return { data: { candidates: [
-            { text: 'Doctors Hate This One Weird Rate Trick' },
-            { text: 'Why Did the Bank Refuse to Cut Rates This Year?' }] },
+        if (request.schemaName === 'shared_hook_candidates_v2') {
+          return { data: { hooks: [
+            { text: 'Doctors Hate This One Weird Rate Trick', category: 'BOLD', support: 'unsupported' },
+            { text: 'Why Did the Bank Refuse to Cut Rates This Year?', category: 'QUESTION', support: 'Here is why the bank refused to cut rates this year.' }] },
           metadata: { provider: 'stub', model: 'stub-1' } };
+        }
+        if (request.schemaName === 'shared_hook_review_v2') {
+          const data = require('./fixtures/hook-review.cjs')({ request });
+          const hooks = JSON.parse(request.userPrompt).hooks;
+          for (const review of data.reviews) if (/Doctors/u.test(hooks[review.index].text)) {
+            Object.assign(review, { approved: false, grounding: 0, misleadingRisk: 95, issue: 'invented claim' });
+          }
+          return { data, metadata: { provider: 'stub', model: 'stub-1' } };
         }
         throw new Error('planner not stubbed');
       } };

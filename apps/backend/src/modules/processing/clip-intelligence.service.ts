@@ -1,3 +1,4 @@
+import { isXeeFree } from './execution-policy';
 import { Injectable, Logger } from '@nestjs/common';
 import { calculateContentPotential, clampScore, roundScore, ScoredClipCandidate } from './clip-candidates';
 import { LlmProviderError, StrictJsonSchema, validateSchema, normalizeSchema } from './llm-provider.service';
@@ -371,13 +372,14 @@ export class ClipIntelligenceService {
   private readonly logger = new Logger(ClipIntelligenceService.name);
   constructor(private readonly router: LlmRouterService = new LlmRouterService()) {}
 
-  isMultimodalConfigured() { return currentAiProcessingMode() !== AiProcessingMode.OFFLINE &&
+  isMultimodalConfigured() { return !isXeeFree(currentAiProcessingMode()) &&
     this.router.isAnyConfigured('multimodalUnderstanding'); }
 
   async analyzeMultimodal(videoId: string, signals: VisualSignal[],
     media: Array<{ mimeType: string; data: string }> = []) {
     const fallback = signals.map(deterministicObservation);
-    if (currentAiProcessingMode() === AiProcessingMode.OFFLINE) {
+    // XeeFree interprets visual signals deterministically and never attempts a model call.
+    if (isXeeFree(currentAiProcessingMode())) {
       this.logger.log(JSON.stringify({ event: 'offline_deterministic_role',
         role: 'multimodalUnderstanding' }));
       return { observations: fallback, route: null as LlmRouteMetadata | null,
@@ -473,6 +475,17 @@ export class ClipIntelligenceService {
       route: null as LlmRouteMetadata | null, failureCategory: '',
       routesByCandidate: [] as Array<LlmRouteMetadata | null>, failureCategories: [] as string[],
       decisionSources, highConfidenceSkippedCount: 0, highConfidenceRejectedBy };
+    // A low-scoring Free candidate still uses local understanding. The online
+    // confidence gate decides when Pro needs a model, never whether Free may
+    // attempt one. Return before building batches or entering the router.
+    if (isXeeFree(currentAiProcessingMode())) {
+      await onProgress?.(candidates.length, candidates.length);
+      return { understandings: fallback, route: null as LlmRouteMetadata | null,
+        failureCategory: '', routesByCandidate: candidates.map(() => null),
+        failureCategories: candidates.map(() => ''), decisionSources,
+        highConfidenceSkippedCount: decisionSources.filter(source => source === 'DETERMINISTIC_HIGH_CONFIDENCE').length,
+        highConfidenceRejectedBy };
+    }
     // Stage 5 confidence gate: a clip that every deterministic signal already agrees is
     // strong and unambiguous skips the semantic model call entirely and keeps its
     // deterministic understanding, which is measurably grounded in the exact transcript.

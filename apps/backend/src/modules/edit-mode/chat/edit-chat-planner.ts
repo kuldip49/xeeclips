@@ -155,6 +155,8 @@ export async function planWithLlm(input: {
 }): Promise<{ intent: ChatIntent; provider: string; model: string } | null> {
   const { llm, logger, message, context } = input;
   if ((process.env.EDIT_MODE_CHAT_LLM_ENABLED ?? 'true').toLowerCase() === 'false') return null;
+  // XeeFree project: deterministic planning only. This is never an escalation to a model, whatever the deployment's AI mode.
+  if (context.project.freeOnly) return null;
 
   // One context for the whole turn, so the configuration check and the call it
   // guards agree about which mode they are in.

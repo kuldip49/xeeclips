@@ -418,19 +418,37 @@ export class EditModeService {
     if (!result.count) throw new ConflictException('Your edits changed. Refresh before generating suggestions.');
   }
 
+  private async retryProjectSave<T>(save: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try { return await save(); }
+      catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2034') throw error;
+        // PostgreSQL rolled the whole transaction back. Re-read the revision
+        // before retrying so a competing user save cannot be overwritten.
+        if (attempt >= 2) throw new ConflictException('EditProject changed while saving. Refresh and retry.');
+      }
+    }
+  }
+
   async update(id: string, input: { revision?: unknown; name?: unknown; settings?: unknown }) {
     const expectedRevision = parseRevision(input.revision);
-    return serialize(await this.prisma.$transaction(async (tx) => {
+    return serialize(await this.retryProjectSave(() => this.prisma.$transaction(async (tx) => {
       const current = await tx.editProject.findUnique({ where: { id } });
       if (!current) throw new NotFoundException('EditProject not found');
       if (current.revision !== expectedRevision) throw new ConflictException('EditProject revision is stale');
       const name = input.name === undefined ? current.name
         : typeof input.name === 'string' ? input.name.trim() : '';
       if (!name) throw new BadRequestException('name cannot be empty');
-      const settings = input.settings === undefined ? current.settings as Prisma.InputJsonValue
+      let settings = input.settings === undefined ? current.settings as Prisma.InputJsonValue
         : input.settings && typeof input.settings === 'object' && !Array.isArray(input.settings)
           ? input.settings as Prisma.InputJsonValue
           : (() => { throw new BadRequestException('settings must be an object'); })();
+      const origin = settingsRecord(current.settings).origin;
+      if (input.settings !== undefined && origin !== undefined) {
+        // Source/generation provenance is server-owned. Replacing settings
+        // cannot remove a Free tier or opt that source into the Pro planner.
+        settings = { ...settingsRecord(settings), origin } as Prisma.InputJsonValue;
+      }
       const revision = current.revision + 1;
       const updated = await tx.editProject.update({
         where: { id }, data: { name, settings, revision }
@@ -443,7 +461,7 @@ export class EditModeService {
         }
       });
       return tx.editProject.findUniqueOrThrow({ where: { id }, include: includeProject });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })));
   }
 
   async remove(id: string) {

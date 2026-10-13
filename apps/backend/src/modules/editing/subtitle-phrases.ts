@@ -13,7 +13,10 @@ const protectedPair = (left: string, right: string) => {
     (/^[A-Z]/u.test(left) && /^[A-Z]/u.test(right) && a.length > 1 && b.length > 1);
 };
 
-export function buildSubtitlePhrases(input: TimedWord[], maxWords = 5): SubtitlePhrase[] {
+/** A word a caption should never break after: the line would end on "the", "to", "and"... and the next line start mid-phrase. */
+const WEAK_LINE_END = new Set(['a', 'an', 'the', 'of', 'to', 'in', 'on', 'at', 'for', 'with', 'and', 'or', 'but', 'my', 'your', 'his', 'her', 'our', 'their', 'this', 'that', 'is', 'are', 'was', 'were', 'be', 'by', 'from', 'as']);
+export type SubtitlePhraseOptions = { /** XeeFree: keep growing a phrase one word (never past maxWords + 1) rather than end it on a weak word. */ avoidWeakEnds?: boolean };
+export function buildSubtitlePhrases(input: TimedWord[], maxWords = 5, options: SubtitlePhraseOptions = {}): SubtitlePhrase[] {
   const words = input.filter((word) => Number.isFinite(word.start) &&
     Number.isFinite(word.end) && word.end > word.start && word.text.trim())
     .sort((a, b) => a.start - b.start);
@@ -26,7 +29,8 @@ export function buildSubtitlePhrases(input: TimedWord[], maxWords = 5): Subtitle
     const gap = previous ? word.start - previous.end : 0;
     const punctuation = previous && /[.!?;:]$/u.test(previous.text);
     if (current.length && (gap > .48 || (punctuation && current.length >= 2) ||
-      (current.length >= maxWords && !protectedPair(previous.text, word.text)) ||
+      (current.length >= maxWords && !protectedPair(previous.text, word.text) &&
+        !(options.avoidWeakEnds && WEAK_LINE_END.has(clean(previous.text)) && gap < .25)) ||
       current.length >= maxWords + 1)) flush();
     current.push(word);
   }

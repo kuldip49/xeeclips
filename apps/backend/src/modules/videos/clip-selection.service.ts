@@ -1,3 +1,5 @@
+import { isXeeFree } from '../processing/execution-policy';
+import { diversifyOrder } from '../free/free-moments';
 import { UsageService } from '../auth/usage.service';
 import { AUTOMATIC_RAW } from '../editing/raw-edit-plan';
 import {
@@ -717,6 +719,9 @@ export class ClipSelectionService {
     const started = Date.now();
     let candidates = await this.prisma.clipCandidate.findMany({ where: { videoId: video.id } });
     let { ordered } = orderCandidatesForSelection(candidates, video.duration);
+    // XeeFree: reorder the canonical list for diversity (angle, key phrases, speakers, temporal spread). The order is deterministic and
+    // prefix-stable, so asking for more clips later never changes the clips already delivered.
+    if (isXeeFree(aiMode)) ordered = diversifyOrder(ordered);
     // Step 11: the brief decides WHICH moments. The quality-ordered, de-duplicated
     // usable pool is re-ranked by intent (and filtered for "only X").
     const intent = generation?.interpreted.intent;

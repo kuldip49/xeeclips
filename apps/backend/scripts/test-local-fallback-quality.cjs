@@ -248,7 +248,8 @@ async function testTelemetryAndPromptSizes() {
 async function main() {
   try {
     await testTimeoutsAndFallback();
-    await testNvidiaExtraction();
+    // Provider calls are only legal inside an ONLINE (XeePro) execution context; the execution policy fails closed otherwise.
+    await performanceContext.run(createPerformanceTelemetry('ONLINE'), () => testNvidiaExtraction());
     await testLocalRepair();
     await testCircuitConcurrency();
     const promptSizes = await testTelemetryAndPromptSizes();
@@ -264,4 +265,4 @@ async function main() {
   }
 }
 
-main().catch(error => { console.error(error); process.exitCode = 1; });
+performanceContext.run(createPerformanceTelemetry('ONLINE'), main).catch(error => { console.error(error); process.exitCode = 1; });

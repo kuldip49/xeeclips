@@ -2,7 +2,8 @@ require('reflect-metadata');
 const assert = require('node:assert/strict');
 const { ProviderRegistry } = require('../dist/modules/processing/provider-registry');
 const { LlmRouterService } = require('../dist/modules/processing/llm-router.service');
-const { LlmProviderError } = require('../dist/modules/processing/llm-provider.service');
+const { LlmProviderError, LlmProviderService } = require('../dist/modules/processing/llm-provider.service');
+const { AiProvidersController } = require('../dist/modules/processing/ai-providers.controller');
 const { createPerformanceTelemetry, performanceContext, countLlmRequest } =
   require('../dist/modules/processing/performance-telemetry');
 
@@ -87,6 +88,21 @@ async function main() {
   })));
   assert.deepEqual(failing.routesFor('creativeGeneration', 'ONLINE')
     .map(route => route.provider), ['openai']);
+  let adminMode;
+  const admin = new AiProvidersController(registry, router, {
+    generateStructuredWithConfig: async () => {
+      adminMode = performanceContext.getStore()?.executionMode;
+      return { ok: true };
+    }
+  });
+  assert.equal((await admin.test('openai')).reachable, true);
+  assert.equal(adminMode, 'XEEPRO', 'the explicit admin connectivity action keeps its online behavior');
+  const scoped = new AiProvidersController(registry, router, new LlmProviderService());
+  const freeTelemetry = createPerformanceTelemetry('FALLBACK_ONLY');
+  const refusal = await performanceContext.run(freeTelemetry, () => scoped.test('openai'));
+  assert.equal(refusal.reachable, false, 'an existing Free scope cannot be upgraded by the admin helper');
+  assert.equal(freeTelemetry.cloudLlmCalls, 0);
+  assert.equal(freeTelemetry.blockedProviderAttempts, 1, 'intentional negative guard check');
   console.log('Provider connector tests passed: ONLINE is OpenAI Luna only; adapters preserved; modes isolated.');
 }
 
