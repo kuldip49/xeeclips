@@ -83,6 +83,25 @@ async function main() {
   assert.equal((await req('/history/clips', b.cookie)).body[0].mode, 'XeePro');
   await db.processingJob.delete({ where: { id: newerJob.id } });
   passed('History keeps each clip tier when a newer job uses another tier');
+  // Recreate the tier-less generated projects stored by the previous release.
+  const legacyFree = await db.editProject.create({ data: { userId: a.body.id, name: 'Legacy Free', generatedClipId: ca.id, settings: { origin: { originKind: 'GENERATED_CLIP' } } } });
+  const legacyPro = await db.editProject.create({ data: { userId: b.body.id, name: 'Legacy Pro', generatedClipId: cb.id, settings: { origin: { originKind: 'GENERATED_CLIP' } } } });
+  await db.generatedClip.update({ where: { id: ca.id }, data: { editTelemetry: {}, generationJobId: va.processingJobs[0].id } });
+  await db.generatedClip.update({ where: { id: cb.id }, data: { editTelemetry: {} } });
+  await db.processingJob.update({ where: { id: vb.processingJobs[0].id }, data: { aiMode: 'ONLINE', telemetry: { effectiveAiMode: 'ONLINE' } } });
+  const laterPro = await db.processingJob.create({ data: { videoId: va.id, aiMode: 'ONLINE', status: 'COMPLETED' } });
+  assert.equal((await req('/edit-mode/projects/' + legacyFree.id, a.cookie)).body.settings.origin.aiMode, 'FALLBACK_ONLY');
+  assert.equal((await req('/edit-mode/projects/' + legacyPro.id, b.cookie)).body.settings.origin.aiMode, 'ONLINE');
+  assert.equal((await req('/edit-mode/projects/' + legacyFree.id + '/agent/run', a.cookie, 'POST', { message: 'mute the music', aiConsent: false })).body.code, 'NO_SOURCE');
+  assert.equal((await req('/edit-mode/projects/' + legacyPro.id + '/agent/run', b.cookie, 'POST', { message: 'mute the music', aiConsent: false })).body.code, 'AI_CONSENT_REQUIRED');
+  assert.equal((await db.editProject.findUniqueOrThrow({ where: { id: legacyPro.id } })).settings.origin.aiMode, undefined, 'tier recovery must not write production-style records');
+  const injected = await req('/edit-mode/projects/' + legacyFree.id, a.cookie, 'PATCH', { revision: 0, settings: { origin: { aiMode: 'ONLINE' } } });
+  assert.equal(injected.status, 200);
+  assert.equal((await req('/edit-mode/projects/' + legacyFree.id, a.cookie)).body.settings.origin.aiMode, 'FALLBACK_ONLY');
+  await db.processingJob.delete({ where: { id: laterPro.id } });
+  await db.generatedClip.update({ where: { id: ca.id }, data: { editTelemetry: { effectiveAiMode: 'FALLBACK_ONLY' } } });
+  await db.generatedClip.update({ where: { id: cb.id }, data: { editTelemetry: { effectiveAiMode: 'ONLINE' } } });
+  passed('legacy Pro/Free tiers recover from owned original records without writes, newer-job upgrade or consent bypass');
   const session = await req('/projects/' + pa.body.id + '/videos/upload-sessions', a.cookie, 'POST', { name: 'a.mp4', mimeType: 'video/mp4', size: 1 });
   assert.equal(session.status, 201); assert.equal((await req('/upload-sessions/' + session.body.id + '/complete', b.cookie, 'POST')).status, 404);
   passed('disk upload sessions are account-owned');

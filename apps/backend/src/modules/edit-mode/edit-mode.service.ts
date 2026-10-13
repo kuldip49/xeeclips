@@ -11,6 +11,7 @@ import { extname, join } from 'path';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { PrismaService } from '../database/prisma.service';
+import { withTrustedProjectTier } from '../processing/project-execution-policy';
 import { probeMedia } from '../processing/media-probe';
 import { StorageService } from '../storage/storage.service';
 import { EditModeAnalysisService } from './edit-mode-analysis.service';
@@ -404,7 +405,7 @@ export class EditModeService {
       where: { id }, include: includeProject
     });
     if (!project) throw new NotFoundException('EditProject not found');
-    return serialize(project);
+    return serialize(await withTrustedProjectTier(this.prisma, project));
   }
 
   async saveCreativeSuggestions(id:string, revision:number, creativePackage:unknown, hooksOnly=true) {

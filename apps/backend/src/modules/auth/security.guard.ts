@@ -1,6 +1,7 @@
 import { CanActivate, ExecutionContext, ForbiddenException, HttpException, Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { projectExecutionPolicy } from '../processing/execution-policy';
+import { withTrustedProjectTier } from '../processing/project-execution-policy';
 import Redis from 'ioredis';
 import type { Request } from 'express';
 import { AuthService, digest } from './auth.service';
@@ -54,8 +55,9 @@ export class SecurityGuard implements CanActivate {
     if (askAi && !user.aiProcessingConsentAt) {
       const editId = /^\/edit-mode\/projects\/([^/]+)\//.exec(path)?.[1];
       const project = editId ? await this.prisma?.editProject.findFirst({
-        where: { id: editId, userId: user.id }, select: { settings: true } }) : null;
-      const localOnly = project && projectExecutionPolicy(project.settings)?.mode === 'XEEFREE';
+        where: { id: editId, userId: user.id }, select: { settings: true, generatedClipId: true, userId: true } }) : null;
+      const scoped = project && this.prisma ? await withTrustedProjectTier(this.prisma, project) : project;
+      const localOnly = scoped && projectExecutionPolicy(scoped.settings)?.mode === 'XEEFREE';
       if (!localOnly) throw new ForbiddenException({ code: 'AI_CONSENT_REQUIRED', message: 'Allow AI processing in Settings first.' });
     }
     return true;
