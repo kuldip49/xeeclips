@@ -1,3 +1,4 @@
+import { assertNewProcessingMode } from '../processing/generation-availability';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { createReadStream } from 'fs';
@@ -46,6 +47,7 @@ export class DiskUploadSessionStore {
   }
 
   async create(projectId: string, body: Record<string, unknown>) {
+    assertNewProcessingMode(body.aiMode);
     const size = body.size;
     const name = body.name;
     const mimeType = body.mimeType;

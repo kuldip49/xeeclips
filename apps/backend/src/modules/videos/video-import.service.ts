@@ -1,3 +1,4 @@
+import { assertNewProcessingMode } from '../processing/generation-availability';
 import { ConflictException, Injectable, Logger, NotFoundException, OnModuleDestroy,
   OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
@@ -72,6 +73,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
   }
 
   async submit(body: Record<string, unknown>) {
+    assertNewProcessingMode(body.aiMode);
     const parsed = parseYouTubeUrl(body.url);
     if (body.rightsConfirmed !== true) throw new ImportError('MEDIA_ACCESS_DENIED',
       'Confirm you have the right to process this video, or upload the video file instead.');
@@ -133,6 +135,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
   private async reserveImport(tx: Prisma.TransactionClient, row: Prisma.VideoImportGetPayload<{}>) {
     await tx.$queryRaw`SELECT id FROM "VideoImport" WHERE id = ${row.id} FOR UPDATE`;
     row = await tx.videoImport.findUniqueOrThrow({ where: { id: row.id } });
+    assertNewProcessingMode(row.aiMode);
     if (!row.autoGeneration) return row;
     const reservation = row.creditReservationKey ? await tx.creditReservation.findUnique({ where: { jobKey: row.creditReservationKey } }) : null;
     if (reservation?.status === 'RESERVED') return row;
@@ -152,6 +155,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
     const row = await this.prisma.videoImport.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Import not found');
     if (row.status === 'READY' && row.videoId) return this.publicJob(row);
+    assertNewProcessingMode(row.aiMode);
     if (row.status === 'IMPORTING' || row.status === 'PENDING')
       throw new ConflictException('Import is already running');
     const queued = await this.queue.getJob(id);

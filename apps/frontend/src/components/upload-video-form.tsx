@@ -83,12 +83,13 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
   const abortRef = useRef<AbortController | null>(null);
   const createdProject = useRef<string | null>(projectId ?? null);
   const formKey = projectId ?? 'new';
-  const [settings, setSettings] = useState<EntrySettings>(initialSettings ?? DEFAULT_ENTRY_SETTINGS);
+  const [settings, setSettings] = useState<EntrySettings>({ ...(initialSettings ?? DEFAULT_ENTRY_SETTINGS), aiMode: 'FALLBACK_ONLY' });
   const [source, setSource] = useState<EntrySource>(initialSource ?? 'youtube');
   const [file, setFile] = useState<File | null>(null);
   const [sourceUrl, setSourceUrl] = useState('');
   const [rightsConfirmed, setRightsConfirmed] = useState(false);
   const [youtubeEnabled, setYoutubeEnabled] = useState<boolean | null>(null);
+  const [proEnabled, setProEnabled] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [error, setError] = useState<{ message: string; fallback: boolean } | null>(null);
@@ -101,11 +102,19 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
 
   useEffect(() => {
     let active = true;
-    void getVideoImportCapabilities().then((result) => {
-      if (active) { setYoutubeEnabled(result.youtubeEnabled); if (!result.youtubeEnabled) setSource('file'); }
-    }).catch(() => undefined);
+    const refreshAvailability = () => void getVideoImportCapabilities().then((result) => {
+      if (active) {
+        setYoutubeEnabled(result.youtubeEnabled); setProEnabled(result.xeePro === true);
+        if (!result.xeePro) setSettings(current => ({ ...current, aiMode: 'FALLBACK_ONLY' }));
+        if (!result.youtubeEnabled) setSource('file');
+      }
+    }).catch(() => { if (active) {
+      setProEnabled(null); setSettings(current => ({ ...current, aiMode: 'FALLBACK_ONLY' }));
+    } });
+    refreshAvailability();
+    const availabilityTimer = window.setInterval(refreshAvailability, 30_000);
     setCanPaste(typeof navigator !== 'undefined' && typeof navigator.clipboard?.readText === 'function');
-    return () => { active = false; abortRef.current?.abort(); };
+    return () => { active = false; window.clearInterval(availabilityTimer); abortRef.current?.abort(); };
   }, []);
 
   useEffect(() => { onSettingsChange?.(settings); }, [settings, onSettingsChange]);
@@ -197,6 +206,9 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (offline) return;
+    if (settings.aiMode === 'ONLINE' && proEnabled !== true) {
+      setError({ message: 'XeePro is temporarily unavailable. XeeFree is available.', fallback: false }); return;
+    }
     setError(null); setNotice(null); setUploadProgress(null); setBusy(true);
     try {
       const started = source === 'youtube' ? await submitLink() : await submitFile();
@@ -311,13 +323,15 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
       <div className='grid gap-2 sm:grid-cols-2'>
         {([{ value: 'FALLBACK_ONLY', title: 'XeeFree', description: "Fast clip creation using XeeClip's built-in editing intelligence." },
           { value: 'ONLINE', title: 'XeePro', description: 'Advanced AI understanding for stronger moment selection and creative decisions.' }] as const).map((option) =>
-          { const selected = settings.aiMode === option.value;
+          { const unavailable = option.value === 'ONLINE' && proEnabled !== true;
+          const selected = settings.aiMode === option.value;
           const Indicator = selected ? CheckCircle2 : Circle;
           return <label key={option.value} data-entry-mode={option.value}
             className={cn('pressable flex min-h-[56px] cursor-pointer items-start gap-3 rounded-2xl border p-3 text-sm transition-colors focus-within:ring-2 focus-within:ring-ring',
-              selected ? 'border-primary bg-primary/10' : 'border-border bg-sunken hover:border-border-strong')}>
-            <input type='radio' className='sr-only' name={`entry-mode-${formKey}`} checked={selected}
-              onChange={() => update({ aiMode: option.value })} />
+              selected ? 'border-primary bg-primary/10' : 'border-border bg-sunken hover:border-border-strong',
+              unavailable && 'cursor-not-allowed opacity-50')}>
+            <input type='radio' className='sr-only' name={`entry-mode-${formKey}`} checked={selected} disabled={unavailable}
+              onChange={() => { if (!unavailable) update({ aiMode: option.value }); }} />
             <Indicator size={20} className={cn('mt-0.5 shrink-0', selected ? 'text-primary-soft' : 'text-faint')} aria-hidden />
             <span className='min-w-0 flex-1'>
               <span className='flex items-center gap-1.5 font-display font-semibold'>{option.title}
@@ -327,6 +341,10 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
           </label>; })}
       </div>
     </fieldset>
+
+    {proEnabled === false && <p role='status' className='text-xs text-muted-foreground'>
+      XeePro is temporarily unavailable. XeeFree is available.
+    </p>}
 
     <div className='grid gap-2'>
       <div className='flex items-center justify-between gap-4'>

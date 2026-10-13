@@ -1,3 +1,4 @@
+import { isXeeProEnabled, assertNewProcessingMode } from '../processing/generation-availability';
 import { CanActivate, ExecutionContext, ForbiddenException, HttpException, Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { projectExecutionPolicy } from '../processing/execution-policy';
@@ -20,7 +21,7 @@ export class SecurityGuard implements CanActivate {
   async canActivate(context: ExecutionContext) {
     const req = context.switchToHttp().getRequest<Request>();
     const path = req.path;
-    if (path === '/health') return true;
+    if (path === '/health' || req.method === 'GET' && path === '/videos/import-capabilities') return true;
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       const allowed = (process.env.FRONTEND_ORIGIN ?? 'http://localhost:3000').split(',').map(v => v.trim());
       if (!req.headers.origin || !allowed.includes(req.headers.origin)) throw new ForbiddenException('Request origin is not allowed.');
@@ -41,6 +42,7 @@ export class SecurityGuard implements CanActivate {
       if (!identity.admin) throw new ForbiddenException('Administrator access required.');
       identity.adminView = path.startsWith('/admin');
     }
+    if (req.method === 'POST') assertNewProcessingMode(req.body?.aiMode);
     const submission = req.method === 'POST' && /clip-selection|\/export$|\/retry$|\/import|\/analyze$|\/hooks$|\/post-copy$|\/styleone$|\/agent\/run|\/chat\/plan|\/creative\/resolve|\/review|\/brief/.test(path);
     if (submission) await this.limit('submit:' + user.id, 30, 60);
     // Avoid uploads/import downloads when the definitive current balance is already zero.
@@ -52,7 +54,7 @@ export class SecurityGuard implements CanActivate {
     }
     const askAi = /\/agent\/run|\/chat\/(plan|apply)|\/review(\/propose)?$|\/brief/.test(path) || path.endsWith('/creative/resolve') && req.body?.useAi === true
       || /\/(post-copy|hooks)$/.test(path) && req.body?.externalAiAuthorized === true;
-    if (askAi && !user.aiProcessingConsentAt) {
+    if (askAi && isXeeProEnabled() && !user.aiProcessingConsentAt) {
       const editId = /^\/edit-mode\/projects\/([^/]+)\//.exec(path)?.[1];
       const project = editId ? await this.prisma?.editProject.findFirst({
         where: { id: editId, userId: user.id }, select: { settings: true, generatedClipId: true, userId: true } }) : null;

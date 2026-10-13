@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
+import { useGenerationAvailability } from '@/lib/use-generation-availability';
 import { Captions, Check, Loader2, Pencil, RefreshCw, Sparkles, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { analyzeReframe, HOOK_CATEGORY_LABEL, isProcessing, reframeRequest, requestHooks, type ReframeHook, type ReframeSession } from '@/lib/quick-reframe-api';
@@ -18,6 +19,8 @@ export function SuggestedHooks({ session, onSession, onApply, current, busy, com
   current?: string; busy: boolean; compact?: boolean;
 }) {
   const [consent, setConsent] = useState(false);
+  const { proEnabled } = useGenerationAvailability();
+  useEffect(() => { if (proEnabled !== true) setConsent(false); }, [proEnabled]);
   const [loading, setLoading] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
@@ -27,7 +30,7 @@ export function SuggestedHooks({ session, onSession, onApply, current, busy, com
   const [category, setCategory] = useState('');
   const generate = async (regenerate = false) => {
     setLoading(true); setWarnings([]);
-    try { const result = await requestHooks(session.id, consent, regenerate ? session.hooks.map((hook) => hook.text) : [], {direction,category:category ? category as ReframeHook['category'] : undefined});
+    try { const result = await requestHooks(session.id, consent && proEnabled === true, regenerate ? session.hooks.map((hook) => hook.text) : [], {direction,category:category ? category as ReframeHook['category'] : undefined});
       onSession(result.session); setWarnings(result.warnings); }
     catch (error) { setWarnings([error instanceof Error ? error.message : 'Hook suggestions are unavailable.']); }
     finally { setLoading(false); }
@@ -59,8 +62,8 @@ export function SuggestedHooks({ session, onSession, onApply, current, busy, com
         <Button type='button' size='sm' variant='secondary' disabled={loading || busy} onClick={() => void check()}>Check video</Button></div>)}
     {!checking && !session.hasTranscript && <p className='text-xs text-muted-foreground'>No speech was found in this video, so hooks cannot be suggested. Write your own below.</p>}
     {!checking && session.hasTranscript && <label className='flex items-start gap-2 text-[11px] leading-5 text-muted-foreground'>
-      <input type='checkbox' className='mt-1' checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-      Use OpenAI for stronger suggestions (sends a compact package of retained speech, visible text and source context; video stays on XeeClip). Unticked, suggestions are written locally.</label>}
+      <input type='checkbox' className='mt-1' disabled={proEnabled !== true} checked={consent} onChange={(e) => setConsent(e.target.checked)} />
+      Use XeePro for this request.</label>}
     {!checking && session.hasTranscript && !hooks.length && <Button type='button' disabled={loading || busy} onClick={() => void generate()} data-testid='generate-hooks'>
       {loading ? <Loader2 size={15} className='animate-spin' /> : <Sparkles size={15} />}{loading ? 'Analyzing your video…' : 'Suggest hooks'}</Button>}
     {!checking && session.hasTranscript && <div className='grid grid-cols-2 gap-2'>

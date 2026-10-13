@@ -1,3 +1,4 @@
+import { generationCapabilities } from '../processing/generation-availability';
 import { BadRequestException, Body, Controller, Get, HttpCode, Param, Post, Query } from
   '@nestjs/common';
 import { VideoImportService } from './video-import.service';
@@ -9,7 +10,7 @@ export class VideoImportController {
 
   @Get('videos/import-capabilities')
   capabilities() {
-    return { youtubeEnabled: process.env.YOUTUBE_IMPORT_APPROVED === 'true' };
+    return { youtubeEnabled: process.env.YOUTUBE_IMPORT_APPROVED === 'true', ...generationCapabilities() };
   }
 
   @Post('videos/import-url')

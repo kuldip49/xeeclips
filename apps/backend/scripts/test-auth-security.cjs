@@ -20,6 +20,8 @@ async function req(path, cookie, method = 'GET', body, requestOrigin = origin) {
   return { status: res.status, body: await res.json().catch(() => ({})), cookie: res.headers.get('set-cookie')?.split(';')[0], headers: res.headers };
 }
 async function main() {
+  // Providerless integration; availability is toggled explicitly in the cases below.
+  process.env.XEEPRO_ENABLED = 'true';
   if (!new URL(process.env.DATABASE_URL).pathname.includes('auth_test')) throw new Error('An isolated auth_test database is required.');
   app = await NestFactory.create(AppModule, { logger: ['error', 'warn'] });
   app.use((_req, res, next) => { res.setHeader('Cache-Control', 'private, no-store'); requestIdentity.run({}, next); });
@@ -102,6 +104,33 @@ async function main() {
   await db.generatedClip.update({ where: { id: ca.id }, data: { editTelemetry: { effectiveAiMode: 'FALLBACK_ONLY' } } });
   await db.generatedClip.update({ where: { id: cb.id }, data: { editTelemetry: { effectiveAiMode: 'ONLINE' } } });
   passed('legacy Pro/Free tiers recover from owned original records without writes, newer-job upgrade or consent bypass');
+  process.env.XEEPRO_ENABLED = 'false';
+  const balancesBefore = await db.user.findMany({ orderBy: { id: 'asc' }, select: { id: true, creditBalance: true } });
+  const reservationCount = await db.creditReservation.count(); const ledgerCount = await db.creditTransaction.count();
+  const capabilities = await req('/videos/import-capabilities', null);
+  assert.equal(capabilities.status, 200); assert.equal(capabilities.body.xeeFree, true); assert.equal(capabilities.body.xeePro, false);
+  assert.deepEqual(Object.keys(capabilities.body).sort(), ['xeeFree', 'xeePro', 'youtubeEnabled']);
+  passed('public availability exposes only product capabilities');
+  const unavailable = r => { assert.equal(r.status, 409); assert.equal(r.body.code, 'XEEPRO_UNAVAILABLE'); assert.equal(r.body.message, 'XeePro is temporarily unavailable. XeeFree is available.'); };
+  for (const mode of ['ONLINE', 'XEEPRO']) unavailable(await req('/projects/' + pa.body.id + '/videos/upload-sessions', a.cookie, 'POST', { name: 'blocked.mp4', mimeType: 'video/mp4', size: 1, aiMode: mode }));
+  unavailable(await req('/videos/import-url', a.cookie, 'POST', { projectId: pa.body.id, url: 'https://youtu.be/abcdefghi12', rightsConfirmed: true, aiMode: 'ONLINE' }));
+  unavailable(await req('/videos/' + vb.id + '/clip-selection', b.cookie, 'POST', { requestedClipCount: 1, outputStyle: 'AI_EDITED', generation: { templateId: 'AUTOMATIC_2' } }));
+  passed('disabled Pro upload, import and old-source generation refuse before reservation');
+  assert.deepEqual(await db.user.findMany({ orderBy: { id: 'asc' }, select: { id: true, creditBalance: true } }), balancesBefore);
+  assert.equal(await db.creditReservation.count(), reservationCount); assert.equal(await db.creditTransaction.count(), ledgerCount);
+  passed('refused Pro processing does not reserve, consume or change credits');
+  assert.equal((await req('/edit-mode/projects/' + legacyPro.id, b.cookie)).body.settings.origin.aiMode, 'ONLINE');
+  assert.equal((await req('/history/clips', b.cookie)).body[0].mode, 'XeePro');
+  assert.equal((await req('/edit-mode/projects/' + legacyPro.id, b.cookie, 'PATCH', { revision: 0, name: 'Legacy Pro remains editable' })).status, 200);
+  unavailable(await req('/edit-mode/projects/' + legacyPro.id + '/hooks', b.cookie, 'POST', { revision: 1, externalAiAuthorized: true }));
+  const disabledState = await req('/edit-mode/projects/' + legacyPro.id + '/agent', b.cookie);
+  assert.equal(disabledState.status, 200); assert.equal(disabledState.body.ai.state, 'XEEPRO_UNAVAILABLE');
+  assert.equal((await req('/edit-mode/projects/' + legacyPro.id + '/agent/run', b.cookie, 'POST', { message: 'mute the music', aiConsent: false })).body.code, 'NO_SOURCE');
+  passed('old Pro History, manual edit and local agent path remain; fresh Pro hook is friendly unavailable');
+  process.env.XEEPRO_ENABLED = 'true';
+  assert.equal((await req('/videos/import-capabilities', null)).body.xeePro, true);
+  assert.equal((await req('/edit-mode/projects/' + legacyPro.id + '/agent/run', b.cookie, 'POST', { message: 'mute the music', aiConsent: false })).body.code, 'AI_CONSENT_REQUIRED');
+  passed('one availability flag restores existing Pro consent behavior');
   const session = await req('/projects/' + pa.body.id + '/videos/upload-sessions', a.cookie, 'POST', { name: 'a.mp4', mimeType: 'video/mp4', size: 1 });
   assert.equal(session.status, 201); assert.equal((await req('/upload-sessions/' + session.body.id + '/complete', b.cookie, 'POST')).status, 404);
   passed('disk upload sessions are account-owned');

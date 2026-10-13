@@ -1,3 +1,4 @@
+import { isXeeProEnabled } from '../../processing/generation-availability';
 // The language-model planning step.
 //
 // The model's entire job is to turn one sentence into structured commands over
@@ -48,7 +49,7 @@ export const CHAT_PLANNER_ROLE = 'editingPlan' as const;
  * (Previously the unset default was FALLBACK_ONLY, which silently kept the AI
  * editor off OpenAI even with a valid key.)
  */
-export const chatPlannerAiMode = () =>
+export const chatPlannerAiMode = () => !isXeeProEnabled() ? 'FALLBACK_ONLY' :
   (process.env.EDIT_MODE_CHAT_AI_MODE || process.env.AI_PROCESSING_MODE || '').trim() ||
   'ONLINE';
 

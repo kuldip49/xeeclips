@@ -1,3 +1,4 @@
+import { isXeeProEnabled } from './generation-availability';
 import { createHash } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { countPerformance, countProEscalation, currentAiProcessingMode, isProviderModelUnavailable,
@@ -119,6 +120,7 @@ export class LlmRouterService {
   }
 
   isAnyConfigured(role: LlmTaskRole) {
+    if (!isXeeProEnabled()) return false;
     if (currentAiProcessingMode() !== AiProcessingMode.ONLINE) {
       this.logger.log(JSON.stringify({ event: 'llm_skipped', role,
         reason: 'AI_MODE_FALLBACK_ONLY', aiMode: AiProcessingMode.FALLBACK_ONLY }));
@@ -139,7 +141,7 @@ export class LlmRouterService {
       assertCloudCallAllowed('router', input.role, undefined, input.creativeTier === 'ESCALATION');
     } catch (error) {
       this.logger.log(JSON.stringify({ event: 'llm_skipped', role: input.role,
-        reason: 'XEEFREE_PROVIDER_VIOLATION', aiMode }));
+        reason: aiMode === AiProcessingMode.ONLINE ? 'XEEPRO_UNAVAILABLE' : 'XEEFREE_PROVIDER_VIOLATION', aiMode }));
       throw error;
     }
     if (aiMode !== AiProcessingMode.ONLINE) {

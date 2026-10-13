@@ -1,3 +1,4 @@
+import { isXeeProEnabled, XEEPRO_UNAVAILABLE_MESSAGE } from '../../processing/generation-availability';
 // EditMode Phase 6 + Workstream G: the AI chat editor.
 import { editProjectEvidence } from '../../content-intelligence/edit-project-evidence';
 //
@@ -496,6 +497,7 @@ export class EditChatService {
       evidence: context.runtime.creativeEvidence };
     // A XeeFree project is never sent to a cloud model, whatever the deployment's AI mode: its hook wording is the local engine's.
     const freeProject = context.project.freeOnly;
+    if (!freeProject && !isXeeProEnabled()) return { question: XEEPRO_UNAVAILABLE_MESSAGE, route: 'NONE', code: 'CREATIVE_UNAVAILABLE' };
     const model = freeProject ? { suggestions: [], attempted: false, latencyMs: 0 }
       : await modelHookSuggestions({ llm: this.llm, logger: this.logger, ...input });
     if (model.suggestions.length) {

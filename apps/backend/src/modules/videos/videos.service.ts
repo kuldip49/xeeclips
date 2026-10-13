@@ -1,3 +1,4 @@
+import { assertNewProcessingMode } from '../processing/generation-availability';
 import { UsageService } from '../auth/usage.service';
 import { ModuleRef } from '@nestjs/core';
 import { LlmRouterService } from '../processing/llm-router.service';
@@ -198,6 +199,7 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
     const job = await this.prisma.processingJob.findFirst({ where: { videoId },
       orderBy: { createdAt: 'desc' } });
     if (!job) return;
+    assertNewProcessingMode(job.aiMode);
     await this.prisma.$transaction(async tx => {
     await tx.$queryRaw`SELECT id FROM "ProcessingJob" WHERE id = ${job.id} FOR UPDATE`;
     const current = await tx.processingJob.findUniqueOrThrow({ where: { id: job.id } });
@@ -335,6 +337,7 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
     if (!video) throw new NotFoundException('Video not found');
     const job = video.processingJobs[0];
     if (!job) throw new ConflictException('Video has no processing job');
+    assertNewProcessingMode(job.aiMode);
     const forceReprocess = process.env.FORCE_REPROCESS?.toLowerCase() === 'true';
     if (job.status === 'COMPLETED' && !forceReprocess) {
       throw new ConflictException('Video is already completed');
@@ -703,6 +706,7 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
     requestedProcessingType?: unknown, requestedAspectRatio?: unknown, requestedPlatform?: unknown,
     source?: { sourceUrl: string; externalVideoId: string; creditReservationKey?: string | null },
     autoGeneration?: ClipCreationRequest | null) {
+    assertNewProcessingMode(requestedAiMode);
     const aiMode = normalizeAiProcessingMode(requestedAiMode);
     const targetPlatform = parseTargetPlatform(requestedPlatform);
     const processingType = parseProcessingType(requestedProcessingType);

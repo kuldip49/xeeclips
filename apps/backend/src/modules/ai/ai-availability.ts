@@ -1,3 +1,4 @@
+import { XEEPRO_UNAVAILABLE_MESSAGE } from '../processing/generation-availability';
 // Step 6: honest, distinct user-facing states for semantic-AI failures.
 //
 // Production semantic AI is the OpenAI API (backend-only key). When it cannot be
@@ -8,7 +9,7 @@
 
 import { LlmProviderError, type LlmFailureKind } from '../processing/llm-provider.service';
 
-export const AI_AVAILABILITY_STATES = ['AVAILABLE', 'NOT_REQUESTED', 'XEEFREE', 'NOT_CONFIGURED', 'DISABLED', 'AUTH_FAILED',
+export const AI_AVAILABILITY_STATES = ['AVAILABLE', 'NOT_REQUESTED', 'XEEFREE', 'XEEPRO_UNAVAILABLE', 'NOT_CONFIGURED', 'DISABLED', 'AUTH_FAILED',
   'RATE_LIMITED', 'QUOTA_EXHAUSTED', 'TIMEOUT', 'NETWORK', 'PROVIDER_ERROR', 'CIRCUIT_OPEN',
   'INVALID_RESPONSE', 'UNKNOWN'] as const;
 export type AiAvailabilityState = typeof AI_AVAILABILITY_STATES[number];
@@ -29,6 +30,7 @@ const MESSAGES: Record<Exclude<AiAvailabilityState, 'AVAILABLE'>, string> = {
   NOT_REQUESTED: 'The AI editor was not needed for this step.',
   // XeeFree projects never reach a cloud model. Built-in tools handle direct commands.
   XEEFREE: 'XeeFree edits use built-in tools: direct commands such as trim, zoom, crop, volume, captions and hook changes work. Open-ended requests are not supported.',
+  XEEPRO_UNAVAILABLE: XEEPRO_UNAVAILABLE_MESSAGE,
   NOT_CONFIGURED: 'The AI editor is unavailable right now.',
   DISABLED: 'The AI editor is unavailable right now.',
   AUTH_FAILED: 'The AI editor is unavailable right now.',

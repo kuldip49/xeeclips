@@ -1,3 +1,4 @@
+import { assertXeeProAvailable } from '../processing/generation-availability';
 import { creativeService, publicCreativePackage } from '../content-intelligence/creative-package.service';
 import { editProjectEvidence } from '../content-intelligence/edit-project-evidence';
 import { HOOK_CATEGORIES, type HookCategory } from '../content-intelligence/creative-quality.service';
@@ -88,7 +89,9 @@ export class EditModeController {
     const project=await this.editMode.get(id);
     if (body.revision!==project.revision) throw new BadRequestException('Your edits changed. Refresh before generating suggestions.');
     // A XeeFree project is never sent to a cloud model: a request flag cannot opt it in.
-    const external=body.externalAiAuthorized===true && projectExecutionPolicy(project.settings)?.mode!=='XEEFREE';
+    const tier=projectExecutionPolicy(project.settings)?.mode;
+    if (tier==='XEEPRO' || tier!=='XEEFREE' && body.externalAiAuthorized===true) assertXeeProAvailable();
+    const external=body.externalAiAuthorized===true && tier!=='XEEFREE';
     const currentHook=project.elements.find(element=>element.type==='TEXT' && element.properties &&
       ['presetRole','templateRole'].some(role=>(element.properties as Record<string,unknown>)[role]==='HOOK'));
     const currentText=currentHook ? String((currentHook.properties as Record<string,unknown>).content ?? '').trim() : '';
@@ -118,6 +121,7 @@ export class EditModeController {
   async resolveCreative(@Body() body: { templateId?: unknown; components?: unknown;
     brief?: unknown; useAi?: unknown; referenceId?: unknown;
     sourceWidth?: unknown; sourceHeight?: unknown }) {
+    if (body.useAi === true) assertXeeProAvailable();
     const brief = typeof body.brief === 'string' ? body.brief.slice(0, 1500) : '';
     const interpreted = await interpretBrief({ brief, llm: body.useAi === true ? this.llm : null,
       aiMode: chatPlannerAiMode() });

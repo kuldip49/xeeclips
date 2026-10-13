@@ -1,3 +1,4 @@
+import { assertXeeProAvailable, isXeeProEnabled } from '../processing/generation-availability';
 import { UsageService } from '../auth/usage.service';
 import { xeeProHookApproved } from '../content-intelligence/hook-language';
 import { hookMeetsThreshold, type CreativeHook } from '../content-intelligence/creative-quality.service';
@@ -394,6 +395,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     if(!q.editPath)throw new BadRequestException('Choose StyleOne, StyleTwo or Manual editing first.');
     if(activeStatuses.includes(q.status))throw new ConflictException('Wait for processing to finish.');
     const external=body.externalAiAuthorized===true;
+    if(external)assertXeeProAvailable();
     if(this.needsAnalysis(q)&&record(original.metadata).hasAudio===true)throw new BadRequestException(activeStatuses.includes(q.status)?'XeeClip is still checking the speech in your video. Try again in a moment.':'Check the video first, then ask for hook suggestions.');
     const exclude=Array.isArray(body.exclude)?body.exclude.filter((t):t is string=>typeof t==='string').map(t=>t.slice(0,200)).slice(0,30):[];
     const context=this.postCopyContext(q,body);
@@ -455,6 +457,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const rewrite=body.rewrite;
     if(rewrite!==undefined&&(!(REWRITE_DIRECTIONS as readonly unknown[]).includes(rewrite)||!record(q.sourceContext).sourcePostText))throw new BadRequestException('Choose a rewrite direction for an imported post caption.');
     const context=this.postCopyContext(q,body);
+    if(body.externalAiAuthorized===true)assertXeeProAvailable();
     const result=await generatePostCopy(this.router,context,body.externalAiAuthorized===true,typeof rewrite==='string'?rewrite:'');
     const prior={...emptyPostCopy(),...record(q.postCopy)} as ReframePostCopy;
     const hashtagOnly=body.hashtagsOnly===true;
@@ -496,7 +499,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     let hooks=view.hooks;
     // Both styles open with a hook written from the video itself; without consent it is written locally.
     if(typeof body.hookText!=='string'&&!hooks.length&&view.hasTranscript){
-      const context=this.postCopyContext(q,{});const suggestions=await suggestHooks(this.router,context.transcript,q.externalAiAuthorized,[],
+      const context=this.postCopyContext(q,{});const suggestions=await suggestHooks(this.router,context.transcript,q.externalAiAuthorized&&isXeeProEnabled(),[],
         {sourceId:context.sourceId,transcriptVersion:context.transcriptVersion,visualVersion:context.visualVersion,
          visibleText:context.visibleText,visualSummary:context.visualSummary,speakerTurns:context.speakerTurns,boundaryQa:context.boundaryQa,template:STYLES[style].template,sourceTitle:context.sourceContext?.sourcePostTitle,sourceCaption:context.sourceContext?.sourcePostText});
       hooks=suggestions.hooks;

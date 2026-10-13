@@ -1,3 +1,4 @@
+import { isXeeProEnabled } from '../../processing/generation-availability';
 // Step 7: OpenAI semantic planning for the clauses the deterministic layers could
 // not handle (vague creative wording, Hindi/Hinglish/mixed language, imperfect
 // grammar). The model sees a bounded project summary and the tool catalogue, and
@@ -130,6 +131,7 @@ export async function planClausesWithOpenAi(input: { llm: LlmRouterService; logg
   if (!input.clauses.length) return { plans: [], ai: aiAvailable() };
   // XeeFree project: no model is consulted. The caller reports what is and is not supported.
   if (input.context.project.freeOnly) return { plans: [], ai: aiUnavailable('XEEFREE') };
+  if (!isXeeProEnabled()) return { plans: [], ai: aiUnavailable('XEEPRO_UNAVAILABLE') };
   const telemetry = createPerformanceTelemetry(chatPlannerAiMode());
   try {
     const result = await performanceContext.run(telemetry, async () => {

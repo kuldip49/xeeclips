@@ -367,7 +367,7 @@ export type VideoImportJob = {
 };
 
 export function getVideoImportCapabilities() {
-  return apiFetch<{ youtubeEnabled: boolean }>('/videos/import-capabilities');
+  return apiFetch<{ youtubeEnabled: boolean; xeeFree: boolean; xeePro: boolean }>('/videos/import-capabilities');
 }
 
 export function importYouTubeVideo(input: { projectId: string; url: string; aiMode: AiProcessingMode;

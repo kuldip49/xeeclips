@@ -46,7 +46,7 @@ ok(/ONLINE: 'XeePro',\s*OFFLINE: 'XeeFree',\s*FALLBACK_ONLY: 'XeeFree'/u.test(ap
 
 // --- Accessible native radios, chosen before Generate -----------------------------------
 ok(form.includes("<input type='radio' className='sr-only' name={`entry-mode-${formKey}`} checked={selected}") &&
-  form.includes('onChange={() => update({ aiMode: option.value })}'),
+  form.includes('onChange={() => { if (!unavailable) update({ aiMode: option.value }); }}'),
   'modes are native radios in one named group, so clicks, keys and screen readers work');
 ok(form.includes('data-entry-mode={option.value}') && /data-entry-mode[\s\S]{0,200}focus-within:ring-2/u.test(form),
   'each mode card is a full-card label with a visible focus ring');
@@ -54,7 +54,7 @@ const modeLegend = form.indexOf("text-sm font-medium'>Mode</legend>");
 ok(modeLegend > 0 && modeLegend < form.indexOf("type='submit'"), 'the mode is chosen before the Generate button');
 
 // --- Defaults and restore ----------------------------------------------------------------
-ok(entry.DEFAULT_ENTRY_SETTINGS.aiMode === 'ONLINE', 'new creations default to XeePro');
+ok(entry.DEFAULT_ENTRY_SETTINGS.aiMode === 'FALLBACK_ONLY', 'new creations default to XeeFree');
 const restored = (aiMode) => entry.settingsFromImport({ aiMode, autoGeneration: null }).aiMode;
 ok(restored('FALLBACK_ONLY') === 'FALLBACK_ONLY', 'a XeeFree import restores as XeeFree');
 ok(restored('OFFLINE') === 'FALLBACK_ONLY', 'a legacy OFFLINE import restores as XeeFree, never as paid XeePro');
@@ -70,3 +70,11 @@ ok(/importYouTubeVideo\(\{ projectId: target, url: sourceUrl\.trim\(\), aiMode: 
 ok(!/Normal Clips|Edited Clips|Processing Type<\/legend>/u.test(form), 'the Normal/Edited product fork is gone');
 
 console.log(`AI mode upload UI tests passed (${checks} checks).`);
+
+assert.equal(entry.DEFAULT_ENTRY_SETTINGS.aiMode, 'FALLBACK_ONLY', 'Create defaults to XeeFree');
+assert(form.includes('setProEnabled(result.xeePro === true)'), 'availability comes from the server');
+assert(form.includes('disabled={unavailable}'), 'Pro uses a disabled native radio');
+assert(form.includes('XeePro is temporarily unavailable. XeeFree is available.'), 'unavailability message is product-only');
+assert(form.includes("aiMode: 'FALLBACK_ONLY'") && form.includes('if (!result.xeePro)'), 'stale Pro choices move to Free');
+assert(!/quota|API key|OpenAI|gpt-[0-9]/i.test(form), 'mode UI exposes no provider internals');
+console.log('PASS 6 temporary availability UI contracts');

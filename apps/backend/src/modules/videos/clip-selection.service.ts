@@ -1,3 +1,4 @@
+import { assertNewProcessingMode } from '../processing/generation-availability';
 import { isXeeFree } from '../processing/execution-policy';
 import { diversifyOrder } from '../free/free-moments';
 import { UsageService } from '../auth/usage.service';
@@ -590,6 +591,7 @@ export class ClipSelectionService {
    */
   async create(videoId: string, request: ClipCreationRequest) {
     const { video, job } = await this.loadVideo(videoId);
+    assertNewProcessingMode(job?.aiMode);
     if (isVideoTooLong(video.duration)) throw new BadRequestException(VIDEO_TOO_LONG_MESSAGE);
     const maxClipCount = maxClipCountForDuration(video.duration);
     const requestedClipCount = validateRequestedClipCount(request.requestedClipCount, maxClipCount);

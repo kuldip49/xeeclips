@@ -1,3 +1,4 @@
+import { assertXeeProAvailable } from './generation-availability';
 import { createHash } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { assertLlmCallBudget, countLlmFailure, countLlmRequest, countLlmSuccess,
@@ -65,7 +66,7 @@ export function assertCloudCallAllowed(surface: 'router' | 'provider', role: str
   route?: { provider?: string; model?: string }, escalation = false) {
   const violation = providerViolation(currentExecutionPolicy(), { surface, role, provider: route?.provider,
     model: route?.model, escalation });
-  if (!violation) return;
+  if (!violation) { assertXeeProAvailable(); return; }
   recordBlockedProviderAttempt(surface + ':' + role);
   throw new XeeFreeProviderViolation(surface, role);
 }

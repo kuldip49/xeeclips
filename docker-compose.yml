@@ -33,6 +33,7 @@ services:
     restart: unless-stopped
     environment:
       PORT: 4000
+      XEEPRO_ENABLED: ${XEEPRO_ENABLED:-true}
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in the ignored .env file}
       REDIS_URL: redis://redis:6379
       VIDEO_WORKER_CONCURRENCY: ${VIDEO_WORKER_CONCURRENCY:-1}

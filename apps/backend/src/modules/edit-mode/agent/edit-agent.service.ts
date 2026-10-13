@@ -1,3 +1,5 @@
+import { withTrustedProjectTier } from '../../processing/project-execution-policy';
+import { isXeeProEnabled } from '../../processing/generation-availability';
 // Step 7 + 8: the professional AI editor agent.
 //
 //   OBSERVE     reload the persisted EditProject (persisted state wins over memory)
@@ -96,11 +98,12 @@ export class EditAgentService {
   /** Last runs, autonomy preference and whether the AI planner is reachable. */
   async state(id: string) {
     const project = await this.prisma.editProject.findUnique({ where: { id },
-      select: { settings: true, revision: true } });
+      select: { settings: true, revision: true, generatedClipId: true, userId: true } });
     if (!project) throw new NotFoundException('EditProject not found');
     const agent = record(record(project.settings).agent);
     // A XeeFree project never reaches a cloud model, so its AI state is stated plainly instead of depending on the deployment's mode.
-    const free = projectExecutionPolicy(project.settings)?.mode === 'XEEFREE';
+    const scoped = await withTrustedProjectTier(this.prisma, project);
+    const free = projectExecutionPolicy(scoped.settings)?.mode === 'XEEFREE';
     return { revision: project.revision, autonomy: readAutonomy(agent.autonomy),
       runs: Array.isArray(agent.runs) ? agent.runs : [], ai: free ? aiUnavailable('XEEFREE') : this.aiConfigured() };
   }
@@ -116,6 +119,7 @@ export class EditAgentService {
   }
 
   private aiConfigured(): AiAvailability {
+    if (!isXeeProEnabled()) return aiUnavailable('XEEPRO_UNAVAILABLE');
     // A cheap, call-free check used for UI state; a real call can still fail.
     const mode = chatPlannerAiMode().toUpperCase();
     if (mode !== 'ONLINE') return aiUnavailable('DISABLED');
@@ -128,7 +132,9 @@ export class EditAgentService {
 
   async run(id: string, input: AgentRunInput): Promise<AgentRun> {
     // Consent exists to authorize sending data to a cloud model. A XeeFree project sends nothing, so it needs none (and gets no model).
-    const freeProject = projectExecutionPolicy((await this.prisma.editProject.findUnique({ where: { id }, select: { settings: true } }))?.settings)?.mode === 'XEEFREE';
+    const storedProject = await this.prisma.editProject.findUnique({ where: { id }, select: { settings: true, generatedClipId: true, userId: true } });
+    const scoped = storedProject ? await withTrustedProjectTier(this.prisma, storedProject) : null;
+    const freeProject = projectExecutionPolicy(scoped?.settings)?.mode === 'XEEFREE';
     if (!freeProject && chatPlannerAiMode().toUpperCase() === 'ONLINE' && input.aiConsent !== true) {
       throw new ForbiddenException('Allow Ask AI before sending a request.');
     }

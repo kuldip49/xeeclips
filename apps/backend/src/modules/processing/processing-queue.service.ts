@@ -1,3 +1,4 @@
+import { assertNewProcessingMode } from './generation-availability';
 import { Injectable, OnModuleDestroy } from "@nestjs/common";
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
@@ -18,6 +19,7 @@ export class ProcessingQueueService implements OnModuleDestroy {
   });
 
   async enqueue(data: ProcessVideoJobData) {
+    assertNewProcessingMode(data.aiMode);
     await this.queue.add(PROCESS_VIDEO_JOB, data, {
       jobId: data.processingJobId,
       attempts: 1,
@@ -27,6 +29,7 @@ export class ProcessingQueueService implements OnModuleDestroy {
   }
 
   async resume(data: ProcessVideoJobData, prepare: () => Promise<void>) {
+    assertNewProcessingMode(data.aiMode);
     const existing = await this.queue.getJob(data.processingJobId);
     const state = await existing?.getState();
     // The same queue id is retained across automatic and manual retries.
