@@ -23,7 +23,8 @@ import type { ResolvedCreativeStyle } from './creative-style-resolver';
 import { readGenerationSettings } from '../../videos/clip-selection.service';
 import { processingTypeForOutputStyle } from '../../processing/clip-selection-policy';
 import type { CreativePackage } from '../../content-intelligence/creative-package.service';
-import { resolveClipStyleRequest, type ClipStyleSource } from './clip-style-request';
+import { clipBelongsToJobRequest, clipRequestKey, resolveClipStyleRequest,
+  type ClipStyleSource } from './clip-style-request';
 
 export type GenerationStyleStatus = 'BASE_READY' | 'STYLE_APPLYING' | 'STYLE_READY' | 'STYLE_FAILED' |
   'EXPORT_READY' | 'SKIPPED' | 'STYLING' | 'RENDERING' | 'READY' | 'FAILED';
@@ -32,13 +33,16 @@ export type GenerationStyleState = {
   templateId?: string | null;
   lines: string[]; skipped: string[]; exportAssetId: string | null; revision: number | null;
   error: string | null;
-  /** Set when the style was rebuilt for a clip whose EditProject was gone (see materializeStyled). */
-  reconstruction?: ClipStyleSource | null;
+  /** Internal diagnostic: where the style came from when it was rebuilt for a clip (see materializeStyled). */
+  resolutionSource?: ClipStyleSource | null;
 };
 type StyleClipOptions = {
   /** Return once the canonical style revision exists; the export finishes in the background. */
   deferExport?: boolean;
-  reconstruction?: ClipStyleSource;
+  /** Recorded on the project so a rebuilt style can be traced to its source. */
+  resolutionSource?: ClipStyleSource;
+  /** Default true. Off when the style is a fallback guess: a guess must never become the clip's authority. */
+  snapshot?: boolean;
 };
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -182,11 +186,14 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
           const clip = ordered[next++];
           if (!clip) return;
           try {
-            let state = await this.styleClip(clip, settings.resolved, effectiveTemplate);
+            // A clip proven to belong to an EARLIER request is still styled as before, but its style must
+            // not be recorded as that clip's authoritative snapshot.
+            const options = { snapshot: clipBelongsToJobRequest(clip, job) !== false };
+            let state = await this.styleClip(clip, settings.resolved, effectiveTemplate, options);
             // One deterministic retry covers transient export failures without
             // changing the requested template or rebuilding intent from defaults.
             if (state.status === 'STYLE_FAILED' || state.status === 'FAILED')
-              state = await this.styleClip(clip, settings.resolved, effectiveTemplate);
+              state = await this.styleClip(clip, settings.resolved, effectiveTemplate, options);
             if (state.status === 'EXPORT_READY' || state.status === 'READY') styledCount++;
             else failedCount++;
             this.logger.log(JSON.stringify({ event: 'generation_clip_summary', videoId,
@@ -247,7 +254,7 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
     const styleHash = createHash('sha256').update(JSON.stringify({ templateId,
       components: resolved.components })).digest('hex').slice(0, 16);
     // Before the project exists, so the origin metadata of a first-time and a rebuilt project match.
-    await this.persistStyleSnapshot(clip.id, templateId, styleHash, resolved);
+    if (options.snapshot !== false) await this.persistStyleSnapshot(clip.id, templateId, styleHash, resolved);
     const { editProjectId } = await this.materializer.materialize(clip.id);
     const project = await this.prisma.editProject.findUniqueOrThrow({ where: { id: editProjectId } });
     const previous = readGenerationStyle(project.settings);
@@ -257,6 +264,12 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
       (previous.status === 'EXPORT_READY' || previous.status === 'READY' || owned)) {
       return previous;
     }
+    // A fallback is the best available guess at the original style, never proof of it, and its hash cannot
+    // be compared with one produced from the stored request (key order and float digits change when a
+    // style is persisted). So it must never restyle a project that already carries a completed style.
+    if (options.resolutionSource === 'TEMPLATE_FALLBACK' && previous &&
+      (previous.status === 'EXPORT_READY' || previous.status === 'READY') &&
+      (previous.templateId ?? templateId) === templateId) return previous;
     this.inFlight.add(editProjectId);
     try {
       return await this.styleOwned(clip, resolved, editProjectId, styleHash, previous, templateId, options);
@@ -272,13 +285,14 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
     styleHash: string, resolved: ResolvedCreativeStyle) {
     if (!templateId || !resolved.styled) return;
     const row = await this.prisma.generatedClip.findUnique({ where: { id: generatedClipId },
-      select: { editTelemetry: true } });
+      select: { editTelemetry: true, variantKey: true } });
     if (!row) return;
     const telemetry = record(row.editTelemetry);
     const current = record(telemetry.generationStyle);
     if (current.snapshotVersion === 1 && current.styleHash === styleHash && current.templateId === templateId) return;
     await this.prisma.generatedClip.update({ where: { id: generatedClipId }, data: { editTelemetry: {
-      ...telemetry, generationStyle: { snapshotVersion: 1, templateId, styleHash, resolved }
+      ...telemetry, generationStyle: { snapshotVersion: 1, templateId, styleHash,
+        requestKey: clipRequestKey(row), resolved }
     } as unknown as Prisma.InputJsonValue } });
   }
 
@@ -312,7 +326,7 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
     if (!request) return this.materializer.materialize(generatedClipId);
     const started = Date.now();
     const state = await this.styleClip(clip, request.resolved, request.templateId,
-      { deferExport: true, reconstruction: request.source });
+      { deferExport: true, resolutionSource: request.source, snapshot: request.source !== 'TEMPLATE_FALLBACK' });
     this.logger.log(JSON.stringify({ event: 'generation_style_reconstructed', generatedClipId,
       templateId: request.templateId, source: request.source, status: state.status,
       revision: state.revision, styleMs: Date.now() - started }));
@@ -354,7 +368,7 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
       }
     }
     await save({ status: 'STYLE_APPLYING', styleHash, startedAt: started, error: null, exportAssetId: null,
-      ...(options.reconstruction ? { reconstruction: options.reconstruction } : {}) });
+      ...(options.resolutionSource ? { resolutionSource: options.resolutionSource } : {}) });
     try {
       const styleResolveStartedAt = Date.now();
       // Styling is applied once, on the untouched materialized project. If the
@@ -449,7 +463,8 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
         orderBy: { createdAt: 'desc' } });
     const request = resolveClipStyleRequest(clip, job);
     if (!request) throw new Error('This clip has no generation style to retry');
-    void this.styleClip(clip, request.resolved, request.templateId).catch((error) => this.logger.warn(JSON.stringify({
+    void this.styleClip(clip, request.resolved, request.templateId, { resolutionSource: request.source,
+      snapshot: request.source !== 'TEMPLATE_FALLBACK' }).catch((error) => this.logger.warn(JSON.stringify({
       event: 'generation_style_retry_failed', generatedClipId,
       error: error instanceof Error ? error.message : String(error) })));
     return { accepted: true, generatedClipId };

@@ -38,15 +38,27 @@ from-generated-clip
                           -> project returned
 ```
 
-* `styles/clip-style-request.ts` is the only place that decides which style a clip was delivered with. Sources, strongest first:
-  1. **`CLIP_SNAPSHOT`** - the resolved style written on the clip (`editTelemetry.generationStyle`) the first time it is styled.
-  2. **`REQUEST_SETTINGS`** - the `ProcessingJob` settings, only when the clip provably belongs to that request (same job id,
-     same template, not rendered before the job's current request began). The job row is reused by every request for a video.
-  3. **`TEMPLATE_DEFAULT`** - the clip's own persisted template (`effectiveTemplate` / `requestedTemplate` / `templateId`)
-     with no extra components. Used for clips of older requests that predate the snapshot; extra components picked for that
-     request cannot be recovered and are not guessed.
-  Nothing consults UI defaults or the video's latest request. The resolved style is recorded on the project as
-  `settings.generationStyle.reconstruction`.
+* `styles/clip-style-request.ts` is the only place that decides which style a clip was delivered with. What a clip can prove
+  about itself, with no schema field: its template ids, and its originating request - the exporter writes
+  `variantKey = …:REQUEST:<jobId>:<clipRequestedAt ISO>` once, when the row is created. `generationJobId` only names the
+  ProcessingJob, which is reused by every request for a video, and timestamps such as `updatedAt` change for unrelated
+  reasons, so neither is used. The job holds the settings of its *current* request only (`generationSettings` and
+  `clipRequestedAt` are written in one update), so a clip may borrow them only when its request key equals the job's.
+  Resolution order:
+  1. **`STYLE_SNAPSHOT`** - the resolved style written on the clip (`editTelemetry.generationStyle`: template, hash,
+     originating request key, resolved style) the first time it is styled. Authoritative.
+  2. **`EXACT_REQUEST`** - the job's settings, because the clip's request key is exactly the job's current one (and the
+     templates agree). A proven request is also recorded as the clip's snapshot.
+  3. **`TEMPLATE_FALLBACK`** - the clip's own persisted template (`effectiveTemplate` / `requestedTemplate` / `templateId`)
+     with default components. Used when the request cannot be proven (older rows without a request key, or a newer request
+     now owns the job). Optional components picked for that older request cannot be recovered and are never guessed from
+     another request. A fallback is **not** written as a snapshot, so a guess is never frozen as the clip's authority.
+  The source is recorded on the project as `settings.generationStyle.resolutionSource` (internal; not shown to users).
+* `styleHash` is not reproducible from code. It hashes the resolved style as stored: persisting it changes key order (jsonb)
+  and float digits, so a style rebuilt from code hashes differently from the same style read back from the database. The
+  `STYLE_SNAPSHOT` and `EXACT_REQUEST` sources are database-derived and match the original; `TEMPLATE_FALLBACK` does not.
+  So a fallback pass **never restyles a project that already carries a completed style** of that template; it only applies to
+  a project that has none. Elements and all other settings of a fallback rebuild are identical (verified live).
 * Template rules are not duplicated: StyleOne/StyleTwo logic stays in `compileCreativeStyle`; the adapter is unchanged.
   The headline wording comes from the clip's persisted content package (`contentPackaging.sharedPackage`), so nothing is
   regenerated and no model is called (XeeFree/XeePro routing is untouched).

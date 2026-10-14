@@ -37,16 +37,19 @@ async function wait(load, done, label, limitMs = 900000) {
 }
 const ffprobe = (file) => JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file], { encoding: 'utf8' }));
 const IGNORED = new Set(['id', 'editProjectId', 'createdAt', 'updatedAt', 'assetId', 'sourceAssetId', 'startedAt',
-  'exportAssetId', 'exportId', 'reconstruction', 'objectKey', 'storageObjectKey', 'bucket', 'sourceVideoId', 'elementId', 'ids', 'userId']);
+  'exportAssetId', 'exportId', 'resolutionSource', 'objectKey', 'storageObjectKey', 'bucket', 'sourceVideoId', 'elementId', 'ids', 'userId']);
 const strip = (value) => JSON.parse(JSON.stringify(value, (key, item) => IGNORED.has(key) ? undefined : item));
-const canonical = (p) => ({
+const canonical = (p, { ignoreStyleHash = false } = {}) => ({
   revision: p.revision,
   elements: p.elements.map((e) => strip({ type: e.type, track: e.track, position: e.position, startTime: e.startTime,
     duration: e.duration, trimStart: e.trimStart, trimEnd: e.trimEnd, properties: e.properties }))
     .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
   assets: p.assets.map((a) => strip({ role: a.role, mimeType: a.mimeType, duration: a.duration, width: a.width,
     height: a.height, storageOwnership: a.storageOwnership })).sort((a, b) => a.role.localeCompare(b.role)),
-  settings: strip(p.settings)
+  settings: (() => { const s = strip(p.settings); if (s.origin?.editTelemetry) delete s.origin.editTelemetry.generationStyle;
+    delete s.export; // runtime render progress (phase/percent/exportId), not canonical style state
+    if (ignoreStyleHash && s.generationStyle) delete s.generationStyle.styleHash;
+    return s; })()
 });
 function diff(a, b, at = '', out = []) {
   if (out.length > 25) return out;
@@ -56,6 +59,9 @@ function diff(a, b, at = '', out = []) {
   } else out.push(`${at}: ${JSON.stringify(a)?.slice(0, 80)} != ${JSON.stringify(b)?.slice(0, 80)}`);
   return out;
 }
+const stripSnapshot = (clipId) => execFileSync('docker', ['exec', 'xeeeditor-postgres', 'psql', '-U', 'postgres', '-d', 'ai_content_platform', '-c',
+  `update "GeneratedClip" set "editTelemetry" = "editTelemetry" - 'generationStyle' where id = '${clipId}'`], { encoding: 'utf8' });
+const activeColors = (p) => p.elements.filter((e) => e.type === 'SUBTITLE').map((e) => e.properties.activeWord?.color);
 const headlines = (p) => p.elements.filter((e) => e.type === 'TEXT' && String(e.properties.templateRole ?? e.properties.presetRole) === 'HOOK');
 async function exportAndDownload(project, file) {
   await api(`/edit-mode/projects/${project.id}/export`, 'POST', { revision: project.revision });
@@ -130,7 +136,7 @@ async function main() {
     step(`reopened in ${entry.reopenMs} ms with a new project`, { projectId: B.id, revision: B.revision, headlines: headlines(B).length });
     const settledB = await wait(() => api(`/edit-mode/projects/${B.id}`), (p) => ['EXPORT_READY', 'READY', 'STYLE_FAILED', undefined].includes(p.settings.generationStyle?.status), name + ' background export', 600000);
     const finalB = await api(`/edit-mode/projects/${B.id}`);
-    entry.rebuilt = { generationStyle: finalB.settings.generationStyle && { status: finalB.settings.generationStyle.status, reconstruction: finalB.settings.generationStyle.reconstruction, templateId: finalB.settings.generationStyle.templateId } };
+    entry.rebuilt = { generationStyle: finalB.settings.generationStyle && { status: finalB.settings.generationStyle.status, resolutionSource: finalB.settings.generationStyle.resolutionSource, templateId: finalB.settings.generationStyle.templateId } };
     const differences = diff(canonical(A), canonical(finalB));
     entry.canonicalDifferences = differences; save();
     assert.equal(differences.length, 0, `${name}: canonical state differs:\n  ` + differences.join('\n  '));
@@ -156,20 +162,19 @@ async function main() {
     // so the rebuild falls back to the request's own settings and must still match the original exactly
     let cur = finalB;
     if (template !== 'AUTOMATIC_1') {
-      execFileSync('docker', ['exec', 'xeeeditor-postgres', 'psql', '-U', 'postgres', '-d', 'ai_content_platform', '-c',
-        `update "GeneratedClip" set "editTelemetry" = "editTelemetry" - 'generationStyle' where id = '${clip.id}'`], { encoding: 'utf8' });
+      stripSnapshot(clip.id);
       await api(`/edit-mode/projects/${cur.id}`, 'DELETE');
       const legacyOpen = await api(`/edit-mode/projects/from-generated-clip/${clip.id}`, 'POST', {});
       await wait(() => api(`/edit-mode/projects/${legacyOpen.editProjectId}`), (p) => ['EXPORT_READY', 'READY', 'STYLE_FAILED'].includes(p.settings.generationStyle?.status), name + ' legacy background export', 600000);
       cur = await api(`/edit-mode/projects/${legacyOpen.editProjectId}`);
-      assert.equal(cur.settings.generationStyle.reconstruction, 'REQUEST_SETTINGS');
+      assert.equal(cur.settings.generationStyle.resolutionSource, 'EXACT_REQUEST');
       const legacyDiff = diff(canonical(A), canonical(cur));
       entry.legacyCanonicalDifferences = legacyDiff; save();
       assert.equal(legacyDiff.length, 0, name + ': legacy rebuild differs: ' + legacyDiff.join(' | '));
       const legacyExport = await exportAndDownload(cur, `${name}-legacy-rebuilt-export.mp4`);
       entry.legacyRender = ffmpegStats(exportA, legacyExport);
       assert(entry.legacyRender.ssimAll > 0.995, name + ': legacy rebuild frames differ');
-      step('a clip with no snapshot (generated before this fix) rebuilds identically from the request settings', entry.legacyRender);
+      step('a clip with no snapshot (generated before this fix) rebuilds identically from its exact originating request', entry.legacyRender);
     }
 
     // idempotency / user edits / retry-style
@@ -185,6 +190,44 @@ async function main() {
     const kept = await api(`/edit-mode/projects/${cur.id}`);
     assert.equal(reopenedAgain.editProjectId, cur.id); assert.equal(headlines(kept)[0].properties.content, 'My own edited headline'); assert.equal(kept.revision, edited.revision);
     step('a manual headline edit survives reopening (existing project is never restyled)');
+    // an UNRELATED NEWER request now owns the video's job: the old clip must NOT adopt its settings
+    if (template !== 'AUTOMATIC_1') {
+      const newer = template === 'AUTOMATIC_2'
+        ? { templateId: 'AUTOMATIC_2', components: { CAPTIONS: 'CAP_YELLOW_ACTIVE' } } : { templateId: 'AUTOMATIC_2' };
+      stripSnapshot(clip.id);
+      await api(`/videos/${video.id}/clip-selection`, 'POST', { requestedClipCount: 1, outputStyle: 'AI_EDITED', generation: newer });
+      const newerResults = await wait(() => api(`/videos/${video.id}/clip-results`),
+        (x) => ['COMPLETED', 'PARTIAL'].includes(x.status) && x.clips.length && x.clips.every((c) => c.style?.playbackUrl || c.style?.status === 'STYLE_FAILED'), name + ' newer request', 900000);
+      const clipN = newerResults.clips[0];
+      assert.notEqual(clipN.id, clip.id);
+      const newerProject = await api(`/edit-mode/projects/${(await api(`/edit-mode/projects/from-generated-clip/${clipN.id}`, 'POST', {})).editProjectId}`);
+      if (template === 'AUTOMATIC_2') assert(activeColors(newerProject).every((c) => c === '#ffd400'), 'the newer request really is styled with other components');
+      entry.newerRequest = { clipId: clipN.id, requested: newer, activeWordColors: [...new Set(activeColors(newerProject))] };
+      await api(`/edit-mode/projects/${cur.id}`, 'DELETE');
+      const oldReopen = await api(`/edit-mode/projects/from-generated-clip/${clip.id}`, 'POST', {});
+      await wait(() => api(`/edit-mode/projects/${oldReopen.editProjectId}`), (p) => ['EXPORT_READY', 'READY', 'STYLE_FAILED'].includes(p.settings.generationStyle?.status), name + ' old clip background export', 600000);
+      const oldRebuilt = await api(`/edit-mode/projects/${oldReopen.editProjectId}`);
+      assert.equal(oldRebuilt.settings.generationStyle.resolutionSource, 'TEMPLATE_FALLBACK');
+      assert.equal(oldRebuilt.settings.generationStyle.templateId, template);
+      if (template === 'AUTOMATIC_2') assert(activeColors(oldRebuilt).every((c) => c !== '#ffd400'), 'newer request components leaked into the old clip');
+      // A fallback is rebuilt from code, while the original hash was computed from the style as persisted (key order and
+      // float digits change in the database), so only the hash is excluded here; every element and setting is compared.
+      const leak = diff(canonical(A, { ignoreStyleHash: true }), canonical(oldRebuilt, { ignoreStyleHash: true }));
+      entry.newerRequest.oldClipDifferences = leak;
+      entry.newerRequest.styleHashesDiffer = A.settings.generationStyle.styleHash !== oldRebuilt.settings.generationStyle.styleHash; save();
+      assert.equal(leak.length, 0, name + ': old clip changed after a newer request: ' + leak.join(' | '));
+      step('an old clip rebuilt after an unrelated newer request keeps its own template and components (TEMPLATE_FALLBACK, no leak)', entry.newerRequest);
+      stripSnapshot(clipN.id);
+      await api(`/edit-mode/projects/${newerProject.id}`, 'DELETE');
+      const exactReopen = await api(`/edit-mode/projects/from-generated-clip/${clipN.id}`, 'POST', {});
+      await wait(() => api(`/edit-mode/projects/${exactReopen.editProjectId}`), (p) => ['EXPORT_READY', 'READY', 'STYLE_FAILED'].includes(p.settings.generationStyle?.status), name + ' newer clip background export', 600000);
+      const exactRebuilt = await api(`/edit-mode/projects/${exactReopen.editProjectId}`);
+      assert.equal(exactRebuilt.settings.generationStyle.resolutionSource, 'EXACT_REQUEST');
+      const exactDiff = diff(canonical(newerProject), canonical(exactRebuilt));
+      entry.newerRequest.newerClipDifferences = exactDiff; save();
+      assert.equal(exactDiff.length, 0, name + ': newer clip rebuild differs: ' + exactDiff.join(' | '));
+      step('the newer request own clip (snapshot stripped) rebuilds identically from its exact request (EXACT_REQUEST)');
+    }
     entry.passed = true; save();
   }
   report.passed = report.styles.every((s) => s.passed);
