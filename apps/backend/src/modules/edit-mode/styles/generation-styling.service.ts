@@ -23,6 +23,7 @@ import type { ResolvedCreativeStyle } from './creative-style-resolver';
 import { readGenerationSettings } from '../../videos/clip-selection.service';
 import { processingTypeForOutputStyle } from '../../processing/clip-selection-policy';
 import type { CreativePackage } from '../../content-intelligence/creative-package.service';
+import { resolveClipStyleRequest, type ClipStyleSource } from './clip-style-request';
 
 export type GenerationStyleStatus = 'BASE_READY' | 'STYLE_APPLYING' | 'STYLE_READY' | 'STYLE_FAILED' |
   'EXPORT_READY' | 'SKIPPED' | 'STYLING' | 'RENDERING' | 'READY' | 'FAILED';
@@ -31,6 +32,13 @@ export type GenerationStyleState = {
   templateId?: string | null;
   lines: string[]; skipped: string[]; exportAssetId: string | null; revision: number | null;
   error: string | null;
+  /** Set when the style was rebuilt for a clip whose EditProject was gone (see materializeStyled). */
+  reconstruction?: ClipStyleSource | null;
+};
+type StyleClipOptions = {
+  /** Return once the canonical style revision exists; the export finishes in the background. */
+  deferExport?: boolean;
+  reconstruction?: ClipStyleSource;
 };
 
 const record = (value: unknown): Record<string, unknown> =>
@@ -55,6 +63,14 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
   private readonly running = new Set<string>();
   /** Clips THIS process is styling. Anything else marked in progress was orphaned by a restart. */
   private readonly inFlight = new Set<string>();
+  /** Projects whose background export (deferred styling) this process is still running. */
+  private readonly exporting = new Set<string>();
+  /** One rebuild per clip at a time: concurrent opens wait for the same styled project. */
+  private readonly reconstructing = new Map<string, Promise<Awaited<ReturnType<
+    GeneratedClipEditProjectMaterializerService['materialize']>>>>();
+  private readonly styleRuns = new Map<string, Promise<GenerationStyleState>>();
+  private readonly owns = (editProjectId: string) =>
+    this.inFlight.has(editProjectId) || this.exporting.has(editProjectId);
 
   constructor(private readonly prisma: PrismaService,
     private readonly materializer: GeneratedClipEditProjectMaterializerService,
@@ -110,7 +126,7 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
         const waiting = clips.some((clip) => {
           const state = readGenerationStyle(clip.editProject?.settings);
           if (state && SETTLED.includes(state.status)) return false;
-          return !clip.editProject || !this.inFlight.has(clip.editProject.id);
+          return !clip.editProject || !this.owns(clip.editProject.id);
         });
         if (!waiting) continue;
         const result = await this.ensureStyled(job.videoId);
@@ -214,27 +230,98 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
   /** One clip: materialize -> one canonical style revision -> canonical export. */
   async styleClip(clip: { id: string; candidate: { bestHook: string | null; hooks: unknown;
     hookCandidate: string | null } | null }, resolved: ResolvedCreativeStyle,
-    templateId: string | null = null) {
+    templateId: string | null = null, options: StyleClipOptions = {}): Promise<GenerationStyleState> {
+    // One styling pass per clip at a time, whichever path asked (generation, retry, or opening the
+    // editor on a clip with no project): a second caller joins the pass already running.
+    const running = this.styleRuns.get(clip.id);
+    if (running) return running;
+    const run = this.styleClipOnce(clip, resolved, templateId, options)
+      .finally(() => this.styleRuns.delete(clip.id));
+    this.styleRuns.set(clip.id, run);
+    return run;
+  }
+
+  private async styleClipOnce(clip: { id: string; candidate: { bestHook: string | null; hooks: unknown;
+    hookCandidate: string | null } | null }, resolved: ResolvedCreativeStyle,
+  templateId: string | null, options: StyleClipOptions): Promise<GenerationStyleState> {
     const styleHash = createHash('sha256').update(JSON.stringify({ templateId,
       components: resolved.components })).digest('hex').slice(0, 16);
+    // Before the project exists, so the origin metadata of a first-time and a rebuilt project match.
+    await this.persistStyleSnapshot(clip.id, templateId, styleHash, resolved);
     const { editProjectId } = await this.materializer.materialize(clip.id);
     const project = await this.prisma.editProject.findUniqueOrThrow({ where: { id: editProjectId } });
     const previous = readGenerationStyle(project.settings);
     // In progress only counts while a live process owns it; an orphan is redone.
-    const owned = this.inFlight.has(editProjectId) && Date.now() - Date.parse(previous?.updatedAt ?? '') < STALE_MS;
+    const owned = this.owns(editProjectId) && Date.now() - Date.parse(previous?.updatedAt ?? '') < STALE_MS;
     if (previous && previous.styleHash === styleHash &&
       (previous.status === 'EXPORT_READY' || previous.status === 'READY' || owned)) {
       return previous;
     }
     this.inFlight.add(editProjectId);
     try {
-      return await this.styleOwned(clip, resolved, editProjectId, styleHash, previous, templateId);
+      return await this.styleOwned(clip, resolved, editProjectId, styleHash, previous, templateId, options);
     } finally { this.inFlight.delete(editProjectId); }
+  }
+
+  /**
+   * Records, once per clip and style, the exact resolved style the clip was styled with. The
+   * ProcessingJob holds the settings of the video's CURRENT request only, so this is what lets a
+   * clip from an earlier request be rebuilt later without guessing.
+   */
+  private async persistStyleSnapshot(generatedClipId: string, templateId: string | null,
+    styleHash: string, resolved: ResolvedCreativeStyle) {
+    if (!templateId || !resolved.styled) return;
+    const row = await this.prisma.generatedClip.findUnique({ where: { id: generatedClipId },
+      select: { editTelemetry: true } });
+    if (!row) return;
+    const telemetry = record(row.editTelemetry);
+    const current = record(telemetry.generationStyle);
+    if (current.snapshotVersion === 1 && current.styleHash === styleHash && current.templateId === templateId) return;
+    await this.prisma.generatedClip.update({ where: { id: generatedClipId }, data: { editTelemetry: {
+      ...telemetry, generationStyle: { snapshotVersion: 1, templateId, styleHash, resolved }
+    } as unknown as Prisma.InputJsonValue } });
+  }
+
+  /**
+   * The single way to open a generated clip in the editor.
+   *
+   *   EditProject exists  -> returned untouched (user edits are never restyled)
+   *   EditProject missing -> base materialization + the SAME deterministic styling the clip was
+   *                          delivered with, so StyleOne/StyleTwo do not come back unstyled
+   *
+   * Styling is the one canonical `styleClip` pass (one TEMPLATE revision on the materialized
+   * project); nothing about a template is re-implemented here. Only the export that feeds the
+   * result card is deferred, so opening the editor never waits for a render.
+   */
+  async materializeStyled(generatedClipId: string) {
+    const pending = this.reconstructing.get(generatedClipId);
+    if (pending) return pending;
+    const run = this.materializeStyledOnce(generatedClipId)
+      .finally(() => this.reconstructing.delete(generatedClipId));
+    this.reconstructing.set(generatedClipId, run);
+    return run;
+  }
+
+  private async materializeStyledOnce(generatedClipId: string) {
+    const clip = await this.prisma.generatedClip.findUnique({ where: { id: generatedClipId },
+      include: { candidate: true, editProject: { select: { id: true } } } });
+    if (!clip || clip.editProject) return this.materializer.materialize(generatedClipId);
+    const job = clip.generationJobId
+      ? await this.prisma.processingJob.findUnique({ where: { id: clip.generationJobId } }) : null;
+    const request = resolveClipStyleRequest(clip, job);
+    if (!request) return this.materializer.materialize(generatedClipId);
+    const started = Date.now();
+    const state = await this.styleClip(clip, request.resolved, request.templateId,
+      { deferExport: true, reconstruction: request.source });
+    this.logger.log(JSON.stringify({ event: 'generation_style_reconstructed', generatedClipId,
+      templateId: request.templateId, source: request.source, status: state.status,
+      revision: state.revision, styleMs: Date.now() - started }));
+    return this.materializer.materialize(generatedClipId);
   }
 
   private async styleOwned(clip: Parameters<GenerationStylingService['styleClip']>[0],
     resolved: ResolvedCreativeStyle, editProjectId: string, styleHash: string,
-    previous: GenerationStyleState | null, templateId: string | null) {
+    previous: GenerationStyleState | null, templateId: string | null, options: StyleClipOptions = {}) {
     let project = await this.prisma.editProject.findUniqueOrThrow({ where: { id: editProjectId } });
     const started = new Date().toISOString();
     const save = async (patch: Partial<GenerationStyleState>) => {
@@ -266,7 +353,8 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
         return save({ status: 'STYLE_FAILED', error: message.slice(0, 300) });
       }
     }
-    await save({ status: 'STYLE_APPLYING', styleHash, startedAt: started, error: null, exportAssetId: null });
+    await save({ status: 'STYLE_APPLYING', styleHash, startedAt: started, error: null, exportAssetId: null,
+      ...(options.reconstruction ? { reconstruction: options.reconstruction } : {}) });
     try {
       const styleResolveStartedAt = Date.now();
       // Styling is applied once, on the untouched materialized project. If the
@@ -306,18 +394,40 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
         }
       }
       const canonicalMutationMs = Date.now() - mutationStartedAt;
-      await save({ status: 'STYLE_READY', lines: compiled.lines.slice(0, 40),
+      const styled = await save({ status: 'STYLE_READY', lines: compiled.lines.slice(0, 40),
         skipped: compiled.skipped.slice(0, 20), revision });
-      const exportStartedAt = Date.now();
-      const exportId = await this.exportAndWait(editProjectId, revision);
-      const exportMs = Date.now() - exportStartedAt;
-      this.logger.log(JSON.stringify({ event: 'generation_style_clip_ready', generatedClipId: clip.id,
-        editProjectId, templateId, revision, commandCount: compiled.commands.length,
-        elementCount: context.elements.length,
-        captionCount: context.elements.filter((element) => element.semantic === 'CAPTION').length,
-        styleResolveMs, canonicalMutationMs, exportMs,
-        skipped: compiled.skipped.length, exportAssetId: exportId }));
-      return save({ status: 'EXPORT_READY', exportAssetId: exportId, revision });
+      const exportStyled = async () => {
+        const exportStartedAt = Date.now();
+        const exportId = await this.exportAndWait(editProjectId, revision);
+        const exportMs = Date.now() - exportStartedAt;
+        this.logger.log(JSON.stringify({ event: 'generation_style_clip_ready', generatedClipId: clip.id,
+          editProjectId, templateId, revision, commandCount: compiled.commands.length,
+          elementCount: context.elements.length,
+          captionCount: context.elements.filter((element) => element.semantic === 'CAPTION').length,
+          styleResolveMs, canonicalMutationMs, exportMs,
+          skipped: compiled.skipped.length, exportAssetId: exportId }));
+        return save({ status: 'EXPORT_READY', exportAssetId: exportId, revision });
+      };
+      if (!options.deferExport) return await exportStyled();
+      // Opening the editor must not wait for a render. The card's export is produced in the
+      // background - unless the user has already edited, in which case their revision wins.
+      this.exporting.add(editProjectId);
+      void (async () => {
+        try {
+          const current = await this.prisma.editProject.findUniqueOrThrow({ where: { id: editProjectId } });
+          if (current.revision !== revision) { await save({ status: 'READY', error: null }); return; }
+          await exportStyled();
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const moved = await this.prisma.editProject.findUnique({ where: { id: editProjectId } })
+            .then((row) => !!row && row.revision !== revision).catch(() => false);
+          this.logger.warn(JSON.stringify({ event: 'generation_style_failed', generatedClipId: clip.id,
+            editProjectId, deferred: true, error: message }));
+          await (moved ? save({ status: 'READY', error: null })
+            : save({ status: 'STYLE_FAILED', error: message.slice(0, 300) })).catch(() => undefined);
+        } finally { this.exporting.delete(editProjectId); }
+      })();
+      return styled;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.warn(JSON.stringify({ event: 'generation_style_failed', generatedClipId: clip.id,
@@ -332,13 +442,14 @@ export class GenerationStylingService implements OnApplicationBootstrap, OnModul
     const clip = await this.prisma.generatedClip.findUnique({ where: { id: generatedClipId },
       include: { candidate: true } });
     if (!clip) throw new Error('Generated clip not found');
-    const job = await this.prisma.processingJob.findFirst({ where: { videoId: clip.videoId },
-      orderBy: { createdAt: 'desc' } });
-    const settings = readGenerationSettings(job?.generationSettings);
-    if (!settings?.resolved.styled) throw new Error('This clip has no generation style to retry');
-    const requestedTemplate = settings.requestedTemplate ?? settings.templateId ?? 'AUTOMATIC_1';
-    const effectiveTemplate = settings.effectiveTemplate ?? requestedTemplate;
-    void this.styleClip(clip, settings.resolved, effectiveTemplate).catch((error) => this.logger.warn(JSON.stringify({
+    // The clip's own style, not whatever the video's latest request happens to be.
+    const job = clip.generationJobId
+      ? await this.prisma.processingJob.findUnique({ where: { id: clip.generationJobId } })
+      : await this.prisma.processingJob.findFirst({ where: { videoId: clip.videoId },
+        orderBy: { createdAt: 'desc' } });
+    const request = resolveClipStyleRequest(clip, job);
+    if (!request) throw new Error('This clip has no generation style to retry');
+    void this.styleClip(clip, request.resolved, request.templateId).catch((error) => this.logger.warn(JSON.stringify({
       event: 'generation_style_retry_failed', generatedClipId,
       error: error instanceof Error ? error.message : String(error) })));
     return { accepted: true, generatedClipId };

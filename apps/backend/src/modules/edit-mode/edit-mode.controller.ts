@@ -287,7 +287,8 @@ export class EditModeController {
 
   @Post('projects/from-generated-clip/:generatedClipId')
   materializeGeneratedClip(@Param('generatedClipId') generatedClipId: string) {
-    return this.generatedClips.materialize(generatedClipId);
+    // Existing project: returned untouched. Missing project: rebuilt with the clip's own generation style.
+    return this.styling.materializeStyled(generatedClipId);
   }
 
   @Get('projects')

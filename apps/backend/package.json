@@ -34,6 +34,7 @@
     "test:edit-mode-scope": "npm run build && node scripts/test-edit-mode-scope-constraints.cjs",
     "test:edit-agent": "npm run build && node scripts/test-edit-agent.cjs",
     "test:model-policy": "npm run build && node scripts/test-local-llm-routing.cjs && node scripts/test-multi-model-routing.cjs",
+    "test:rematerialize-styled-clip": "npm run build && node scripts/test-rematerialize-styled-clip.cjs",
     "test:generated-clip-edit-project": "npm run build && node scripts/test-generated-clip-edit-plan-reconstruction.cjs && node scripts/test-generated-clip-edit-project.cjs",
     "test:edit-mode-review-brief": "npm run build && node scripts/test-edit-mode-review-brief.cjs",
     "test:edit-mode-text": "npm run build && node scripts/test-edit-mode-text.cjs",
