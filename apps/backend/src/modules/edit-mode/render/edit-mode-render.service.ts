@@ -32,12 +32,12 @@ import { probeMedia } from '../../processing/media-probe';
 import { normalizeProbedSourceTrims } from './edit-mode-source-trim';
 import { StorageService } from '../../storage/storage.service';
 import { buildEditModeAss } from './edit-mode-ass';
-import { prepareStyleTwoFonts } from './style-two-fonts';
+import { prepareEditorFonts } from './edit-mode-fonts';
 import { buildFfmpegArgs } from './edit-mode-filtergraph';
 import { runEditModeQa } from './edit-mode-qa';
 import { buildRenderPlan, EditExportError, type PlanAsset,
   type PlanElement } from './edit-mode-render-plan';
-import { validateRenderPlan } from './edit-mode-render-validate';
+import { validateRenderPlan, validateHeadlineFit } from './edit-mode-render-validate';
 import type { EditExportErrorCode, EditExportProgress, EditExportResult, QaRepair,
   QaReport, RenderPlan, RenderRepairLog } from './edit-mode-render.types';
 
@@ -341,11 +341,7 @@ export class EditModeRenderService {
       const assFileName = textOverlays.length ? 'edit-mode.ass' : null;
       if (assFileName) {
         const ass = buildEditModeAss(plan.canvas, textOverlays);
-        const overflowingHook = ass.overflowed.find(id => project.elements.some(e => e.id === id &&
-          e.properties && typeof e.properties === 'object' && !Array.isArray(e.properties) &&
-          String((e.properties as Record<string, unknown>).templateRole ?? (e.properties as Record<string, unknown>).presetRole ?? '') === 'HOOK'));
-        if (overflowingHook) throw new EditExportError('INVALID_TIMELINE',
-          'The complete headline does not fit its safe region. Enlarge the text box before exporting.', {elementId:overflowingHook});
+        validateHeadlineFit(project.elements, ass.overflowed);
         await writeFile(join(directory, assFileName), ass.content, 'utf8');
         for (const elementId of ass.overflowed) {
           plan.warnings.push(`Text element ${elementId} needed more lines than its box holds; ` +
@@ -360,8 +356,8 @@ export class EditModeRenderService {
       outputPath = join(directory, `export-${attempt}.mp4`);
       // Explicit manual emphasis/weight edits use native text rendering. Keep
       // StyleTwo's licensed font fallback available on hosts without system fonts.
-      const fontsDir = plan.canvas.visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO'
-        ? await prepareStyleTwoFonts(directory) : undefined;
+      const fontsDir = await prepareEditorFonts(directory,
+        plan.canvas.visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO');
       const args = buildFfmpegArgs({ plan, sourcePath, overlayPaths, audioPaths, audioChannels, assFileName,
         outputPath, fontsDir, informationCrop: built.evidence.informationCrop,
         fitExpression: built.evidence.fitExpression,

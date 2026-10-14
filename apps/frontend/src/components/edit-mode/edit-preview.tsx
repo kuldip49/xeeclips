@@ -19,7 +19,8 @@ import { sourceCropToViewport, type CropAspectPreset,
 import { clampBox, fitCanvas, resizeBox, snapBox, snapRotation, type ResizeCorner,
   type SnapGuide } from '@/lib/edit-mode-snap';
 import { EditPreviewText } from './edit-preview-text';
-import { layoutFittedFontSize, type FitRegion } from '@/lib/edit-mode-text';
+import { layoutFittedFontSize, headlineLayoutOverflow, type FitRegion } from '@/lib/edit-mode-text';
+import { HEADLINE_FIT_MESSAGE, textCanvasSize } from '@ai-content-platform/shared/editor-text-layout.cjs';
 import { EditCropOverlay } from './edit-crop-overlay';
 
 const clock = (seconds: number) => `${Math.floor(Math.max(0, seconds) / 60)}:${Math.floor(Math.max(0, seconds) % 60).toString().padStart(2, '0')}`;
@@ -550,6 +551,11 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
     fitBackground !== 'WHITE' && fitBackground !== 'BLACK';
 
   return <section className='flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl border border-border bg-black/40 max-md:rounded-none max-md:border-0'>
+    {elements.some(element => element.type === 'TEXT' && element.properties.hidden !== true &&
+      String(element.properties.templateRole ?? element.properties.presetRole ?? '') === 'HOOK' &&
+      headlineLayoutOverflow(fittedText(element).properties, styleTwo, textCanvasSize(aspectRatio, source?.width ?? 1920, source?.height ?? 1080),
+        resolvedVisualLayout?.videoFrame ? Math.round(resolvedVisualLayout.videoFrame.y * textCanvasSize(aspectRatio, source?.width ?? 1920, source?.height ?? 1080).height) : undefined)) &&
+      <p role='alert' data-testid='headline-fit-warning' className='shrink-0 bg-danger/10 px-3 py-2 text-xs text-danger-soft'>{HEADLINE_FIT_MESSAGE}</p>}
     {styleTwoCast && <svg aria-hidden width='0' height='0' className='absolute pointer-events-none'>
       <defs><filter id={colorCastId} colorInterpolationFilters='sRGB'>
         <feComponentTransfer>

@@ -230,6 +230,7 @@ export type EditPresetApplyResult = {
 export type EditExportPhase = 'PREPARING' | 'RENDERING' | 'QA' | 'UPLOADING' | 'COMPLETED'
   | 'FAILED';
 export type EditExportErrorCode = 'SOURCE_MISSING' | 'ASSET_MISSING' | 'INVALID_TIMELINE'
+  | 'HEADLINE_DOES_NOT_FIT'
   | 'UNSUPPORTED_MEDIA' | 'RENDER_FAILED' | 'QA_FAILED' | 'UPLOAD_FAILED' | 'STALE_EXPORT'
   | 'EXPORT_ALREADY_RUNNING'
   /** The backend restarted mid-render; startup recovery settled this export. */

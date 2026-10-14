@@ -19,7 +19,7 @@ import type { EditAspectRatio, EditPresetId, GradingPolicy, ReframePolicy,
 import type { ResolvedVisualLayout } from '../styles/resolved-visual-layout';
 
 /** Typed failure codes surfaced to the UI. */
-export const EDIT_EXPORT_ERROR_CODES = ['SOURCE_MISSING', 'ASSET_MISSING', 'INVALID_TIMELINE',
+export const EDIT_EXPORT_ERROR_CODES = ['SOURCE_MISSING', 'ASSET_MISSING', 'INVALID_TIMELINE', 'HEADLINE_DOES_NOT_FIT',
   'UNSUPPORTED_MEDIA', 'RENDER_FAILED', 'QA_FAILED', 'UPLOAD_FAILED', 'STALE_EXPORT',
   'EXPORT_ALREADY_RUNNING', 'HOOK_LANGUAGE_GATE',
   // Phase 7: the backend process died while this export was running, and

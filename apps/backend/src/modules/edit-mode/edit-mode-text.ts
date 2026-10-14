@@ -98,7 +98,7 @@ export const EDIT_MODE_FONT_FAMILIES: Record<string, string> = {
   'Georgia, serif': 'Noto Serif',
   monospace: 'Noto Sans Mono',
   'Inter, sans-serif': 'Inter',
-  'Inter ExtraBold, sans-serif': 'Inter ExtraBold',
+  'Inter ExtraBold, sans-serif': 'XeeClip Inter Display',
   'Noto Sans, sans-serif': 'Noto Sans',
   'Noto Serif, serif': 'Noto Serif',
   // The 12 pt optical cut: the same file the editor loads (public/fonts/EBGaramond12-Regular.otf).

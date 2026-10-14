@@ -2,11 +2,13 @@ import { STYLE_TWO, usesStyleTwoVectors, styleTwoText, assPath, roundedRect, typ
 import { assTime } from '../../editing/subtitle-renderer.service';
 import { escapeAssText } from '../../editing/subtitle-text';
 import type { RenderTextOverlay } from './edit-mode-render.types';
+import { fitsRegion } from '@ai-content-platform/shared/editor-text-layout.cjs';
 
 // Isolated vector lettering + rounded plate. The exact licensed outlines are
 // also drawn by StyleTwoPreviewText; generic ASS/StyleOne rendering is untouched.
 export function styleTwoAss(overlay: RenderTextOverlay, canvasWidth: number,
-  color: (hex: string, opacity?: number) => string) {
+  color: (hex: string, opacity?: number) => string,
+  headlineRegion?: { x: number; y: number; width: number; height: number }) {
   if (!usesStyleTwoVectors(overlay)) return null;
   const scale = canvasWidth / 600;
   const text = styleTwoText({ ...overlay, fontSize: overlay.fontSizePx,
@@ -60,5 +62,6 @@ export function styleTwoAss(overlay: RenderTextOverlay, canvasWidth: number,
       `\\fn${overlay.fontFamily.split(',')[0]}\\fs${glyph.size}\\bord0\\shad0` +
       `\\alpha&H${primary.slice(2, 4)}&\\1c&H${primary.slice(4)}&}${escapeAssText(glyph.text)}`));
   }
-  return { events, overflow: text.overflow, fallback: text.fallback.length > 0, truncated: text.truncated };
+  return { events, overflow: text.overflow || !!headlineRegion && !fitsRegion(text.plate, headlineRegion),
+    fallback: text.fallback.length > 0, truncated: text.truncated };
 }

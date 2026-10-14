@@ -46,7 +46,8 @@ export const EditPreviewText = memo(function EditPreviewText({ element, offsetSe
   return <div className='flex h-full w-full items-center'>
     {/* The block's own strut must match the text, or an inherited 24px line box inflates the
         line pitch (visible with the tight editorial serif). */}
-    <div className='w-full' style={{ textAlign, ...(style.fontFamily === 'EB Garamond, serif'
+    <div className='w-full' style={{ textAlign, ...(style.fontFamily === 'EB Garamond, serif' ||
+      String(properties.templateRole ?? properties.presetRole ?? '') === 'HOOK'
       ? { lineHeight: css.lineHeight, fontSize: css.fontSize } : {}) }}>
       {/* nowrap: only the export's breaks (<br>) apply; the space before each break keeps the text
           readable as one sentence and is dropped at the line end, so it is never painted. */}

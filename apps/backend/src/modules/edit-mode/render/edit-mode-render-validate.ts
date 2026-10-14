@@ -6,6 +6,16 @@
 
 import { EditExportError, type PlanAsset } from './edit-mode-render-plan';
 import type { RenderPlan } from './edit-mode-render.types';
+import { HEADLINE_FIT_MESSAGE } from '@ai-content-platform/shared/editor-text-layout.cjs';
+
+/** Typography failures must not masquerade as video/overlay timing failures. */
+export function validateHeadlineFit(elements: Array<{ id: string; properties: unknown }>, overflowed: string[]) {
+  const headline = overflowed.find(id => elements.some(element => element.id === id &&
+    element.properties && typeof element.properties === 'object' && !Array.isArray(element.properties) &&
+    String((element.properties as Record<string, unknown>).templateRole ??
+      (element.properties as Record<string, unknown>).presetRole ?? '') === 'HOOK'));
+  if (headline) fail('HEADLINE_DOES_NOT_FIT', HEADLINE_FIT_MESSAGE, { elementId: headline });
+}
 
 /** Containers/codecs EditMode is prepared to decode as an overlay or a bed. */
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);

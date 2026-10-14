@@ -1,4 +1,6 @@
 import type { CSSProperties } from 'react';
+import { measureTextLayout, normalizeText, fitsRegion } from '@ai-content-platform/shared/editor-text-layout.cjs';
+import { styleTwoText, usesStyleTwoVectors, STYLE_TWO } from '@ai-content-platform/shared/style-two.cjs';
 
 /**
  * The editor's half of the text and caption style contract.
@@ -67,7 +69,7 @@ export const TEXT_BOUNDS = {
 export const EDIT_MODE_FONTS: Array<{ id: string; label: string; css: string }> = [
   { id: 'Inter, sans-serif', label: 'Inter', css: 'Inter, "Noto Sans", system-ui, sans-serif' },
   { id: 'Inter ExtraBold, sans-serif', label: 'Inter Display',
-    css: 'Inter, "Noto Sans", system-ui, sans-serif' },
+    css: '"XeeClip Inter Display", Inter, "Noto Sans", system-ui, sans-serif' },
   { id: 'Noto Sans, sans-serif', label: 'Noto Sans', css: '"Noto Sans", system-ui, sans-serif' },
   { id: 'Noto Serif, serif', label: 'Noto Serif', css: '"Noto Serif", Georgia, serif' },
   { id: 'EB Garamond, serif', label: 'EB Garamond', css: '"EB Garamond", Garamond, Georgia, serif' },
@@ -288,10 +290,12 @@ export function textStyleCss(properties: Record<string, unknown>,
     fontFamily: fontCss(style.fontFamily),
     fontSize: px(style.fontSize * previewFontScale(style.fontFamily)),
     fontWeight: style.fontWeight,
+    ...(style.fontFamily === 'Inter ExtraBold, sans-serif' ? { fontSynthesis: 'none' } : {}),
     color: style.color,
     textAlign: style.textAlign,
     letterSpacing: px(style.letterSpacing),
-    lineHeight: style.lineSpacing,
+    lineHeight: String(properties.templateRole ?? properties.presetRole ?? '') === 'HOOK'
+      ? px(style.fontSize * style.lineSpacing) : style.lineSpacing,
     textTransform: style.uppercase ? 'uppercase' : 'none',
     whiteSpace: 'pre-wrap',
     overflowWrap: 'break-word'
@@ -526,50 +530,40 @@ export function layoutFittedFontSize(properties: Record<string, unknown>, region
 // --- Export line breaks ------------------------------------------------------------------------
 // libass never re-wraps (WrapStyle 2): the renderer decides every line break itself from a width
 // estimate. The preview draws the SAME breaks, so a hook or caption has the same lines in both.
-const NARROW = new Set([...'iljtfrI!.,:;\'"|()[]']);
-const WIDE = new Set([...'mwMW@%']);
-/** Port of `editing/text-layout.estimateTextWidth`. */
-function estimateTextWidth(text: string, fontSize: number) {
-  let em = 0;
-  for (const char of text) {
-    if (char === ' ') em += .27; else if (NARROW.has(char)) em += .34; else if (WIDE.has(char)) em += .92;
-    else if (/[A-Z0-9]/u.test(char)) em += .68; else em += .6;
-  }
-  return em * fontSize * .8;
-}
-/** Port of the renderer's per-family wrap options (`wrapOptions` in edit-mode-ass). */
-const wrapOptionsFor = (family: string) => family.startsWith('EB Garamond')
-  ? { widthScale: 0.8, balance: true, glyphWidthEm: 0.4 } : { widthScale: 1, balance: false, glyphWidthEm: 0 };
-/**
- * The token lines the export draws for a text element (port of `wrapTokens`): tokens are the
- * space-separated words of the (upper-cased when styled so) content, wrapped to the element width.
- */
 export function exportLines(properties: Record<string, unknown>, canvasWidth = 1080): { tokens: string[]; lines: number[][] } {
   const style = readTextStyle(properties);
-  const raw = String(properties.content ?? '').replace(/\r?\n/gu, ' ');
-  const tokens = (style.uppercase ? raw.toLocaleUpperCase() : raw).split(' ').filter(Boolean);
-  if (!tokens.length) return { tokens, lines: [] };
-  const fontSize = Math.max(8, designPx(style.fontSize, canvasWidth));
-  const width = Number(properties.width);
-  const maxWidth = Math.max(1, Math.max(2, Math.round(Math.max(0, Math.min(1, Number.isFinite(width) ? width : 0.8)) * canvasWidth)));
-  const options = wrapOptionsFor(style.fontFamily);
-  const measure = (text: string) => Math.max(estimateTextWidth(text, fontSize) * options.widthScale, options.glyphWidthEm * fontSize * text.length);
-  const lines: number[][] = [];
-  let current: number[] = [], text = '';
-  tokens.forEach((token, index) => {
-    const candidate = text ? `${text} ${token}` : token;
-    if (current.length && measure(candidate) > maxWidth) { lines.push(current); current = [index]; text = token; }
-    else { current.push(index); text = candidate; }
-  });
-  if (current.length) lines.push(current);
-  if (options.balance && lines.length === 2 && tokens.length > 3) {
-    let best = lines, widest = Math.max(...lines.map((line) => measure(line.map((at) => tokens[at]).join(' '))));
-    for (let cut = 1; cut < tokens.length; cut++) {
-      const next = Math.max(measure(tokens.slice(0, cut).join(' ')), measure(tokens.slice(cut).join(' ')));
-      if (next <= maxWidth && next < widest - 1e-6) { widest = next;
-        best = [Array.from({ length: cut }, (_, at) => at), Array.from({ length: tokens.length - cut }, (_, at) => cut + at)]; }
-    }
-    return { tokens, lines: best };
+  const raw = normalizeText(properties.content ?? '');
+  const content = style.uppercase ? raw.toLocaleUpperCase() : raw;
+  const headline = String(properties.templateRole ?? properties.presetRole ?? '') === 'HOOK';
+  return measureTextLayout({ content, fontFamily: style.fontFamily,
+    fontSizePx: Math.max(8, designPx(style.fontSize, canvasWidth)),
+    width: Math.max(2, Math.round(Math.max(0, Math.min(1, Number(properties.width ?? .8))) * canvasWidth)),
+    height: Number(properties.height ?? .15) * canvasWidth * 16 / 9,
+    lineHeight: headline ? style.lineSpacing : 1.2,
+    padding: headline && style.background.enabled && style.background.opacity > 0 ? designPx(style.background.padding, canvasWidth) : 0,
+    letterSpacing: headline ? designPx(style.letterSpacing, canvasWidth) : 0 });
+}
+/** Fit is evaluated on the export canvas, independently of preview viewport size. */
+export function headlineLayoutOverflow(properties: Record<string, unknown>, styleTwo = false,
+  canvas = { width: 1080, height: 1920 }, headerBottom?: number): boolean {
+  const style = readTextStyle(properties), scale = canvas.width / 600;
+  const box = { x: Math.round(Number(properties.x ?? .1) * canvas.width), y: Math.round(Number(properties.y ?? .4) * canvas.height),
+    width: Math.max(2, Math.round(Number(properties.width ?? .8) * canvas.width)),
+    height: Math.max(2, Math.round(Number(properties.height ?? .15) * canvas.height)) };
+  const content = style.uppercase ? String(properties.content ?? '').toLocaleUpperCase() : String(properties.content ?? '');
+  if (styleTwo && usesStyleTwoVectors({ ...style, textRuns: wordColors(properties) })) {
+    const layout = styleTwoText({ ...box, content,
+    fontFamily: style.fontFamily, fontSize: style.fontSize * scale, lineHeight: style.lineSpacing,
+    letterSpacing: style.letterSpacing * scale, boxed: style.background.enabled,
+      padding: style.background.padding, radius: style.background.radius, scale });
+    return !!layout && (layout.overflow || !fitsRegion(layout.plate, { x: 0, y: 0, width: canvas.width,
+      height: headerBottom ?? STYLE_TWO.media.y * canvas.height / STYLE_TWO.canvas.height }));
   }
-  return { tokens, lines };
+  const measured = measureTextLayout({ ...box, content, fontFamily: style.fontFamily,
+    fontSizePx: styleTwo ? style.fontSize * scale : Math.max(8, designPx(style.fontSize, canvas.width)),
+    padding: style.background.enabled && style.background.opacity > 0 ? designPx(style.background.padding, canvas.width) : 0,
+    lineHeight: style.lineSpacing, letterSpacing: designPx(style.letterSpacing, canvas.width) });
+  return measured.overflow || styleTwo && !fitsRegion({ x: box.x, y: box.y + box.height / 2 - measured.blockHeight / 2,
+    width: box.width, height: measured.blockHeight }, { x: 0, y: 0, width: canvas.width,
+    height: headerBottom ?? STYLE_TWO.media.y * canvas.height / STYLE_TWO.canvas.height });
 }

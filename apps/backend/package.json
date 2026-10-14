@@ -81,7 +81,8 @@
     "verify:edit-mode-ai": "npm run build && node scripts/verify-edit-mode-ai.cjs",
     "soak:edit-mode-ai": "npm run build && node scripts/soak-edit-mode-ai.cjs",
     "test:xeepro-availability": "npm run build && node scripts/test-xeepro-availability.cjs",
-    "test:xeepro-busy": "npm run build && node scripts/test-xeepro-busy.cjs"
+    "test:xeepro-busy": "npm run build && node scripts/test-xeepro-busy.cjs",
+    "test:editor-headline-export": "npm run build && node scripts/test-editor-headline-export.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.2.7",

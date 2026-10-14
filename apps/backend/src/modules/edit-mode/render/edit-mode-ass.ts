@@ -26,9 +26,9 @@
 //  3. SHADOW BLUR. ASS has no independent shadow blur; `\blur` softens the
 //     border and shadow together. The stored blur is mapped onto it, so a
 //     blurrier shadow is blurrier - but the falloff is not the CSS one.
-//  4. LINE SPACING. libass lays lines out on the font's own leading and offers
-//     no line-spacing override. The stored multiplier drives the preview and
-//     this module's overflow estimate; the exported leading is the font's.
+//  4. LINE SPACING. Headline lines are positioned separately to honor the
+//     stored multiplier. Other text uses libass's own leading, which has no
+//     line-spacing override; its multiplier drives preview and fit estimates.
 //  5. FONT WEIGHT. ASS carries one boolean Bold, so weights are quantized:
 //     >= 600 renders bold, below renders regular.
 //
@@ -43,6 +43,7 @@ import { readTextStyle, resolveEditModeFont } from '../edit-mode-text';
 import { AUTOMATIC_2_STREET3_LAYOUT } from '../styles/automatic-2-street3-layout';
 import type { RenderCanvas, RenderTextOverlay } from './edit-mode-render.types';
 import { styleTwoAss } from './style-two-ass';
+import { measureTextLayout, fitsRegion, wrapTokens as sharedWrapTokens } from '@ai-content-platform/shared/editor-text-layout.cjs';
 
 export { EDIT_MODE_FONT_FAMILIES, resolveEditModeFont } from '../edit-mode-text';
 
@@ -110,44 +111,7 @@ const FONT_GLYPH_EM: Record<string, number> = {
 
 export function wrapTokens(tokens: string[], fontSize: number, maxWidth: number,
   options: { widthScale?: number; balance?: boolean; glyphWidthEm?: number } = {}): number[][] {
-  if (!tokens.length) return [];
-  const scale = options.widthScale ?? 1;
-  const glyph = options.glyphWidthEm ?? 0;
-  const width = (text: string) => Math.max(estimateTextWidth(text, fontSize) * scale,
-    glyph * fontSize * text.length);
-  const lines: number[][] = [];
-  let current: number[] = [];
-  let text = '';
-  for (let index = 0; index < tokens.length; index++) {
-    const candidate = text ? `${text} ${tokens[index]}` : tokens[index];
-    if (current.length && width(candidate) > maxWidth) {
-      lines.push(current);
-      current = [index];
-      text = tokens[index];
-    } else {
-      current.push(index);
-      text = candidate;
-    }
-  }
-  if (current.length) lines.push(current);
-  // Editorial headlines break evenly: with exactly two lines, move the break to
-  // the point that minimises the wider line (each line must still fit).
-  if (options.balance && lines.length === 2 && tokens.length > 3) {
-    let best = lines;
-    let bestWidest = Math.max(...lines.map((line) => width(line.map((at) => tokens[at]).join(' '))));
-    for (let cut = 1; cut < tokens.length; cut++) {
-      const first = tokens.slice(0, cut).join(' ');
-      const second = tokens.slice(cut).join(' ');
-      const widest = Math.max(width(first), width(second));
-      if (widest <= maxWidth && widest < bestWidest - 1e-6) {
-        bestWidest = widest;
-        best = [Array.from({ length: cut }, (_, at) => at),
-          Array.from({ length: tokens.length - cut }, (_, at) => cut + at)];
-      }
-    }
-    return best;
-  }
-  return lines;
+  return sharedWrapTokens(tokens, fontSize, maxWidth, options);
 }
 
 const wrapOptions = (family: string) => {
@@ -272,7 +236,9 @@ export function buildEditModeAss(canvas: RenderCanvas,
   ordered.forEach((raw, index) => {
     const overlay = withStyleDefaults(raw);
     if (canvas.visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO') {
-      const vector = styleTwoAss(overlay, canvas.width, toAssColor);
+      const vector = styleTwoAss(overlay, canvas.width, toAssColor,
+        overlay.presetRole === 'HOOK' ? { x: 0, y: 0, width: canvas.width,
+          height: Math.round(canvas.visualLayout.videoFrame.y * canvas.height) } : undefined);
       if (vector) {
         events.push(...vector.events);
         if (vector.overflow) overflowed.push(overlay.elementId);
@@ -297,7 +263,7 @@ export function buildEditModeAss(canvas: RenderCanvas,
     // libass's natural leading is about 1.2x, which is also the default, so only
     // a line spacing the user actually changed is worth reporting - and only on
     // text that has more than one line for it to affect.
-    if (Math.abs(overlay.lineSpacing - 1.2) > 0.01 &&
+    if (overlay.presetRole !== 'HOOK' && Math.abs(overlay.lineSpacing - 1.2) > 0.01 &&
       wrapTokens(text.split(' ').filter(Boolean), overlay.fontSizePx,
         Math.max(1, overlay.width), wrapOptions(overlay.fontFamily)).length > 1) {
       parityNotes.push(`${overlay.elementId}: line spacing shapes the preview only; libass ` +
@@ -353,11 +319,20 @@ export function buildEditModeAss(canvas: RenderCanvas,
         staticColors.push(ranges.find((range) => at >= range.start && at < range.end)?.color ?? overlay.color);
       }
     }
-    const wrapped = wrapTokens(tokens, overlay.fontSizePx, Math.max(1, overlay.width),
+    const headline = overlay.presetRole === 'HOOK';
+    const measured = measureTextLayout({ ...overlay,
+      lineHeight: headline ? overlay.lineSpacing : 1.2,
+      padding: headline && boxed ? designPx(overlay.background.padding, canvas.width) : 0,
+      letterSpacing: headline ? designPx(overlay.letterSpacing, canvas.width) : 0 });
+    const wrapped = headline ? measured.lines : wrapTokens(tokens, overlay.fontSizePx, Math.max(1, overlay.width),
       wrapOptions(overlay.fontFamily));
     const rendered = wrapped.length ? wrapped : [tokens.map((_, at) => at)];
     const blockHeight = rendered.length * overlay.fontSizePx * 1.2;
-    if (blockHeight > overlay.height * 1.35 + 1) overflowed.push(overlay.elementId);
+    const outsideHeader = headline && canvas.visualLayout?.editingProfile === 'AUTOMATIC_3_STYLE_TWO' &&
+      !fitsRegion({ x: overlay.x, y: overlay.y + overlay.height / 2 - measured.blockHeight / 2,
+        width: overlay.width, height: measured.blockHeight }, { x: 0, y: 0, width: canvas.width,
+        height: Math.round(canvas.visualLayout.videoFrame.y * canvas.height) });
+    if (headline ? measured.overflow || outsideHeader : blockHeight > overlay.height * 1.35 + 1) overflowed.push(overlay.elementId);
     const anchor = anchorPoint(overlay);
 
     const prefix = [`\\pos(${anchor.x},${anchor.y})`];
@@ -373,7 +348,7 @@ export function buildEditModeAss(canvas: RenderCanvas,
     }
     const head = `{${prefix.join('')}}`;
     const base = inlineColor(overlay.color);
-    const body = (activeIndex: number) => rendered.map((line) => line.map((at) => {
+    const body = (activeIndex: number, rows = rendered) => rows.map((line) => line.map((at) => {
       const color = at === activeIndex ? overlay.activeWord.color : staticColors[at];
       return color && color.toLowerCase() !== overlay.color.toLowerCase()
         ? `{\\1c${inlineColor(color)}}${escapeAssText(tokens[at])}{\\1c${base}}`
@@ -382,6 +357,17 @@ export function buildEditModeAss(canvas: RenderCanvas,
 
     for (const span of assSpans(overlay, tokens.length)) {
       if (!(span.endSec > span.startSec)) continue;
+      if (headline && rendered.length > 1) {
+        // ASS has no paragraph-leading control. Separate positioned lines make
+        // the saved line spacing, measured fit and browser line boxes agree.
+        rendered.forEach((row, at) => {
+          const y = Number((anchor.y + (at - (rendered.length - 1) / 2) * measured.lineHeight).toFixed(3));
+          const lineHead = head.replace(`\\pos(${anchor.x},${anchor.y})`, `\\pos(${anchor.x},${y})`);
+          events.push(`Dialogue: ${overlay.zIndex},${assTime(span.startSec)},` +
+            `${assTime(span.endSec)},${styleName},,0,0,0,,${lineHead}${body(span.activeIndex, [row])}`);
+        });
+        continue;
+      }
       events.push(`Dialogue: ${overlay.zIndex},${assTime(span.startSec)},` +
         `${assTime(span.endSec)},${styleName},,0,0,0,,${head}${body(span.activeIndex)}`);
     }

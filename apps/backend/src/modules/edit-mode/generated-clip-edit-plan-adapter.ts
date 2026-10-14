@@ -7,7 +7,7 @@ import { Prisma } from '@prisma/client';
 import type { EditPlan, TimedWord } from '../editing/edit-plan';
 import { generateCaptions } from './edit-mode-captions';
 import { colorProperties, resolveColorFilter, type ColorFilterId } from './edit-mode-color';
-import { captionStylePreset, styleProperties, textStylePreset,
+import { captionStylePreset, styleProperties, textStylePreset, MIN_FONT_SIZE, MAX_FONT_SIZE,
   type CaptionStylePresetId, type TextStylePresetId } from './edit-mode-text';
 import type { EditElementInput } from './edit-mode.types';
 import { zoomProperties, MAX_ZOOM_SCALE, MIN_ZOOM_SCALE } from './edit-mode-zoom-events';
@@ -158,7 +158,12 @@ function textPreset(style: unknown, emphasis?: unknown): TextStylePresetId {
 
 function measuredBox(telemetry: JsonRecord, fallbackBox: { x: number; y: number;
   width: number; height: number }) {
-  const bounds = record(telemetry.hookBounds);
+  // The ink rectangle is not a text layout region: it omits line leading and
+  // plate padding. Native typography carries its explicit planned region.
+  const planned = record(telemetry.hookPlannedBounds);
+  const bounds = finite(telemetry.hookFontSize) &&
+    [planned.x, planned.y, planned.width, planned.height].every(finite)
+    ? planned : record(telemetry.hookBounds);
   const canvas = record(telemetry.canvasResolution);
   if (![bounds.x, bounds.y, bounds.width, bounds.height, canvas.width, canvas.height].every(finite) ||
     Number(canvas.width) <= 0 || Number(canvas.height) <= 0) return fallbackBox;
@@ -180,6 +185,18 @@ function sourceSpan(map: ReturnType<typeof buildTimelineMap>, start: number, end
       duration: round(overlapEnd - overlapStart) });
   }
   return placements;
+}
+
+/** A continuous headline survives removed source pauses as one clip-local span. */
+function headlineSpans(map: ReturnType<typeof buildTimelineMap>, start: number, end: number) {
+  const merged: Array<{ startTime: number; duration: number }> = [];
+  for (const span of sourceSpan(map, start, end)) {
+    const last = merged[merged.length - 1];
+    if (last && Math.abs(last.startTime + last.duration - span.startTime) <= .001) {
+      last.duration = round(span.startTime + span.duration - last.startTime);
+    } else merged.push({ ...span });
+  }
+  return merged;
 }
 
 /**
@@ -261,18 +278,29 @@ export function adaptAutomaticEditPlan(input: {
 
   let hookCount = 0;
   if (plan.onScreenHook.enabled && plan.onScreenHook.text.trim()) {
-    const placement = sourceSpan(map, plan.onScreenHook.startSec, plan.onScreenHook.endSec)[0];
-    if (placement) {
+    const placements = headlineSpans(map, plan.onScreenHook.startSec, plan.onScreenHook.endSec);
+    if (placements.length) {
       const preset = textStylePreset(textPreset(plan.onScreenHook.style));
       const box = measuredBox(telemetry, preset.box);
-      elements.push({ id: input.idFactory('hook', 0), assetId: null, type: 'TEXT', track: 2,
-        position: 0, startTime: placement.startTime, duration: placement.duration,
-        trimStart: 0, trimEnd: null, properties: json({ ...box, ...styleProperties(preset.style),
+      // Measured ink bounds are in output pixels. Pairing them with the preset's
+      // 600-wide design font (82 -> 148 px at 1080) doubled the rendered size.
+      const canvas = record(telemetry.canvasResolution);
+      const nativeSize = finite(telemetry.hookFontSize) && Number(canvas.width) > 0
+        ? Number(telemetry.hookFontSize) * 600 / Number(canvas.width) : null;
+      const measuredStyle = nativeSize !== null && nativeSize >= MIN_FONT_SIZE && nativeSize <= MAX_FONT_SIZE
+        ? { fontSize: round(nativeSize),
+          // Preserve the actual rendered case instead of forcing a preset's caps.
+          ...(telemetry.hookFinalText === plan.onScreenHook.text ? { uppercase: false }
+            : telemetry.hookFinalText === plan.onScreenHook.text.toLocaleUpperCase() ? { uppercase: true } : {}) }
+        : {};
+      placements.forEach((placement, index) => elements.push({ id: input.idFactory('hook', index), assetId: null, type: 'TEXT', track: 2,
+        position: index, startTime: placement.startTime, duration: placement.duration,
+        trimStart: 0, trimEnd: null, properties: json({ ...box, ...styleProperties(preset.style), ...measuredStyle,
           content: plan.onScreenHook.text, presetRole: 'HOOK', templateRole: 'HOOK',
           textStyleId: preset.id, scale: 1, rotation: 0, opacity: 1, zIndex: 40,
           anchor: 'top-left', locked: false, hidden: false,
-          origin: 'AUTOMATIC_RECONSTRUCTION', manualEdited: false }) });
-      hookCount = 1;
+          origin: 'AUTOMATIC_RECONSTRUCTION', manualEdited: false }) }));
+      hookCount = placements.length;
     } else unsupported.push('HOOK_REMOVED_BY_FINAL_CUTS');
   }
 
