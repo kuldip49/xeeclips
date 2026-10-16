@@ -176,7 +176,12 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
   private frameOf(q:Loaded){const original=this.originalOf(q)!;return {width:original.width!,height:original.height!};}
   async get(id:string){return this.view(await this.load(id));}
   async forProject(editProjectId:string){const q=await this.prisma.quickReframe.findUnique({where:{editProjectId},include});if(!q)throw new NotFoundException('This project is not a Quick Reframe video.');return this.view(q);}
-  async history(){const rows=await this.prisma.quickReframe.findMany({where:{editProject:{assets:{some:{role:'EXPORT',metadata:{path:['quickReframeKind'],equals:'EXPORT'}}}}},include,orderBy:{createdAt:'desc'}});return rows.map(q=>this.view(q));}
+  async history(){const rows=await this.prisma.quickReframe.findMany({where:{OR:[
+    // Existing exports remain available, including older revisions after a later edit fails.
+    {editProject:{assets:{some:{role:'EXPORT',metadata:{path:['quickReframeKind'],equals:'EXPORT'}}}}},
+    // A verified styled preview is already a saved result; opening the editor or paying for export is not required.
+    {status:{in:['READY','COMPLETE','EDITING']},editPath:{not:null},editProject:{assets:{some:{role:'REFERENCE',metadata:{path:['quickReframeKind'],equals:'PREVIEW'}}}}}
+  ]},include,orderBy:{createdAt:'desc'}});return rows.map(q=>this.view(q));}
   async startUpload(id:string,body:Record<string,unknown>){const q=await this.load(id);if(q.editProject.assets.some(a=>a.role==='SOURCE'))throw new ConflictException('This video already has a source. Start a new Quick Reframe.');
     if(typeof body.size!=='number'||body.size>MAX_REFRAME_BYTES||!['.mp4','.mov','.m4v','.webm'].includes(extname(String(body.name)).toLowerCase()))throw new BadRequestException('Upload an MP4, MOV, M4V, or WebM up to 1 GiB.');
     await this.prisma.quickReframe.update({where:{id},data:{status:'INPUT',message:'Uploading video',error:null}});return this.uploads.create(id,body);}

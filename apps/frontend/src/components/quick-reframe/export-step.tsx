@@ -2,7 +2,7 @@
 import { useAuth } from '@/components/auth-provider';
 import { useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Check, Download, History, Loader2, Play } from 'lucide-react';
+import { ArrowLeft, Check, Download, History, Loader2, Pencil, Play } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { isProcessing, mediaUrl, QUICK_STYLE_LABEL, renderReframe, type ReframeSession } from '@/lib/quick-reframe-api';
 import { cn } from '@/lib/utils';
@@ -16,8 +16,9 @@ const ratio = (w: number, h: number) => { const known: Array<[number, string]> =
 const estimateMb = (w: number, h: number, seconds: number, audio: boolean) => Math.max(1, Math.round((w * h * 30 * 0.08 + (audio ? 128000 : 0)) * seconds / 8 / 1e6));
 
 /** One export process for both paths: final preview, details, quality, a verified MP4 and History. */
-export function ExportStep({ session, onSession, onBack, onError }: {
+export function ExportStep({ session, onSession, onBack, onError, onEdit, result = false }: {
   session: ReframeSession; onSession: (s: ReframeSession) => void; onBack: () => void; onError: (message: string) => void;
+  onEdit: () => void; result?: boolean;
 }) {
   const [quality, setQuality] = useState<720 | 1080>(1080);
   const { user } = useAuth();
@@ -28,11 +29,20 @@ export function ExportStep({ session, onSession, onBack, onError }: {
   const latest = session.exports[0];
   const done = !!latest && latest.current && !processing;
   const previewCurrent = !!session.previewUrl && session.previewRevision === session.revision;
+  const ready = !processing && session.status !== 'FAILED' && (done || previewCurrent);
   const out = session.outputs?.[quality];
   const run = async (kind: 'preview' | 'export') => { setBusy(true);
     try { onSession(await renderReframe(session, kind, quality)); } catch (error) { onError(error instanceof Error ? error.message : 'Rendering could not start.'); } finally { setBusy(false); } };
   const playing = done ? latest.url : previewCurrent ? session.previewUrl : null;
-  return <div className='grid min-w-0 gap-6 md:grid-cols-[minmax(0,1fr)_340px] md:items-start'>
+  return <section aria-label={result ? 'Quick Reframe result' : 'Quick Reframe export'} className='grid min-w-0 gap-6 md:grid-cols-[minmax(0,1fr)_340px] md:items-start'>
+    {result && <header className='grid min-w-0 gap-2 md:col-span-2'>
+      <h2 className='font-display text-2xl font-semibold'>{ready ? 'Your video is ready' : processing ? 'Preparing your video' : 'Review your video'}</h2>
+      <div className='flex flex-wrap gap-2 text-xs font-semibold'>
+        <span className='rounded-lg bg-primary/15 px-3 py-1.5 text-primary-soft'>{session.mode === 'XEEPRO' ? 'XeePro' : 'XeeFree'}</span>
+        <span className='rounded-lg bg-tint-strong px-3 py-1.5'>{QUICK_STYLE_LABEL[session.editPath ?? 'MANUAL']}</span>
+      </div>
+      {ready && <p role='status' className='flex items-center gap-2 text-sm text-success'><Check size={16} />Processing complete · Saved in History</p>}
+    </header>}
     <div className='grid min-w-0 gap-2'>
       {/* The video fills the box absolutely: a percentage height inside a centred grid does not resolve,
           which let a 1080x1920 export overflow and show only its middle band. */}
@@ -46,7 +56,7 @@ export function ExportStep({ session, onSession, onBack, onError }: {
       <p className='text-center text-xs text-muted-foreground'>{done ? `Exported ${latest.width} × ${latest.height}` : previewCurrent ? 'Final preview · same layout, text and colors as the export' : ' '}</p>
     </div>
     <aside className='grid min-w-0 content-start gap-4 rounded-2xl border border-border bg-surface p-5'>
-      <h2 className='font-display text-lg font-semibold'>Export video</h2>
+      <h2 className='font-display text-lg font-semibold'>{result ? 'Download or edit' : 'Export video'}</h2>
       <dl className='grid grid-cols-2 gap-x-3 gap-y-2 text-sm'>
         <dt className='text-muted-foreground'>Duration</dt><dd className='text-right tabular-nums'>{clock(done && latest.duration ? latest.duration : session.duration)}</dd>
         <dt className='text-muted-foreground'>Resolution</dt><dd className='text-right tabular-nums'>{out ? `${out.width} × ${out.height}` : '—'}</dd>
@@ -68,8 +78,10 @@ export function ExportStep({ session, onSession, onBack, onError }: {
         {exporting ? <Loader2 size={16} className='animate-spin' /> : <Download size={16} />}{exporting ? 'Exporting…' : `Export ${quality}p`}</Button>}
       {latest && !latest.current && !processing && <p className='text-xs text-muted-foreground'>An earlier export is in History. Export again to include your latest edits.</p>}
       {noCredits && <p className='text-sm text-soft'>You've used your available generations.</p>}
-      <Button type='button' variant='ghost' className='justify-start' disabled={processing} onClick={onBack}><ArrowLeft size={15} />Back to editing</Button>
+      <Button type='button' variant='secondary' className='min-h-12' disabled={busy || processing} onClick={onEdit} data-testid='edit-video'><Pencil size={16} />Edit Video</Button>
+      {!done && result && <Button type='button' variant='ghost' asChild><Link href='/history' prefetch={false}><History size={15} />Open History</Link></Button>}
+      <Button type='button' variant='ghost' className='justify-start' disabled={processing} onClick={onBack}><ArrowLeft size={15} />{result ? 'Back to styles' : 'Back to result'}</Button>
     </aside>
-    <div className='min-w-0 md:col-span-2'><PostCopyPanel session={session} onSession={onSession} busy={busy} /></div>
-  </div>;
+    {!result && <div className='min-w-0 md:col-span-2'><PostCopyPanel session={session} onSession={onSession} busy={busy} /></div>}
+  </section>;
 }

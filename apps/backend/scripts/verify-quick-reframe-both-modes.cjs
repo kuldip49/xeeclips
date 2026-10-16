@@ -148,6 +148,7 @@ async function main(){
     let s=await uploadAndCrop();s=await api(`/quick-reframe/${s.id}/mode`,'PUT',{revision:s.revision,mode});
     await api(`/quick-reframe/${s.id}/${style.toLowerCase()}`,'POST',{revision:s.revision,captions:'GENERATE'});s=await settle(s.id);
     check(s.status==='READY'&&s.mode===mode&&s.editPath===style,`${mode} ${style} style and mode persisted`);
+    check(!s.exports.length&&(await api('/quick-reframe/history')).some(h=>h.id===s.id&&h.previewUrl),`${mode} ${style} saved preview is in History before editor or export`);
     const styled=await api(`/edit-mode/projects/${s.editProjectId}`);check(styled.elements.some(e=>e.type==='TEXT')&&styled.elements.some(e=>e.type==='SUBTITLE'),'grounded hook and real local ASR captions');
     if(mode==='XEEFREE'){
       await api(`/quick-reframe/${s.id}/hooks`,'POST',{externalAiAuthorized:true});s=await api('/quick-reframe/'+s.id);
@@ -161,6 +162,7 @@ async function main(){
   let provider=JSON.parse(fs.readFileSync(stateFile));provider.busy=true;fs.writeFileSync(stateFile,JSON.stringify(provider));
   await api(`/quick-reframe/${s.id}/styleone`,'POST',{revision:s.revision,captions:'GENERATE'});s=await settle(s.id);
   check(s.status==='FAILED'&&s.errorCode==='XEEPRO_BUSY'&&s.mode==='XEEPRO'&&!s.exports.length,'busy terminates with safe product error, no fallback or output');
+  check(!(await api('/quick-reframe/history')).some(h=>h.id===s.id),'new busy job is not a completed History result');
   check((await api('/auth/session')).creditBalance===before,'provider failure charges zero credits (reservation starts at export)');
   provider=JSON.parse(fs.readFileSync(stateFile));provider.busy=false;fs.writeFileSync(stateFile,JSON.stringify(provider));
   await api(`/quick-reframe/${s.id}/styleone`,'POST',{revision:s.revision,captions:'GENERATE'});s=await settle(s.id);

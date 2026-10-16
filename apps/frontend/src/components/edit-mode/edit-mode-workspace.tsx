@@ -697,7 +697,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
       onUndo={() => void travelHistory('undo')} onRedo={() => void travelHistory('redo')}
       onExport={() => reframe ? exportReframe() : isMobile ? openMobilePanel('EXPORT') : setExportOpen(true)}
       exportDisabled={!source || !!busy}
-      {...(reframe ? { back: { href: quickReframeUrl(reframe.id, 'choose'), label: 'Style' }, title: `Quick Reframe · ${reframe.mode === 'XEEPRO' ? 'XeePro' : 'XeeFree'}`,
+      {...(reframe ? { back: { href: quickReframeUrl(reframe.id, 'result'), label: 'Result' }, title: `Quick Reframe · ${reframe.mode === 'XEEPRO' ? 'XeePro' : 'XeeFree'}`,
         below: <StepIndicator className='border-t border-border px-1.5 py-1 sm:px-3' active='edit'
           reachable={(step) => step !== 'edit'} onSelect={(step) => router.push(quickReframeUrl(reframe.id, step))} /> } : {})} />
 

@@ -38,6 +38,8 @@ test('StyleOne: Change hook -> my own hook replaces it; Regenerate shows new sug
   await request.post(`${api}/quick-reframe/${s.id}/styleone`, { data: { revision: s.revision } }); s = await wait(request, s.id);
   const generated = await hookText(request, s); expect(generated).toBeTruthy();
   await page.goto(`/quick-reframe?video=${s.id}&step=edit`);
+  await expect(page.getByRole('region', { name: 'Quick Reframe result' })).toBeVisible({ timeout: 60000 });
+  await page.getByTestId('edit-video').click();
   await expect(page).toHaveURL(/\/edit-mode\//, { timeout: 60000 });
   await page.addStyleTag({ content: 'nextjs-portal{display:none!important}' });
   const sheet = page.getByRole('region', { name: 'Suggested Hooks' });

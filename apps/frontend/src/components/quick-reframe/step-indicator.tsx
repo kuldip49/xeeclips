@@ -4,18 +4,19 @@ import type { ReframeStep } from '@/lib/quick-reframe-api';
 import { cn } from '@/lib/utils';
 
 const STEPS: Array<{ id: ReframeStep; label: string }> = [
-  { id: 'crop', label: 'Crop' }, { id: 'choose', label: 'Choose Style' }, { id: 'edit', label: 'Edit' }, { id: 'export', label: 'Export' }
+  { id: 'crop', label: 'Crop' }, { id: 'choose', label: 'Choose Style' }, { id: 'result', label: 'Result' }, { id: 'export', label: 'Export' }
 ];
 
-/** 1. Crop → 2. Choose Style → 3. Edit → 4. Export. Earlier and reachable steps are links back. */
+/** Crop → Choose Style → Result → Export. Editing is an explicit action from the result. */
 export function StepIndicator({ active, reachable, onSelect, className }: {
   active: ReframeStep; reachable: (step: ReframeStep) => boolean; onSelect: (step: ReframeStep) => void; className?: string;
 }) {
-  const activeIndex = STEPS.findIndex((s) => s.id === active);
+  const currentStep = active === 'edit' ? 'result' : active;
+  const activeIndex = STEPS.findIndex((s) => s.id === currentStep);
   return <nav aria-label='Quick Reframe steps' className={cn('min-w-0', className)}>
     <ol className='flex min-w-0 items-center gap-1 sm:gap-2'>
       {STEPS.map((step, index) => {
-        const current = step.id === active; const done = index < activeIndex; const enabled = !current && reachable(step.id);
+        const current = step.id === currentStep; const done = index < activeIndex; const enabled = !current && reachable(step.id);
         return <li key={step.id} className='flex min-w-0 flex-1 items-center gap-1 sm:gap-2'>
           <button type='button' disabled={!enabled} aria-current={current ? 'step' : undefined} onClick={() => onSelect(step.id)}
             className={cn('flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-xl px-2 text-left transition-colors sm:px-3',

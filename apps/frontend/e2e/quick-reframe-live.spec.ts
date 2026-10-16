@@ -16,7 +16,7 @@ test('public Quick Reframe plays a real export and resumes from History',async({
   const section=page.getByRole('region',{name:'Quick Reframe history'});
   const card=section.getByTestId('quick-reframe-history-item').first();
   await expect(card.getByText('Quick Reframe',{exact:true})).toBeVisible();
-  await expect(card.getByRole('link',{name:'Re-edit',exact:true})).toBeVisible();
+  await expect(card.getByRole('link',{name:'Edit Video',exact:true})).toBeVisible();
   await page.setViewportSize({width:375,height:812});
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
   expect(errors).toEqual([]);

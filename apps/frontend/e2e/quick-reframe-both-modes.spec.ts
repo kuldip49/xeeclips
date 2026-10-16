@@ -18,6 +18,33 @@ test.beforeEach(async ({ context }) => {
   await context.addCookies([{ name, value, url: 'http://localhost:3100', httpOnly: true, sameSite: 'Lax' }]);
 });
 
+test('all six saved results reopen without processing or opening the editor at every viewport', async ({ page }) => {
+  const cases = fixtures(); expect(cases).toHaveLength(6);
+  const mutations: string[] = [], editorRequests: string[] = [];
+  page.on('request', request => {
+    const path = new URL(request.url()).pathname;
+    if (path.startsWith('/quick-reframe/') && request.method() !== 'GET') mutations.push(path);
+    if (path.startsWith('/edit-mode/projects/')) editorRequests.push(path);
+  });
+  for (const width of [1440, 375, 390]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const fixture of cases) {
+      await page.goto(`/quick-reframe?video=${fixture.id}&step=result`);
+      await page.addStyleTag({ content: hideDevBadge });
+      const result = page.getByRole('region', { name: 'Quick Reframe result' });
+      await expect(result).toBeVisible();
+      await expect(result.getByRole('status')).toHaveText('Processing complete · Saved in History');
+      await expect(result.getByTestId('edit-video')).toBeVisible();
+      await expect(result.getByTestId('download-video')).toBeVisible();
+      const video = result.getByLabel('Exported video');
+      await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState)).toBeGreaterThanOrEqual(2);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+      await page.screenshot({ path: resolve(output, `result-${fixture.mode}-${fixture.style}-${width}.png`), fullPage: true, animations: 'disabled' });
+    }
+  }
+  expect(mutations).toEqual([]); expect(editorRequests).toEqual([]);
+});
+
 test('both modes and all styles open the canonical editor on desktop and phones', async ({ page }) => {
   const cases = fixtures(); expect(cases).toHaveLength(6);
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

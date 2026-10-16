@@ -56,12 +56,14 @@ export const reframeForProject=(editProjectId:string)=>reframeRequest(`/project/
 export const HOOK_CATEGORY_LABEL:Record<ReframeHookCategory,string>={BOLD:'Bold',CURIOSITY:'Curiosity',QUESTION:'Question',CONTRARIAN:'Contrarian',EMOTIONAL:'Emotional',PROFESSIONAL:'Professional',SARCASTIC:'Sarcastic',HUMOROUS:'Humorous',AUTHORITY:'Authority / Insight',STORY:'Story',WARNING:'Warning',HIDDEN_TRUTH:'Hidden truth',UNEXPECTED_RESULT:'Unexpected result',TENSION:'Tension',CHALLENGE:'Challenge',CONFLICT:'Conflict',MISTAKE:'Mistake',WAIT_UNTIL:'Wait until',MYTH_REALITY:'Myth vs reality',BEFORE_AFTER:'Before / After',REVEAL:'Reveal'};
 export const recommendedHook=(hooks:ReframeHook[])=>hooks.find(h=>h.recommended)??hooks[0];
 /** Where the wizard should open for a session that already exists. */
-export type ReframeStep='crop'|'choose'|'edit'|'export';
+// `edit` remains a supported legacy URL; the workspace resolves it to the result screen.
+export type ReframeStep='crop'|'choose'|'result'|'edit'|'export';
 export function defaultStep(s:ReframeSession):ReframeStep{
   if(!s.cropConfirmed)return 'crop';
+  if(s.status==='FAILED')return 'choose';
   if(!s.editPath)return 'choose';
   if(s.exports.length&&s.exports[0].current)return 'export';
-  return 'edit';
+  return 'result';
 }
 export const quickReframeUrl=(id:string,step?:ReframeStep)=>`/quick-reframe?video=${encodeURIComponent(id)}${step?`&step=${step}`:''}`;
 export const editorUrl=(s:Pick<ReframeSession,'editProjectId'>,panel?:'hooks'|'post-copy')=>`/edit-mode/${encodeURIComponent(s.editProjectId)}${panel?`?tool=${panel}`:''}`;

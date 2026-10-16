@@ -8,6 +8,7 @@ Personal AI-powered short-form content assistant with a provider-neutral multi-m
 Quick Reframe AI is the independent single-video tool at `/quick-reframe` (maximum 180 seconds),
 with local analysis, cropping, localized cleanup, captions, preview/export and History.
 It supports saved XeeFree/XeePro modes and StyleZero/StyleOne/StyleTwo through the same canonical editor.
+Processed videos stay on a [Result screen](docs/quick-reframe-result-flow.md): export/download directly, or explicitly choose Edit Video.
 Local acceptance and mode guarantees: [Quick Reframe both modes](docs/quick-reframe-both-modes.md).
 Architecture, acceptance results and limits: [docs/quick-reframe.md](docs/quick-reframe.md).
 
