@@ -9,7 +9,7 @@ import { cropIssue } from '@/lib/quick-reframe-crop';
 import { StepIndicator } from './step-indicator';
 import { CropStep } from './crop-step';
 import { ChooseStep, type ChooseAction } from './choose-step';
-import { StyleOneStep } from './styleone-step';
+import { ReframeModeSelector } from './mode-selector';
 import { ExportStep } from './export-step';
 
 const field = 'min-h-11 w-full min-w-0 rounded-xl border border-border bg-background px-3 text-sm';
@@ -63,14 +63,17 @@ export function QuickReframeWorkspace() {
       const fallback = defaultStep(s);
       const allowed = requested && (requested === 'crop' || (requested === 'choose' && s.cropConfirmed) || ((requested === 'edit' || requested === 'export') && s.cropConfirmed && !!s.editPath));
       const target = allowed ? requested! : fallback;
-      if (target === 'edit' && s.editPath === 'MANUAL' && !requested) { setStep('choose', s.id); return; }
+      if (target === 'edit' && s.editPath) { router.push(editorUrl(s)); return; }
       setStep(target, s.id);
     }).catch(() => writeStorage(null)).finally(() => setLoading(false));
-  }, [accept, setStep]);
+  }, [accept, setStep, router]);
   useEffect(() => { if (session?.id) writeStorage(session.id); }, [session?.id]);
 
   // Poll while the server works; then move on to the step the finished job unlocks.
   const processing = isProcessing(session);
+  useEffect(() => {
+    if (step === 'edit' && session?.cropConfirmed && session.editPath && !processing) router.push(editorUrl(session));
+  }, [step, session, processing, router]);
   useEffect(() => {
     if (!processing || !session) return;
     let stopped = false;
@@ -80,7 +83,7 @@ export function QuickReframeWorkspace() {
         accept(s);
         if (!isProcessing(s)) {
           if (s.status === 'FAILED') { setError(s.error || 'Processing failed. Please retry.'); afterJob.current = null; return; }
-          if (afterJob.current === 'edit' && s.editPath === 'MANUAL') { afterJob.current = null; router.push(editorUrl(s)); return; }
+          if (afterJob.current === 'edit' && s.editPath) { afterJob.current = null; router.push(editorUrl(s)); return; }
           if (afterJob.current) { setStep(afterJob.current, s.id); afterJob.current = null; }
         }
       }).catch(() => { if (!stopped) setError('Connection interrupted. Your progress is saved.'); });
@@ -138,14 +141,14 @@ export function QuickReframeWorkspace() {
   });
   const choose = (choice: ChooseAction) => action(async () => {
     if (!session) return;
-    if (choice.kind === 'STYLEONE' || choice.kind === 'STYLETWO') { const next = await applyQuickStyle(session, choice.kind); accept(next);
+    if (choice.kind !== 'MANUAL') { const next = await applyQuickStyle(session, choice.kind); accept(next);
       // The first style checks speech and captions first; the step opens when that job hands over.
-      if (next.status === 'ANALYZE') afterJob.current = 'edit'; else setStep('edit', next.id); return; }
+      if (isProcessing(next)) afterJob.current = 'edit'; else router.push(editorUrl(next)); return; }
     const next = await chooseManual(session, choice.removeStyleOne); accept(next); router.push(editorUrl(next, 'hooks'));
   });
   const goTo = (next: ReframeStep) => {
     if (!session) return;
-    if (next === 'edit' && session.editPath === 'MANUAL') { router.push(editorUrl(session)); return; }
+    if (next === 'edit' && session.editPath) { router.push(editorUrl(session)); return; }
     void reframeRequest(`/${session.id}`).then(accept).catch(() => undefined);
     setStep(next, session.id);
   };
@@ -158,7 +161,7 @@ export function QuickReframeWorkspace() {
     <header className='flex flex-wrap items-start justify-between gap-4'>
       <div><p className='eyebrow'>Crop first. Then style.</p>
         <h1 className='mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl'>Quick Reframe AI</h1>
-        {!hasSource && <p className='mt-3 max-w-xl text-sm text-muted-foreground'>Crop your video, then let StyleOne or StyleTwo finish it, or edit it yourself. One video, full length, original sound. Up to 3 minutes.</p>}</div>
+        {!hasSource && <p className='mt-3 max-w-xl text-sm text-muted-foreground'>Crop your video, choose XeeFree or XeePro, then StyleZero, StyleOne, StyleTwo or manual editing. One video, full length, original sound. Up to 3 minutes.</p>}</div>
       {session && <Button type='button' variant='secondary' disabled={busy || processing} onClick={reset}>New video</Button>}
     </header>
     {hasSource && <StepIndicator active={step} reachable={reachable} onSelect={goTo} />}
@@ -192,8 +195,9 @@ export function QuickReframeWorkspace() {
           <video src={mediaUrl(session.originalUrl)} controls playsInline preload='metadata' aria-label='Your video' className='max-h-[56vh] w-full object-contain' /></div>
       : <div className='grid gap-3 rounded-xl border border-border bg-surface p-4'><p className='text-sm text-muted-foreground'>Your video needs to be prepared for cropping.</p>
         <Button type='button' className='justify-self-start' disabled={busy} onClick={() => void action(() => playback(session))}>Prepare video</Button></div>)}
-    {session && step === 'choose' && session.cropConfirmed && !processing && <ChooseStep session={session} busy={busy} onChoose={(c) => void choose(c)} onBack={() => goTo('crop')} />}
-    {session && step === 'edit' && !!quickStyleOf(session) && <StyleOneStep session={session} onSession={accept} onError={setError} onStep={(s) => goTo(s)} />}
+    {session && step === 'choose' && session.cropConfirmed && !processing && <>
+      <ReframeModeSelector session={session} onSession={s => { accept(s); setError(''); }} busy={busy} />
+      <ChooseStep session={session} busy={busy} onChoose={(c) => void choose(c)} onBack={() => goTo('crop')} /></>}
     {session && step === 'export' && session.editPath && <ExportStep session={session} onSession={accept} onError={setError}
       onBack={() => session.editPath === 'MANUAL' ? router.push(editorUrl(session)) : goTo('edit')} />}
   </div>;

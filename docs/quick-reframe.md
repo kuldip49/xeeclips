@@ -1,5 +1,9 @@
 # Quick Reframe (V3: fully manual crop first)
 
+Current Free/Pro architecture, StyleZero support, canonical editor navigation and local acceptance:
+[Quick Reframe both modes](quick-reframe-both-modes.md). The dated V3 notes below describe the earlier
+crop-first foundation; per-request intelligence consent has been replaced by the saved project mode.
+
 Implementation and acceptance report. V2 (2026-10-07) introduced crop-first; V3 (2026-10-07) makes the crop
 stage 100% manual and moves every AI step after the editing-mode choice.
 

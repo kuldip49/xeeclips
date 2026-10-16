@@ -47,7 +47,8 @@ export function projectExecutionPolicy(settings: unknown): ExecutionPolicy | nul
   // Legacy generated projects have provenance but may predate the tier field.
   // Unknown generated provenance fails closed; a true standalone project keeps
   // its existing explicit consent behavior.
-  return origin.originKind === 'GENERATED_CLIP' || typeof origin.generatedClipId === 'string' ? XEEFREE_POLICY : null;
+  return origin.originKind === 'GENERATED_CLIP' || typeof origin.generatedClipId === 'string'
+    || record(settings).feature === 'QUICK_REFRAME' ? XEEFREE_POLICY : null;
 }
 
 /** Roles whose provider route is a Pro-only escalation (a second, stronger model on a rejected draft). */

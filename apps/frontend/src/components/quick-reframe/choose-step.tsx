@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { mediaUrl, type ReframeSession } from '@/lib/quick-reframe-api';
 import { cn } from '@/lib/utils';
 
-export type ChooseAction = { kind: 'STYLEONE' } | { kind: 'STYLETWO' } | { kind: 'MANUAL'; removeStyleOne: boolean };
+export type ChooseAction = { kind: 'STYLEZERO' | 'STYLEONE' | 'STYLETWO' } | { kind: 'MANUAL'; removeStyleOne: boolean };
 
 /**
  * "How would you like to edit your video?" Shown only after the crop is confirmed. Switching from an
@@ -15,12 +15,14 @@ export type ChooseAction = { kind: 'STYLEONE' } | { kind: 'STYLETWO' } | { kind:
 export function ChooseStep({ session, busy, onChoose, onBack }: {
   session: ReframeSession; busy: boolean; onChoose: (action: ChooseAction) => void; onBack: () => void;
 }) {
-  const [confirm, setConfirm] = useState<'TO_STYLEONE' | 'TO_STYLETWO' | 'TO_MANUAL' | null>(null);
+  const [confirm, setConfirm] = useState<'TO_STYLEZERO' | 'TO_STYLEONE' | 'TO_STYLETWO' | 'TO_MANUAL' | null>(null);
+  const confirmName = confirm === 'TO_STYLEZERO' ? 'StyleZero' : confirm === 'TO_STYLETWO' ? 'StyleTwo' : 'StyleOne';
+  const styleZero = () => { if (session.editPath && session.editPath !== 'STYLEZERO') setConfirm('TO_STYLEZERO'); else onChoose({ kind: 'STYLEZERO' }); };
   // Replacing an existing composition (Manual edits, or the other style) always asks first.
-  const styleOne = () => { if (session.editPath === 'MANUAL' || session.editPath === 'STYLETWO') setConfirm('TO_STYLEONE'); else onChoose({ kind: 'STYLEONE' }); };
-  const styleTwo = () => { if (session.editPath === 'MANUAL' || session.editPath === 'STYLEONE') setConfirm('TO_STYLETWO'); else onChoose({ kind: 'STYLETWO' }); };
-  const manual = () => { if (session.styleOneApplied || session.styleTwoApplied) setConfirm('TO_MANUAL'); else onChoose({ kind: 'MANUAL', removeStyleOne: false }); };
-  const appliedStyle = session.styleTwoApplied ? 'StyleTwo' : 'StyleOne';
+  const styleOne = () => { if (session.editPath && session.editPath !== 'STYLEONE') setConfirm('TO_STYLEONE'); else onChoose({ kind: 'STYLEONE' }); };
+  const styleTwo = () => { if (session.editPath && session.editPath !== 'STYLETWO') setConfirm('TO_STYLETWO'); else onChoose({ kind: 'STYLETWO' }); };
+  const manual = () => { if (session.styleZeroApplied || session.styleOneApplied || session.styleTwoApplied) setConfirm('TO_MANUAL'); else onChoose({ kind: 'MANUAL', removeStyleOne: false }); };
+  const appliedStyle = session.styleZeroApplied ? 'StyleZero' : session.styleTwoApplied ? 'StyleTwo' : 'StyleOne';
   const card = 'group grid min-w-0 content-start gap-4 rounded-2xl border bg-surface p-5 text-left transition-colors sm:p-6';
   return <div className='grid min-w-0 gap-6'>
     <div className='grid gap-4 md:grid-cols-[180px_minmax(0,1fr)] md:items-center'>
@@ -35,6 +37,13 @@ export function ChooseStep({ session, busy, onChoose, onBack }: {
       </div>
     </div>
     <div className='grid min-w-0 gap-4 md:grid-cols-2 xl:grid-cols-3'>
+      <div className={cn(card, session.editPath === 'STYLEZERO' ? 'border-primary/60' : 'border-border')}>
+        <span className='grid h-12 w-12 place-items-center rounded-2xl bg-primary/15 text-primary-soft'><Wand2 size={22} /></span>
+        <div className='grid gap-2'><p className='eyebrow'>Automatic</p><h3 className='font-display text-xl font-semibold'>StyleZero</h3>
+          <p className='text-sm text-muted-foreground'>Clean presentation with a grounded headline and readable captions, ready for the full editor.</p></div>
+        <ul className='grid gap-1 text-xs text-muted-foreground'><li>· Your complete saved crop</li><li>· Clean hook and caption styling</li><li>· Full editing, audio, media and export tools</li></ul>
+        <Button type='button' size='lg' disabled={busy} onClick={styleZero} data-testid='choose-stylezero'><Sparkles size={16} />Apply StyleZero</Button>
+      </div>
       <div className={cn(card, session.editPath === 'STYLEONE' ? 'border-primary/60' : 'border-border')}>
         <span className='grid h-12 w-12 place-items-center rounded-2xl bg-primary/15 text-primary-soft'><Wand2 size={22} /></span>
         <div className='grid gap-2'><p className='eyebrow'>Option A · Automatic</p><h3 className='font-display text-xl font-semibold'>StyleOne</h3>
@@ -59,11 +68,11 @@ export function ChooseStep({ session, busy, onChoose, onBack }: {
     </div>
     <div><Button type='button' variant='ghost' disabled={busy} onClick={onBack}><ArrowLeft size={16} />Back to crop</Button></div>
 
-    <BottomSheet open={confirm === 'TO_STYLEONE' || confirm === 'TO_STYLETWO'} onClose={() => setConfirm(null)} title={`Apply ${confirm === 'TO_STYLETWO' ? 'StyleTwo' : 'StyleOne'} over your edits?`} desktopWidth='md:max-w-md'>
-      <p className='text-sm leading-6 text-muted-foreground'>{confirm === 'TO_STYLETWO' ? 'StyleTwo' : 'StyleOne'} replaces your current hook, caption style, framing and layout with its fixed design. Your crop, video and sound stay the same.
+    <BottomSheet open={!!confirm && confirm !== 'TO_MANUAL'} onClose={() => setConfirm(null)} title={`Apply ${confirmName} over your edits?`} desktopWidth='md:max-w-md'>
+      <p className='text-sm leading-6 text-muted-foreground'>{confirmName} replaces your current hook, caption style, framing and layout with its design. Your crop, video and sound stay the same.
         A checkpoint is saved: press Undo in the editor to restore your previous version.</p>
       <div className='mt-5 grid grid-cols-2 gap-2'><Button type='button' variant='secondary' className='h-11' onClick={() => setConfirm(null)}>Keep my edits</Button>
-        <Button type='button' className='h-11' onClick={() => { const next = confirm === 'TO_STYLETWO' ? 'STYLETWO' : 'STYLEONE'; setConfirm(null); onChoose({ kind: next }); }}>Apply {confirm === 'TO_STYLETWO' ? 'StyleTwo' : 'StyleOne'}</Button></div>
+        <Button type='button' className='h-11' onClick={() => { const next = confirm === 'TO_STYLEZERO' ? 'STYLEZERO' : confirm === 'TO_STYLETWO' ? 'STYLETWO' : 'STYLEONE'; setConfirm(null); onChoose({ kind: next }); }}>Apply {confirmName}</Button></div>
     </BottomSheet>
     <BottomSheet open={confirm === 'TO_MANUAL'} onClose={() => setConfirm(null)} title='Edit manually' desktopWidth='md:max-w-md'>
       <p className='text-sm leading-6 text-muted-foreground'>Your video already has {appliedStyle}. Keep it and refine it in the editor, or start from the clean cropped video. Removing {appliedStyle} is saved as a checkpoint you can undo.</p>

@@ -1,6 +1,6 @@
 import { getPublicApiBaseUrl } from './api';
 export type { ReframeSession, ReframePlan, ReframeRegion, ReframeBox, ReframeHook, ReframeHookCategory, ReframeAspect,
-  ReframeCleanup, ReframeExport, ReframeEditPath, ReframePreparation, ReframeAnalysis, ReframeCropGrid } from '@ai-content-platform/shared';
+  ReframeCleanup, ReframeExport, ReframeEditPath, ReframePreparation, ReframeAnalysis, ReframeCropGrid, ReframeMode } from '@ai-content-platform/shared';
 import type { ReframeHook, ReframeHookCategory, ReframePlan, ReframeSession } from '@ai-content-platform/shared';
 export async function reframeRequest<T=ReframeSession>(path='',method='GET',body?:unknown,signal?:AbortSignal):Promise<T>{
   const response=await fetch(`${getPublicApiBaseUrl()}/quick-reframe${path}`,{credentials:'include',method,headers:body?{'Content-Type':'application/json'}:undefined,body:body?JSON.stringify(body):undefined,signal,cache:'no-store'});
@@ -38,11 +38,12 @@ export const savePlan=(s:ReframeSession,plan:ReframePlan)=>reframeRequest(`/${s.
 export const confirmCrop=(s:ReframeSession)=>reframeRequest(`/${s.id}/confirm-crop`,'POST',{revision:s.revision});
 export const revertCrop=(s:ReframeSession)=>reframeRequest(`/${s.id}/revert-crop`,'POST');
 /** The automatic looks Quick Reframe can apply to a confirmed crop; Manual is the full editor. */
-export type QuickStyleKey='STYLEONE'|'STYLETWO';
-export const QUICK_STYLE_LABEL:Record<QuickStyleKey|'MANUAL',string>={STYLEONE:'StyleOne',STYLETWO:'StyleTwo',MANUAL:'Manual'};
-export const quickStyleOf=(s:Pick<ReframeSession,'editPath'>|null|undefined):QuickStyleKey|null=>s?.editPath==='STYLEONE'||s?.editPath==='STYLETWO'?s.editPath:null;
+export type QuickStyleKey='STYLEZERO'|'STYLEONE'|'STYLETWO';
+export const QUICK_STYLE_LABEL:Record<QuickStyleKey|'MANUAL',string>={STYLEZERO:'StyleZero',STYLEONE:'StyleOne',STYLETWO:'StyleTwo',MANUAL:'Manual'};
+export const quickStyleOf=(s:Pick<ReframeSession,'editPath'>|null|undefined):QuickStyleKey|null=>s?.editPath==='STYLEZERO'||s?.editPath==='STYLEONE'||s?.editPath==='STYLETWO'?s.editPath:null;
+export const setReframeMode=(s:ReframeSession,mode:'XEEFREE'|'XEEPRO')=>reframeRequest(`/${s.id}/mode`,'PUT',{revision:s.revision,mode});
 type StyleOptions={hookText?:string;captions?:'GENERATE'|'KEEP'|'OFF'};
-export const applyQuickStyle=(s:ReframeSession,style:QuickStyleKey,options:StyleOptions={})=>reframeRequest(`/${s.id}/${style==='STYLETWO'?'styletwo':'styleone'}`,'POST',{revision:s.revision,...options});
+export const applyQuickStyle=(s:ReframeSession,style:QuickStyleKey,options:StyleOptions={})=>reframeRequest(`/${s.id}/${style.toLowerCase()}`,'POST',{revision:s.revision,...options});
 export const applyStyleOne=(s:ReframeSession,options:StyleOptions={})=>applyQuickStyle(s,'STYLEONE',options);
 export const applyStyleTwo=(s:ReframeSession,options:StyleOptions={})=>applyQuickStyle(s,'STYLETWO',options);
 export const chooseManual=(s:ReframeSession,removeStyle=false)=>reframeRequest(`/${s.id}/path`,'POST',{revision:s.revision,path:'MANUAL',removeStyle,removeStyleOne:removeStyle});

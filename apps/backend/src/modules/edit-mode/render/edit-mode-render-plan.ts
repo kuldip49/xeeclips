@@ -225,9 +225,13 @@ export function buildRenderPlan(input: PlanInput): BuiltPlan {
       let overlay = textOverlay(element, properties, { ...canvas, visualLayout }, startSec, endSec);
       const role = String(properties.templateRole ?? properties.presetRole ?? '');
       const proPackage = role === 'HOOK' ? xeeProPackage(input.project.settings) : undefined;
-      if (proPackage) {
-        const hook = (proPackage.hooks as CreativeHook[] | undefined)?.find(h => h.text === overlay.content);
-        if (hook?.text !== overlay.content || !xeeProHookApproved(hook) || !hookMeetsThreshold(hook!)) {
+      const manualQuickHook = input.project.settings && typeof input.project.settings === 'object'
+        && (input.project.settings as Record<string, unknown>).feature === 'QUICK_REFRAME' && properties.manualHookText === true;
+      if (proPackage && !manualQuickHook) {
+        // Typography can uppercase the rendered string; approval belongs to the saved wording.
+        const wording = String(properties.content ?? properties.text ?? '');
+        const hook = (proPackage.hooks as CreativeHook[] | undefined)?.find(h => h.text === wording);
+        if (!xeeProHookApproved(hook) || !hookMeetsThreshold(hook!)) {
           throw new EditExportError('HOOK_LANGUAGE_GATE', 'This XeePro hook needs grammar and clarity review before export. Regenerate the hook.');
         }
       }

@@ -8,6 +8,7 @@ export class QuickReframeController {
   @Get('history') history(){return this.service.history();}
   @Get('project/:editProjectId') forProject(@Param('editProjectId') id:string){return this.service.forProject(id);}
   @Get(':id') get(@Param('id') id:string){return this.service.get(id);}
+  @Put(':id/mode') mode(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.setMode(id,body);}
   @Delete(':id') remove(@Param('id') id:string){return this.service.remove(id);}
   @Post(':id/upload') upload(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.startUpload(id,body);}
   @Put('uploads/:uploadId/chunks/:index') chunk(@Param('uploadId') id:string,@Param('index') index:string,@Req() request:Request){return this.service.uploads.writeChunk(id,index,request);}
@@ -22,6 +23,7 @@ export class QuickReframeController {
   @Post(':id/post-copy') generateCopy(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.generateCopy(id,body);}
   @Put(':id/post-copy') saveCopy(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.saveCopy(id,body);}
   @Post(':id/styleone') styleOne(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.applyStyleOne(id,body);}
+  @Post(':id/stylezero') styleZero(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.applyStyleZero(id,body);}
   @Post(':id/styletwo') styleTwo(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.applyStyleTwo(id,body);}
   @Post(':id/path') path(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.choosePath(id,body);}
   @Put(':id/plan') save(@Param('id') id:string,@Body() body:Record<string,unknown>){return this.service.save(id,body);}

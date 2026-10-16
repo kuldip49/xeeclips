@@ -1,8 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useGenerationAvailability } from '@/lib/use-generation-availability';
-import Link from 'next/link';
-import { useAuth } from '@/components/auth-provider';
+import { ReframeModeSelector } from './mode-selector';
 import { Button } from '@/components/ui/button';
 import { analyzeReframe, generatePostCopy, isProcessing, reframeRequest, savePostCopy, type ReframeSession } from '@/lib/quick-reframe-api';
 
@@ -21,13 +19,10 @@ export function PostCopyButtons({ caption, hashtags }: { caption: string; hashta
 }
 /** One copy-writing tool shared by StyleOne, the canonical editor and export. Never emits a media command. */
 export function PostCopyPanel({ session, onSession, busy = false }: { session: ReframeSession; onSession: (s: ReframeSession) => void; busy?: boolean }) {
-  const { user } = useAuth();
-  const { proEnabled } = useGenerationAvailability();
-  useEffect(() => { if (proEnabled === false) setConsent(false); }, [proEnabled]);
   const [caption, setCaption] = useState(session.postCopy?.selectedCaption ?? '');
   const [hashtags, setHashtags] = useState<string[]>(session.postCopy?.selectedHashtags ?? []);
   const [variants, setVariants] = useState<Record<string, string>>({});
-  const [consent, setConsent] = useState(false), [loading, setLoading] = useState(false), [warnings, setWarnings] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false), [warnings, setWarnings] = useState<string[]>([]);
   const [direction, setDirection] = useState('More engaging'), [intent, setIntent] = useState(session.postCopy?.editingDirection ?? ''), [purpose, setPurpose] = useState(session.postCopy?.purpose ?? '');
   const [tag, setTag] = useState(''), [status, setStatus] = useState('');
   const running = isProcessing(session), disabled = busy || loading || running;
@@ -44,7 +39,7 @@ export function PostCopyPanel({ session, onSession, busy = false }: { session: R
     const latest = await reframeRequest(`/${session.id}`).catch(() => null); if (latest) onSession(latest);
   } finally { setLoading(false); } };
   const generate = (rewrite?: string, hashtagsOnly = false) => action(async () => { const current = dirty ? await persist() : session;
-    const result = await generatePostCopy(current, { externalAiAuthorized: consent && proEnabled !== false, editingDirection: intent, purpose, hashtagsOnly, ...(rewrite ? { rewrite } : {}) });
+    const result = await generatePostCopy(current, { externalAiAuthorized: session.mode === 'XEEPRO', editingDirection: intent, purpose, hashtagsOnly, ...(rewrite ? { rewrite } : {}) });
     onSession(result.session); setWarnings(result.warnings); });
   const useCaption = (value: string, style: string) => action(async () => { setCaption(value); await persist(value, hashtags, style); });
   const addTag = () => { const value = `#${tag.trim().replace(/^#+/u, '')}`;
@@ -68,8 +63,8 @@ export function PostCopyPanel({ session, onSession, busy = false }: { session: R
       <label className='grid gap-1 text-xs'>Editing direction<input className={field} maxLength={500} value={intent} onChange={e => setIntent(e.target.value)} placeholder='Emphasize the practical advice' /></label>
       <label className='grid gap-1 text-xs'>Purpose / audience<input className={field} maxLength={500} value={purpose} onChange={e => setPurpose(e.target.value)} placeholder='Who is this video for?' /></label>
     </div></details>
-    {proEnabled === false ? <p className='text-xs text-muted-foreground'>XeePro is temporarily unavailable. XeeFree is available.</p> : user?.aiProcessingConsentAt ? <label className='flex items-start gap-2 text-xs leading-5 text-muted-foreground'><input type='checkbox' className='mt-1' checked={consent} onChange={e => setConsent(e.target.checked)} />Use XeePro for this request.</label>
-      : <p className='text-xs text-muted-foreground'>Suggestions use local video text. <Link className='underline' href='/settings'>Enable AI processing in Settings</Link> for richer rewrites.</p>}
+    <ReframeModeSelector session={session} onSession={onSession} busy={disabled}
+      offerFree={warnings.some(w => w === 'XeePro is busy right now. Try XeeFree or try again later.')} />
     <div className='flex flex-wrap gap-2'><Button type='button' disabled={disabled || !session.analysis} onClick={() => void generate()}>{loading ? 'Working…' : 'Generate social copy'}</Button>
       <Button type='button' variant='secondary' disabled={disabled || !session.analysis} onClick={() => void generate(undefined, true)}>Generate hashtags</Button></div>
     {original?.sourcePostText && <div className='grid gap-2'><label className='grid gap-1 text-xs'>Transform original caption<select aria-label='Rewrite direction' className={field} value={direction} onChange={e => setDirection(e.target.value)}>{directions.map(d => <option key={d}>{d}</option>)}</select></label>

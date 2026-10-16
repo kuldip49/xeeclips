@@ -38,8 +38,9 @@ test('StyleOne: Change hook -> my own hook replaces it; Regenerate shows new sug
   await request.post(`${api}/quick-reframe/${s.id}/styleone`, { data: { revision: s.revision } }); s = await wait(request, s.id);
   const generated = await hookText(request, s); expect(generated).toBeTruthy();
   await page.goto(`/quick-reframe?video=${s.id}&step=edit`);
-  await page.getByRole('button', { name: 'Change Hook' }).click();
-  const sheet = page.getByRole('dialog', { name: 'Change hook' });
+  await expect(page).toHaveURL(/\/edit-mode\//, { timeout: 60000 });
+  await page.addStyleTag({ content: 'nextjs-portal{display:none!important}' });
+  const sheet = page.getByRole('region', { name: 'Suggested Hooks' });
   // Regenerate: the new list shares no line with the one shown before (or explains why nothing is new).
   const before = await sheet.getByTestId('hook-card').locator('p').allTextContents();
   await sheet.getByTestId('regenerate-hooks').click();
@@ -52,7 +53,7 @@ test('StyleOne: Change hook -> my own hook replaces it; Regenerate shows new sug
   await sheet.getByRole('button', { name: 'Use my hook' }).click();
   await expect.poll(() => hookText(request, s), { timeout: 60000 }).toBe('My own StyleOne hook line');
   await expect(page.getByText('My own StyleOne hook line').first()).toBeVisible({ timeout: 60000 });
-  await expect(page.getByLabel('StyleOne preview')).toBeVisible({ timeout: 10 * 60 * 1000 });
+  await expect(page.getByTestId('edit-preview-canvas')).toBeVisible();
 });
 
 test('Manual: Hooks tool -> my own hook replaces the applied one; Regenerate shows new suggestions', async ({ page, request }) => {

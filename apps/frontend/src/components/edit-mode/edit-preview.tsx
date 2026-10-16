@@ -529,7 +529,10 @@ export const EditPreview = forwardRef<EditPreviewHandle, { source?: EditAsset; a
   const combinedTransform = [zoomState.scale > 1.0001
     ? `scale(${zoomState.scale.toFixed(5)})` : '', segmentTransform.transform ?? '']
     .filter(Boolean).join(' ') || undefined;
-  const canonicalCrop = cameraCrop ? cropGeometry : null;
+  // A baked Quick Reframe source with no new crop uses the shared window zoom/pan stage in export.
+  // The inset-crop surface already owns its scale, but its whole-frame compatibility branch does not.
+  const bakedWindowTransform = mediaAsset?.metadata?.quickReframeBaked === true && manualZoomActive && !manualCropBackground;
+  const canonicalCrop = cameraCrop && !bakedWindowTransform ? cropGeometry : null;
   const canonicalFrameStyle: CSSProperties = card && cameraCrop ? (() => {
     const picture = canonicalCrop?.picture && cardFit ? canonicalCrop.picture : null;
     const { x, y, width, height } = picture ? { x: picture.x / 1080, y: picture.y / 1920,

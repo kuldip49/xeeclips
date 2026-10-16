@@ -1,8 +1,10 @@
-import { assertXeeProAvailable, isXeeProEnabled, withProviderBusyGuard } from '../processing/generation-availability';
+import { assertXeeProAvailable, isXeeProBusyError, XEEPRO_BUSY_MESSAGE, withProviderBusyGuard } from '../processing/generation-availability';
+import { parseReframeMode, reframeMode, reframeAiMode } from './quick-reframe-mode';
+import { refineReframeTranscript } from './quick-reframe-transcript';
 import { UsageService } from '../auth/usage.service';
 import { xeeProHookApproved } from '../content-intelligence/hook-language';
 import { hookMeetsThreshold, type CreativeHook } from '../content-intelligence/creative-quality.service';
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Queue, Worker } from 'bullmq';
 import IORedis from 'ioredis';
@@ -28,6 +30,8 @@ import { analyzeRegions, defaultPlan, isIdentityPreparation, preparationOf, reco
 import { preparationFingerprint, quickCleanRender, quickComposeRender, quickOutputCanvas, quickStyleCommands,
   QUICK_REFRAME_PIPELINE, type QuickStyle } from './quick-reframe-render';
 import { prepareStyleTwoFonts } from '../edit-mode/render/style-two-fonts';
+import { EditExportError } from '../edit-mode/render/edit-mode-render-plan';
+import { HEADLINE_FIT_MESSAGE } from '@ai-content-platform/shared/editor-text-layout.cjs';
 import { publicCreativePackage } from '../content-intelligence/creative-package.service';
 import { INTELLIGENCE_VERSION } from '../content-intelligence/content-understanding.service';
 import { retainedBoundaryQa } from '../content-intelligence/edit-project-evidence';
@@ -40,6 +44,7 @@ const include={editProject:{include:{assets:true,elements:true}}};
 type StyleOptions={hookText?:string;captions?:string};
 /** Display name and canonical project layout of each automatic look Quick Reframe offers. */
 const STYLES:Record<QuickStyle,{name:string;profile:string;template:string}>={
+  STYLEZERO:{name:'StyleZero',profile:'',template:'AUTOMATIC_1'},
   STYLEONE:{name:'StyleOne',profile:'AUTOMATIC_2',template:'STYLEONE'},
   STYLETWO:{name:'StyleTwo',profile:'AUTOMATIC_3_STYLE_TWO',template:'STYLETWO'}};
 /**
@@ -86,13 +91,48 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
   }
   async onModuleDestroy(){for(const c of this.aborts.values())c.abort();await this.worker?.close();await this.queue.close();await this.connection.quit();}
   async create(){
-    const project=await this.prisma.editProject.create({data:{name:'Quick Reframe',settings:{feature:'QUICK_REFRAME',aspectRatio:'SOURCE',reframePolicy:'SOURCE',subtitlePolicy:'OFF',zoomPolicy:'OFF',gradingPolicy:'NONE'},quickReframe:{create:{}}},include:{quickReframe:true}});
+    const project=await this.prisma.editProject.create({data:{name:'Quick Reframe',settings:{feature:'QUICK_REFRAME',origin:{originKind:'QUICK_REFRAME',aiMode:'FALLBACK_ONLY'},aspectRatio:'SOURCE',reframePolicy:'SOURCE',subtitlePolicy:'OFF',zoomPolicy:'OFF',gradingPolicy:'NONE'},quickReframe:{create:{}}},include:{quickReframe:true}});
     return this.get(project.quickReframe!.id);
   }
   private async load(id:string){const q=await this.prisma.quickReframe.findUnique({where:{id},include});if(!q)throw new NotFoundException('Quick Reframe video not found.');return q;}
+  /** Mode changes never restyle the timeline or overwrite manual work. Revision claiming rejects stale tabs. */
+  async setMode(id:string,body:Record<string,unknown>){
+    const q=await this.load(id);const mode=parseReframeMode(body.mode);
+    if(activeStatuses.includes(q.status))throw new ConflictException('Wait for processing to finish.');
+    if(body.revision!==q.editProject.revision)throw new ConflictException('Your edits changed. Refresh and try again.');
+    const settings=record(q.editProject.settings);
+    if(record(settings.origin).aiMode&&reframeMode(settings)===mode)return this.get(id);
+    await this.prisma.$transaction(async tx=>{
+      const claimed=await tx.quickReframe.updateMany({where:{id,status:q.status,operationId:q.operationId},
+        data:{externalAiAuthorized:mode==='XEEPRO',hooks:[],error:null,...(q.status==='FAILED'?{status:this.cropConfirmed(q)?'CROPPED':'INPUT',message:''}:{})}});
+      if(!claimed.count)throw new ConflictException('Another operation started. Refresh this video.');
+      const updated=await tx.editProject.updateMany({where:{id:q.editProjectId,revision:q.editProject.revision},
+        data:{revision:{increment:1},settings:json({...settings,origin:{...record(settings.origin),originKind:'QUICK_REFRAME',aiMode:reframeAiMode(mode)}})}});
+      if(!updated.count)throw new ConflictException('Your edits changed. Refresh and try again.');
+    },{isolationLevel:'Serializable'});
+    return this.get(id);
+  }
+  private async externalFor(q:Loaded){
+    const external=reframeMode(q.editProject.settings)==='XEEPRO';
+    if(external){
+      assertXeeProAvailable();
+      const user=q.editProject.userId?await this.prisma.user.findUnique({where:{id:q.editProject.userId},select:{aiProcessingConsentAt:true}}):null;
+      if(!user?.aiProcessingConsentAt)throw new ForbiddenException({code:'AI_CONSENT_REQUIRED',message:'Allow AI processing in Settings first.'});
+    }
+    return external;
+  }
   /** The uploaded file. Until a crop is baked, the SOURCE asset still is the original. */
   private originalOf(q:Loaded){const assets=q.editProject.assets;return assets.find(a=>kindOf(a)==='ORIGINAL')??assets.find(a=>a.role==='SOURCE');}
   private sourceOf(q:Loaded){return q.editProject.assets.find(a=>a.role==='SOURCE');}
+  /** Undo/Redo restores canonical settings; the older wizard path must never override that composition. */
+  private styleOf(q:Loaded):QuickStyle|null{
+    const settings=record(q.editProject.settings),profile=record(settings.resolvedVisualLayout).editingProfile;
+    if(profile===STYLES.STYLEONE.profile)return 'STYLEONE';
+    if(profile===STYLES.STYLETWO.profile)return 'STYLETWO';
+    if(settings.quickReframeStyleOne===true)return 'STYLEONE';
+    if(settings.quickReframeStyleTwo===true)return 'STYLETWO';
+    return settings.quickReframeStyleZero===true?'STYLEZERO':null;
+  }
   private latest(q:Loaded,kind:string){return q.editProject.assets.filter(a=>kindOf(a)===kind).sort((a,b)=>b.createdAt.getTime()-a.createdAt.getTime())[0];}
   private cropConfirmed(q:Loaded){const source=this.sourceOf(q);
     return !!source&&!!q.plan&&record(source.metadata).quickReframeKey===preparationFingerprint(preparationOf(q.plan as unknown as ReframePlan));}
@@ -106,11 +146,13 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const hooks=(Array.isArray(q.hooks)?q.hooks:[]).map((h:unknown,i:number):ReframeHook|null=>typeof h==='string'?{text:h,category:'PROFESSIONAL',score:0,recommended:i===0,source:'OPENAI'}
       :record(h).text&&HOOK_CATEGORIES.includes(record(h).category)?h as unknown as ReframeHook:null).filter((h):h is ReframeHook=>!!h);
     return {id:q.id,editProjectId:project.id,revision:project.revision,name:original?.originalName||'Quick Reframe',duration:original?.duration||0,
+      mode:reframeMode(settings),errorCode:q.error===XEEPRO_BUSY_MESSAGE?'XEEPRO_BUSY':q.error===HEADLINE_FIT_MESSAGE?'HEADLINE_DOES_NOT_FIT':null,
       width:original?.width||0,height:original?.height||0,originalUrl:url(this.latest(q,'SOURCE_PLAYBACK')||original),
       sourceUrl:url(source),sourceWidth:source?.width||0,sourceHeight:source?.height||0,
-      cropConfirmed:this.cropConfirmed(q),confirmed:(q.confirmed??null) as ReframeSession['confirmed'],editPath:(q.editPath??null) as ReframeEditPath|null,
+      cropConfirmed:this.cropConfirmed(q),confirmed:(q.confirmed??null) as ReframeSession['confirmed'],editPath:q.editPath?(this.styleOf(q)??'MANUAL'):null,
       // In a Quick Reframe project a card layout only ever comes from the style the user chose (V1 sessions included).
       styleOneApplied:record(settings.resolvedVisualLayout).editingProfile===STYLES.STYLEONE.profile,
+      styleZeroApplied:settings.quickReframeStyleZero===true&&!record(settings.resolvedVisualLayout).editingProfile,
       styleTwoApplied:record(settings.resolvedVisualLayout).editingProfile===STYLES.STYLETWO.profile,
       previewUrl:url(preview),exportUrl:exports[0]?.url??null,previewRevision:current(preview),exportRevision:exports[0]?.revision??null,exports,
       status:q.status,progress:q.progress,message:q.message,error:q.error,analysis:this.analysisOf(q),plan:q.plan as ReframeSession['plan'],hooks,
@@ -214,7 +256,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
       await this.compose(task,q,dir,controller.signal,(v)=>{uploaded=v;});
       if(task.kind==='EXPORT')await new UsageService(this.prisma).settle(`reframe:${task.operationId}`,true);
     }catch(error){this.logger.warn(`Quick Reframe ${task.kind} failed: ${error instanceof Error?error.message:String(error)}`);
-      const message=error instanceof BadRequestException?error.message:task.kind==='IMPORT'?'This link could not be imported. Upload your authorized video file instead.':'Processing could not finish. Retry or upload another copy of the video.';
+      const message=isXeeProBusyError(error)?XEEPRO_BUSY_MESSAGE:error instanceof EditExportError&&error.code==='HEADLINE_DOES_NOT_FIT'?HEADLINE_FIT_MESSAGE:error instanceof BadRequestException?error.message:task.kind==='IMPORT'?'This link could not be imported. Upload your authorized video file instead.':'Processing could not finish. Retry or upload another copy of the video.';
       await this.prisma.quickReframe.updateMany({where:{id:task.id,operationId:task.operationId},data:{status:'FAILED',error:message,message,operationId:null}});
       if(task.kind==='EXPORT')await new UsageService(this.prisma).settle(`reframe:${task.operationId}`,false);
     }finally{if(uploaded)await this.storage.removeObject((uploaded as {bucket:string}).bucket,(uploaded as {objectKey:string}).objectKey).catch(()=>undefined);this.aborts.delete(task.id);await rm(dir,{recursive:true,force:true});}
@@ -248,10 +290,12 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const analysis=analyzeRegions(raw,original.duration!);
     await this.stage(task,'Transcribing speech for captions and hooks',60);
     if(!transcript && meta.hasAudio){transcript=json(await this.post('/transcriptions',{bucket:at.bucket,object_key:at.objectKey,task:'transcribe'},signal));}
+    if(transcript)transcript=await refineReframeTranscript(transcript,original.duration!,body=>
+      this.post('/tail-transcriptions',{bucket:at.bucket,object_key:at.objectKey,task:'transcribe',...body},signal));
     const source=this.sourceOf(q)!;
     await this.prisma.editAsset.update({where:{id:original.id},data:{analysis:json(raw),transcript:transcript?json(transcript):undefined}});
     // A baked SOURCE keeps the original's timing, so it shares the transcript (captions, ducking).
-    if(source.id!==original.id&&transcript&&!source.transcript)await this.prisma.editAsset.update({where:{id:source.id},data:{transcript:json(transcript)}});
+    if(source.id!==original.id&&transcript)await this.prisma.editAsset.update({where:{id:source.id},data:{transcript:json(transcript)}});
     // Chained into a style, the operation stays claimed so the browser never sees an idle gap.
     if(task.next)await this.stage(task,`Applying ${STYLES[task.next].name}`,90,{analysis:json(analysis)});
     else await this.stage(task,'Video checked',100,{analysis:json(analysis),status:q.editPath==='MANUAL'?'EDITING':'ANALYZED',operationId:null});
@@ -262,7 +306,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     try{const q=await this.load(task.id);if(q.operationId!==task.operationId)return;
       await this.applyStyle(task.id,{...task.style,revision:q.editProject.revision},task.next!,true);}
     catch(error){this.logger.warn(`Quick Reframe ${name} failed: ${error instanceof Error?error.message:String(error)}`);
-      const message=error instanceof BadRequestException?error.message:`${name} could not be applied. Choose it again to retry.`;
+      const message=isXeeProBusyError(error)?XEEPRO_BUSY_MESSAGE:error instanceof BadRequestException||error instanceof ForbiddenException?error.message:`${name} could not be applied. Choose it again to retry.`;
       await this.prisma.quickReframe.updateMany({where:{id:task.id,operationId:task.operationId},data:{status:'FAILED',error:message,message,operationId:null}});}
   }
   /**
@@ -328,7 +372,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
   private async compose(task:Task,q:Loaded,dir:string,signal:AbortSignal,track:(v:{bucket:string;objectKey:string}|null)=>void){
     const source=this.sourceOf(q)!;const project=q.editProject;
     if(!this.cropConfirmed(q))throw new BadRequestException('Confirm the crop first.');
-    const style:QuickStyle|null=q.editPath==='STYLEONE'||q.editPath==='STYLETWO'?q.editPath:null;const preview=task.kind==='PREVIEW';const resolution=task.resolution??1080;
+    const style=this.styleOf(q);const preview=task.kind==='PREVIEW';const resolution=task.resolution??1080;
     const sourcePath=join(dir,'source.mp4'),out=join(dir,'output.mp4');
     await this.stage(task,preview?'Rendering preview':`Exporting ${resolution}p video`,15);
     const sourceAt=editAssetStorageLocation(source);await this.storage.downloadToFile(sourceAt.bucket,sourceAt.objectKey,sourcePath);
@@ -394,8 +438,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     if(!this.cropConfirmed(q))throw new BadRequestException('Confirm the crop first.');
     if(!q.editPath)throw new BadRequestException('Choose StyleOne, StyleTwo or Manual editing first.');
     if(activeStatuses.includes(q.status))throw new ConflictException('Wait for processing to finish.');
-    const external=body.externalAiAuthorized===true;
-    if(external)assertXeeProAvailable();
+    const external=await this.externalFor(q);
     if(this.needsAnalysis(q)&&record(original.metadata).hasAudio===true)throw new BadRequestException(activeStatuses.includes(q.status)?'XeeClip is still checking the speech in your video. Try again in a moment.':'Check the video first, then ask for hook suggestions.');
     const exclude=Array.isArray(body.exclude)?body.exclude.filter((t):t is string=>typeof t==='string').map(t=>t.slice(0,200)).slice(0,30):[];
     const context=this.postCopyContext(q,body);
@@ -457,8 +500,8 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const rewrite=body.rewrite;
     if(rewrite!==undefined&&(!(REWRITE_DIRECTIONS as readonly unknown[]).includes(rewrite)||!record(q.sourceContext).sourcePostText))throw new BadRequestException('Choose a rewrite direction for an imported post caption.');
     const context=this.postCopyContext(q,body);
-    if(body.externalAiAuthorized===true)assertXeeProAvailable();
-    const result=await withProviderBusyGuard(()=>generatePostCopy(this.router,context,body.externalAiAuthorized===true,typeof rewrite==='string'?rewrite:''));
+    const external=await this.externalFor(q);
+    const result=await withProviderBusyGuard(()=>generatePostCopy(this.router,context,external,typeof rewrite==='string'?rewrite:''));
     const prior={...emptyPostCopy(),...record(q.postCopy)} as ReframePostCopy;
     const hashtagOnly=body.hashtagsOnly===true;
     const copy:ReframePostCopy={...prior,version:prior.version+1,generatedCaptions:hashtagOnly?prior.generatedCaptions:result.generatedCaptions,generatedHashtagSets:result.generatedHashtagSets,
@@ -487,21 +530,24 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
    * has none of its own, unless the user explicitly chooses otherwise.
    */
   applyStyleOne(id:string,body:Record<string,unknown>,analyzed=false){return this.applyStyle(id,body,'STYLEONE',analyzed);}
+  applyStyleZero(id:string,body:Record<string,unknown>,analyzed=false){return this.applyStyle(id,body,'STYLEZERO',analyzed);}
   applyStyleTwo(id:string,body:Record<string,unknown>,analyzed=false){return this.applyStyle(id,body,'STYLETWO',analyzed);}
   async applyStyle(id:string,body:Record<string,unknown>,style:QuickStyle,analyzed=false){
     const name=STYLES[style].name;
     const q=await this.load(id);this.assertEditable(q,body.revision,analyzed);
     // The local AI pass runs first (once per upload); the style then continues from the job.
-    if(!analyzed&&this.needsAnalysis(q))return this.start(id,'ANALYZE',{},{next:style,style:{hookText:typeof body.hookText==='string'?body.hookText:undefined,captions:typeof body.captions==='string'?body.captions:undefined}});
+    // Claim cached work too, so mode cannot change during style processing.
+    if(!analyzed)return this.start(id,'ANALYZE',{},{next:style,style:{hookText:typeof body.hookText==='string'?body.hookText:undefined,captions:typeof body.captions==='string'?body.captions:undefined}});
+    const external=await this.externalFor(q);
     const view=this.view(q);
     const mode=['GENERATE','KEEP','OFF'].includes(String(body.captions))?String(body.captions)
       :view.analysis?.subtitleState==='MISSING'&&view.hasTranscript?'GENERATE':'KEEP';
     let hooks=view.hooks;
     // Both styles open with a hook written from the video itself; without consent it is written locally.
     if(typeof body.hookText!=='string'&&!hooks.length&&view.hasTranscript){
-      const context=this.postCopyContext(q,{});const suggestions=await suggestHooks(this.router,context.transcript,q.externalAiAuthorized&&isXeeProEnabled(),[],
+      const context=this.postCopyContext(q,{});const suggestions=await withProviderBusyGuard(()=>suggestHooks(this.router,context.transcript,external,[],
         {sourceId:context.sourceId,transcriptVersion:context.transcriptVersion,visualVersion:context.visualVersion,
-         visibleText:context.visibleText,visualSummary:context.visualSummary,speakerTurns:context.speakerTurns,boundaryQa:context.boundaryQa,template:STYLES[style].template,sourceTitle:context.sourceContext?.sourcePostTitle,sourceCaption:context.sourceContext?.sourcePostText});
+         visibleText:context.visibleText,visualSummary:context.visualSummary,speakerTurns:context.speakerTurns,boundaryQa:context.boundaryQa,template:STYLES[style].template,sourceTitle:context.sourceContext?.sourcePostTitle,sourceCaption:context.sourceContext?.sourcePostText}));
       hooks=suggestions.hooks;
       await this.prisma.quickReframe.update({where:{id},data:{hooks:json(hooks),postCopy:json({...emptyPostCopy(),...record(q.postCopy),
         version:(Number(record(q.postCopy).version)||0)+1,contentUnderstandingVersion:INTELLIGENCE_VERSION,
@@ -509,7 +555,7 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
         _intelligenceInternal:suggestions.package.internal})}});
     }
     const hookText=typeof body.hookText==='string'?body.hookText.slice(0,320):hooks.find(h=>h.recommended)?.text??'';
-    if(q.externalAiAuthorized && hookText){
+    if(external && hookText){
       const approved=hooks.find(h=>h.text===hookText) as CreativeHook | undefined;
       if(!xeeProHookApproved(approved)||!hookMeetsThreshold(approved!))
         throw new BadRequestException('This XeePro hook needs grammar and clarity review. Regenerate the hook before applying the style.');
@@ -535,12 +581,12 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const q=await this.load(id);this.assertEditable(q,body.revision);
     if(body.path!=='MANUAL')throw new BadRequestException('Use Apply StyleOne or Apply StyleTwo to choose a style.');
     const applied=this.view(q);
-    if((body.removeStyleOne===true||body.removeStyle===true)&&(applied.styleOneApplied||applied.styleTwoApplied)){
+    if((body.removeStyleOne===true||body.removeStyle===true)&&(applied.styleZeroApplied||applied.styleOneApplied||applied.styleTwoApplied)){
       const hooks=q.editProject.elements.filter(e=>e.type==='TEXT'&&record(e.properties).presetRole==='HOOK');
       const commands=[...hooks.map(e=>({kind:'ELEMENT' as const,action:'REMOVE_ELEMENT',payload:{elementId:e.id}})),
         ...(q.editProject.elements.some(e=>e.type==='SUBTITLE')?[{kind:'ELEMENT' as const,action:'REMOVE_CAPTIONS',payload:{}}]:[]),
         {kind:'ELEMENT' as const,action:'SET_VIDEO_FRAMING',payload:{mode:'FIT',scope:'ALL_VIDEO_SEGMENTS'}},
-        {kind:'SETTINGS' as const,action:'QUICK_REFRAME_MANUAL',payload:{resolvedVisualLayout:null,selectedPreset:null,aspectRatio:'SOURCE',reframePolicy:'SOURCE',zoomPolicy:'OFF',subtitlePolicy:'OFF',gradingPolicy:'NONE',quickReframeStyleOne:false,quickReframeStyleTwo:false}}];
+        {kind:'SETTINGS' as const,action:'QUICK_REFRAME_MANUAL',payload:{resolvedVisualLayout:null,selectedPreset:null,aspectRatio:'SOURCE',reframePolicy:'SOURCE',zoomPolicy:'OFF',subtitlePolicy:'OFF',gradingPolicy:'NONE',quickReframeStyleZero:false,quickReframeStyleOne:false,quickReframeStyleTwo:false}}];
       await this.retryWriteConflict(()=>this.editor.applyAssistantBundle(q.editProjectId,q.editProject.revision,{proposalId:randomUUID(),summary:`Remove ${applied.styleTwoApplied?'StyleTwo':'StyleOne'} and edit manually`,userMessage:'Quick Reframe: Manual editing',commands,actor:'TEMPLATE_ACTION',onInvalid:'ABORT'}));
     }
     await this.prisma.quickReframe.update({where:{id},data:{editPath:'MANUAL',status:'EDITING',message:'Manual editing',error:null}});
@@ -548,6 +594,9 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     if(this.needsAnalysis(await this.load(id)))return this.start(id,'ANALYZE');
     return this.get(id);
   }
-  async cancel(id:string){await this.load(id);await this.prisma.quickReframe.update({where:{id},data:{operationId:null,status:'CANCELED',message:'Processing canceled',error:null}});this.aborts.get(id)?.abort();return this.get(id);}
+  async cancel(id:string){const q=await this.load(id);
+    const changed=await this.prisma.quickReframe.updateMany({where:{id,operationId:q.operationId,status:q.status},data:{operationId:null,status:'CANCELED',message:'Processing canceled',error:null}});
+    if(changed.count){this.aborts.get(id)?.abort();if(q.status==='EXPORT'&&q.operationId)await new UsageService(this.prisma).settle(`reframe:${q.operationId}`,false);}
+    return this.get(id);}
   async remove(id:string){const q=await this.load(id);await this.cancel(id);await this.editor.remove(q.editProjectId);return {deleted:true};}
 }

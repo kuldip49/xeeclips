@@ -14,6 +14,7 @@
     "test:xeepro-hook-grammar": "npm run build && node scripts/test-xeepro-hook-grammar.cjs && node scripts/test-creative-hook-pipeline.cjs",
     "test:resume": "npm run build && node scripts/test-processing-resume.cjs",
     "test:quick-reframe-post-copy": "npm run build && node scripts/test-quick-reframe-post-copy.cjs",
+    "test:quick-reframe": "npm run build && node scripts/test-quick-reframe.cjs && node scripts/test-quick-reframe-modes.cjs && node scripts/test-quick-reframe-transcript.cjs && node scripts/test-quick-reframe-styleone.cjs && node scripts/test-quick-reframe-styletwo.cjs && node scripts/test-quick-reframe-post-copy.cjs && node scripts/test-xeepro-hook-grammar.cjs",
     "verify:quick-reframe-post-copy": "node scripts/verify-quick-reframe-post-copy.cjs",
     "test:clips": "npm run build && node scripts/test-clip-candidates.cjs && node scripts/test-clip-ui.cjs && node scripts/test-clip-export.cjs && node scripts/test-clip-selection-flow.cjs && node scripts/test-style-readiness.cjs",
     "test:clip-selection": "npm run build && node scripts/test-clip-selection-flow.cjs",

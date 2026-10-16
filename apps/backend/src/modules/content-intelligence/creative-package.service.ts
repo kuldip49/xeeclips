@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { assertProviderNotBusy } from '../processing/generation-availability';
 import { Injectable, Logger } from '@nestjs/common';
 import type { BoundaryQa } from './clip-boundary.service';
 import type { LlmRouterService, LlmRouteMetadata } from '../processing/llm-router.service';
@@ -496,7 +497,10 @@ export class CreativePackageService {
       status:result.status,score:quality.score,failures:quality.failures,escalations,hooksOnly:!!input.hooksOnly,
       attempts:trace.map(t=>({tier:t.tier,generated:t.generated,screened:t.screened,shortlisted:t.shortlisted,approved:t.approved,review:t.review})),
       routes:routes.map(r=>({role:r.role,provider:r.provider,model:r.model,cacheHit:r.cacheHit}))}));
-    this.cache.set(key, structuredClone(result)); return result;
+    // Busy attempts must not prevent a later request from recovering.
+    assertProviderNotBusy();
+    this.cache.set(key, structuredClone(result));
+    return result;
   }
 }
 const services = new WeakMap<LlmRouterService, CreativePackageService>();

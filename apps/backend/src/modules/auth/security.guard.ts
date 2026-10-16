@@ -56,8 +56,11 @@ export class SecurityGuard implements CanActivate {
       || /\/(post-copy|hooks)$/.test(path) && req.body?.externalAiAuthorized === true;
     if (askAi && isXeeProEnabled() && !user.aiProcessingConsentAt) {
       const editId = /^\/edit-mode\/projects\/([^/]+)\//.exec(path)?.[1];
+      const reframeId = /^\/quick-reframe\/([^/]+)\/(hooks|post-copy)$/.exec(path)?.[1];
       const project = editId ? await this.prisma?.editProject.findFirst({
-        where: { id: editId, userId: user.id }, select: { settings: true, generatedClipId: true, userId: true } }) : null;
+        where: { id: editId, userId: user.id }, select: { settings: true, generatedClipId: true, userId: true } })
+        : reframeId ? (await this.prisma?.quickReframe?.findFirst({where:{id:reframeId,editProject:{userId:user.id}},
+          select:{editProject:{select:{settings:true,generatedClipId:true,userId:true}}}}))?.editProject : null;
       const scoped = project && this.prisma ? await withTrustedProjectTier(this.prisma, project) : project;
       const localOnly = scoped && projectExecutionPolicy(scoped.settings)?.mode === 'XEEFREE';
       if (!localOnly) throw new ForbiddenException({ code: 'AI_CONSENT_REQUIRED', message: 'Allow AI processing in Settings first.' });

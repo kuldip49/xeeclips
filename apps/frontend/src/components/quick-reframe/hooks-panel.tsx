@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { useGenerationAvailability } from '@/lib/use-generation-availability';
+import { ReframeModeSelector } from './mode-selector';
 import { Captions, Check, Loader2, Pencil, RefreshCw, Sparkles, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { analyzeReframe, HOOK_CATEGORY_LABEL, isProcessing, reframeRequest, requestHooks, type ReframeHook, type ReframeSession } from '@/lib/quick-reframe-api';
@@ -18,9 +18,6 @@ export function SuggestedHooks({ session, onSession, onApply, current, busy, com
   session: ReframeSession; onSession: (session: ReframeSession) => void; onApply: (text: string) => void;
   current?: string; busy: boolean; compact?: boolean;
 }) {
-  const [consent, setConsent] = useState(false);
-  const { proEnabled } = useGenerationAvailability();
-  useEffect(() => { if (proEnabled === false) setConsent(false); }, [proEnabled]);
   const [loading, setLoading] = useState(false);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
@@ -30,7 +27,7 @@ export function SuggestedHooks({ session, onSession, onApply, current, busy, com
   const [category, setCategory] = useState('');
   const generate = async (regenerate = false) => {
     setLoading(true); setWarnings([]);
-    try { const result = await requestHooks(session.id, consent && proEnabled !== false, regenerate ? session.hooks.map((hook) => hook.text) : [], {direction,category:category ? category as ReframeHook['category'] : undefined});
+    try { const result = await requestHooks(session.id, session.mode === 'XEEPRO', regenerate ? session.hooks.map((hook) => hook.text) : [], {direction,category:category ? category as ReframeHook['category'] : undefined});
       onSession(result.session); setWarnings(result.warnings); }
     catch (error) { setWarnings([error instanceof Error ? error.message : 'Hook suggestions are unavailable.']); }
     finally { setLoading(false); }
@@ -61,9 +58,8 @@ export function SuggestedHooks({ session, onSession, onApply, current, busy, com
       : <div className='grid gap-2'><p className='text-xs text-muted-foreground'>{session.error || 'Your video has not been checked for speech and captions yet.'}</p>
         <Button type='button' size='sm' variant='secondary' disabled={loading || busy} onClick={() => void check()}>Check video</Button></div>)}
     {!checking && !session.hasTranscript && <p className='text-xs text-muted-foreground'>No speech was found in this video, so hooks cannot be suggested. Write your own below.</p>}
-    {!checking && session.hasTranscript && <label className='flex items-start gap-2 text-[11px] leading-5 text-muted-foreground'>
-      <input type='checkbox' className='mt-1' disabled={proEnabled === false} checked={consent} onChange={(e) => setConsent(e.target.checked)} />
-      Use XeePro for this request.</label>}
+    {!checking && <ReframeModeSelector session={session} onSession={onSession} busy={loading || busy}
+      offerFree={warnings.some(w => w === 'XeePro is busy right now. Try XeeFree or try again later.')} />}
     {!checking && session.hasTranscript && !hooks.length && <Button type='button' disabled={loading || busy} onClick={() => void generate()} data-testid='generate-hooks'>
       {loading ? <Loader2 size={15} className='animate-spin' /> : <Sparkles size={15} />}{loading ? 'Analyzing your video…' : 'Suggest hooks'}</Button>}
     {!checking && session.hasTranscript && <div className='grid grid-cols-2 gap-2'>
@@ -145,6 +141,11 @@ export function QuickReframeHooksTool({ session, project, busy, onSession, onCom
   const settings = (project.settings ?? {}) as Record<string, unknown>;
   const canvasAspect = CANVAS_ASPECT[String(settings.aspectRatio)] ?? source.width / Math.max(1, source.height);
   const apply = (text: string) => {
+    const layout = settings.resolvedVisualLayout as { editingProfile?: string } | undefined;
+    if (hook && layout?.editingProfile) {
+      // Preserve the canonical style's typography and fit rules when changing its wording.
+      onCommand({ action: 'set-text-content', elementId: hook.id, content: text }); return;
+    }
     const fit = fitHook(text, canvasAspect, Number(hook?.properties.width ?? 0.84));
     if (hook) onCommands([{ action: 'set-text-content', elementId: hook.id, content: text },
       { action: 'set-text-size', elementId: hook.id, fontSize: fit.fontSize },

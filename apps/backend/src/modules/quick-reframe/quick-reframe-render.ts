@@ -4,7 +4,7 @@ import { buildRenderPlan, type PlanInput } from '../edit-mode/render/edit-mode-r
 import { buildFfmpegArgs } from '../edit-mode/render/edit-mode-filtergraph';
 import { buildEditModeAss, wrapToWidth } from '../edit-mode/render/edit-mode-ass';
 import { BadRequestException } from '@nestjs/common';
-import { validateRenderPlan } from '../edit-mode/render/edit-mode-render-validate';
+import { validateHeadlineFit, validateRenderPlan } from '../edit-mode/render/edit-mode-render-validate';
 import { createHash } from 'crypto';
 import type { EditElementType } from '@prisma/client';
 import { compileCreativeStyle } from '../edit-mode/styles/creative-style-commands';
@@ -31,8 +31,9 @@ export function preparationFingerprint(p: ReframePreparation) {
 export function cleanFingerprint(p: ReframePlan) { return preparationFingerprint(preparationOf(p)); }
 
 /** The automatic looks Quick Reframe can apply to a confirmed crop (Manual editing has no template). */
-export type QuickStyle = 'STYLEONE' | 'STYLETWO';
+export type QuickStyle = 'STYLEZERO' | 'STYLEONE' | 'STYLETWO';
 const QUICK_TEMPLATE: Record<QuickStyle, { templateId: string; profile: string; name: string }> = {
+  STYLEZERO: { templateId: 'AUTOMATIC_1', profile: '', name: 'StyleZero' },
   STYLEONE: { templateId: 'AUTOMATIC_2', profile: 'AUTOMATIC_2', name: 'StyleOne' },
   STYLETWO: { templateId: STYLE_TWO_ID, profile: STYLE_TWO_ID, name: 'StyleTwo' } };
 export const quickStyleOf = (style: boolean | QuickStyle | null | undefined): QuickStyle | null =>
@@ -62,7 +63,8 @@ export function quickStyleCommands(input: PlanInput, options: { hookText: string
     assets:input.assets.map(a=>({...a,originalName:'Quick Reframe source'})),
     evidence:buildPresetEvidence({durationSec:source.duration!,width:source.width,height:source.height,metadata:source.metadata,transcript:source.transcript,analysis:source.analysis,aspectRatio:'SOURCE',preserveInformation:true}),
     thread:EMPTY_CHAT_THREAD,selection:{},message:`Apply ${template.name} to the complete confirmed source`});
-  const resolved=resolveCreativeStyle({templateId:template.templateId,components:{ZOOM:'ZOOM_NONE',
+  const resolved=resolveCreativeStyle({templateId:style==='STYLEZERO'?null:template.templateId,components:{
+    ...(style==='STYLEZERO'?{HOOK:'HOOK_CLEAN',CAPTIONS:'CAP_CLEAN_LOWER_THIRD',BACKGROUND:'BG_FULL_FRAME'}:{}),ZOOM:style==='STYLEZERO'?'ZOOM_SUBTLE':'ZOOM_NONE',
     ...(hook?{}:{HOOK:'HOOK_NONE'}),...(options.captions?{}:{CAPTIONS:'CAP_NONE'})}});
   const compiled=compileCreativeStyle(resolved,context,{hookOptions:hook?[{text:hook}]:[],hasWordTimings:context.project.hasWordTimings});
   for(const command of compiled.commands) if(command.kind==='SETTINGS' && command.payload.resolvedVisualLayout) {
@@ -75,8 +77,10 @@ export function quickStyleCommands(input: PlanInput, options: { hookText: string
   for(const command of compiled.commands) if(command.action==='SET_ELEMENT_TIMING'&&Number(command.payload.duration)>source.duration!)command.payload.duration=source.duration!;
   if(replace)compiled.commands.unshift({kind:'ELEMENT',action:'SET_TEXT_CONTENT',payload:{elementId:existing!.id,content:hook}});
   compiled.commands.push({kind:'ELEMENT',action:'SET_VIDEO_FRAMING',payload:{mode:'FIT',scope:'ALL_VIDEO_SEGMENTS'}});
-  compiled.commands.push({kind:'SETTINGS',action:style==='STYLETWO'?'QUICK_REFRAME_STYLETWO':'QUICK_REFRAME_STYLEONE',payload:{aspectRatio:'9:16',reframePolicy:'SOURCE',zoomPolicy:'OFF',subtitlePolicy:'OFF',gradingPolicy:'NONE',
-    ...(style==='STYLETWO'?{quickReframeStyleTwo:true}:{quickReframeStyleOne:true})}});
+  compiled.commands.push({kind:'SETTINGS',action:`QUICK_REFRAME_${style}`,payload:{aspectRatio:'9:16',reframePolicy:'SOURCE',zoomPolicy:'OFF',subtitlePolicy:'OFF',gradingPolicy:'NONE',
+    // A fitted manual crop needs the same matte in the interactive preview and FFmpeg.
+    ...(style==='STYLEZERO'?{fitBackground:'BLACK'}:{}),
+    quickReframeStyleZero:style==='STYLEZERO',quickReframeStyleOne:style==='STYLEONE',quickReframeStyleTwo:style==='STYLETWO'}});
   return compiled;
 }
 
@@ -147,12 +151,13 @@ export function quickComposeRender(input: PlanInput & { canvasOverride: { width:
   const quick=quickStyleOf(style);const template=quick?QUICK_TEMPLATE[quick]:null;
   const built=buildRenderPlan(input);
   const plan=built.plan;
-  if(template&&plan.canvas.visualLayout?.editingProfile!==template.profile)throw new Error(`${template.name} layout must be resolved before composition`);
+  if(template&&quick!=='STYLEZERO'&&plan.canvas.visualLayout?.editingProfile!==template.profile)throw new Error(`${template.name} layout must be resolved before composition`);
   validateRenderPlan(plan,{assets:input.assets});
   const captionLines=plan.canvas.visualLayout?.captions.maxLines;
   // StyleTwo measures with its own glyph outlines (the ASS builder reports overflow); StyleOne with the shared wrapper.
   if(quick==='STYLEONE'&&captionLines&&plan.subtitles.some(c=>wrapToWidth(c.content,c.fontSizePx,c.width).length>captionLines))throw new BadRequestException('Shorten the edited caption to fit StyleOne’s two-line caption area.');
   const ass=buildEditModeAss(plan.canvas,[...plan.textOverlays,...plan.subtitles]);
+  validateHeadlineFit(input.elements,ass.overflowed);
   if(quick==='STYLETWO'&&plan.subtitles.some(c=>ass.overflowed.includes(c.elementId)))throw new BadRequestException('Shorten the edited caption to fit StyleTwo’s two-line caption area.');
   const assName=plan.textOverlays.length||plan.subtitles.length?'captions.ass':null;
   const args=buildFfmpegArgs({plan,sourcePath,outputPath,overlayPaths:media.overlayPaths,audioPaths:media.audioPaths,assFileName:assName,fontsDir:options.fontsDir,

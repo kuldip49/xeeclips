@@ -17,11 +17,12 @@ export function QuickReframeHistory(){
     <h2 className='font-display text-lg font-semibold'>Quick Reframe</h2>
     {error&&<p role='alert' className='text-sm text-warning-soft'>{error} <button className='underline' onClick={()=>void refresh()}>Retry</button></p>}
     {!items.length&&!error&&<p className='text-sm text-muted-foreground'>Your exported Quick Reframe videos will appear here.</p>}
-    <div className='grid min-w-0 gap-4 lg:grid-cols-2'>{items.map(s=>{const latest=s.exports[0];const reedit=s.editPath==='MANUAL'&&s.cropConfirmed?editorUrl(s):quickReframeUrl(s.id,s.cropConfirmed&&s.editPath?'edit':undefined);
+    <div className='grid min-w-0 gap-4 lg:grid-cols-2'>{items.map(s=>{const latest=s.exports[0];const reedit=s.editPath&&s.cropConfirmed?editorUrl(s):quickReframeUrl(s.id);
       return <article key={s.id} className='grid min-w-0 gap-4 overflow-hidden rounded-2xl border border-border bg-surface p-4 sm:grid-cols-[150px_minmax(0,1fr)]' data-testid='quick-reframe-history-item'>
       <video aria-label={`Quick Reframe preview ${s.name}`} playsInline controls preload='none' src={mediaUrl(latest?.url??s.exportUrl)} className='mx-auto max-h-80 w-full rounded-xl bg-black object-contain'/>
       <div className='grid min-w-0 content-start gap-3'>
         <div className='flex flex-wrap gap-1.5 text-[11px] font-semibold'><span className='rounded-md bg-primary/15 px-2 py-0.5 text-primary-soft'>Quick Reframe</span>
+          <span className='rounded-md bg-tint-strong px-2 py-0.5 text-soft'>{s.mode === 'XEEPRO' ? 'XeePro' : 'XeeFree'}</span>
           {s.editPath&&<span className='rounded-md bg-tint-strong px-2 py-0.5 text-soft'>{QUICK_STYLE_LABEL[s.editPath]}</span>}
           {latest&&!latest.current&&<span className='rounded-md bg-warning/15 px-2 py-0.5 text-warning-soft'>Edited since export</span>}</div>
         <h3 className='break-all text-sm font-semibold'>{s.name}</h3>

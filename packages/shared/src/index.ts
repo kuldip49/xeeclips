@@ -40,5 +40,5 @@ export type VideoDto = {
   updatedAt: string;
 };
 export type { ReframeBox, ReframeRegion, ReframeAnalysis, ReframePlan, ReframeSession, ReframeAspect, ReframeCleanup,
-  ReframePreparation, ReframeHook, ReframeHookCategory, ReframeEditPath, ReframeExport, ReframeCropGrid,
+  ReframePreparation, ReframeHook, ReframeHookCategory, ReframeEditPath, ReframeMode, ReframeExport, ReframeCropGrid,
   ReframeSocialSource, ReframeSocialCaption, ReframeHashtagSet, ReframeContentUnderstanding, ReframePostCopy } from './quick-reframe';

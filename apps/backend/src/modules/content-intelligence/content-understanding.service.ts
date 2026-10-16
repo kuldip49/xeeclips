@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { assertProviderNotBusy } from '../processing/generation-availability';
 import { Injectable } from '@nestjs/common';
 import type { LlmRouterService } from '../processing/llm-router.service';
 import type { BoundaryQa } from './clip-boundary.service';
@@ -115,6 +116,7 @@ export class ContentUnderstandingService {
         // Keep unknowns unknown; identity and humor permissions are derived only from input evidence.
         u = { ...local, ...Object.fromEntries(fields.filter(k => typeof result.data[k] === 'string').map(k => [k, result.data[k].slice(0, 500)])) };
       } catch { /* grounded evidence remains available during provider outages */ }
+      assertProviderNotBusy();
       this.cache.set(key, u);
       if (this.cache.size > 500) this.cache.delete(this.cache.keys().next().value!);
       return u;

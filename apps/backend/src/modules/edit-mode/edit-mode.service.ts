@@ -1874,6 +1874,8 @@ export class EditModeService {
         }
         const content = input.content.slice(0, MAX_TEXT_LENGTH);
         return withProperties(item, { content, textRuns: [],
+            ...(ctx.settings.feature === 'QUICK_REFRAME' && semanticRole(item) === 'HOOK'
+              ? { manualHookText: ctx.actor === 'MANUAL_USER_ACTION' } : {}),
           ...fitRetainedHook(item.properties as Record<string, unknown>, content) });
       }
       if (action === 'SET_TEXT_RUNS') {
@@ -3256,6 +3258,9 @@ export class EditModeService {
         ? (current.settings as Record<string, unknown>).chat : undefined);
       const restoredSettings = restoresSettings
         ? { ...(state.settings as Record<string, unknown>),
+          // Quick Reframe mode is a user choice outside the media undo stack.
+          ...(settingsRecord(current.settings).feature === 'QUICK_REFRAME'
+            ? { origin: settingsRecord(current.settings).origin } : {}),
           ...(liveChat === undefined ? {} : { chat: liveChat }) } as Prisma.InputJsonValue
         : undefined;
       await tx.editProject.update({ where: { id }, data: { revision,

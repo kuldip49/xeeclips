@@ -64,14 +64,16 @@ export function EditAiContent({ project, source, selected, style, busy, selected
   mode?: AiMode; onModeChange?: (mode: AiMode) => void }) {
   const [ownMode, setOwnMode] = useState<AiMode>('CHAT');
   const { user, preferences } = useAuth();
+  const quickOrigin = project.settings.origin as { aiMode?: string } | undefined;
+  const freeQuick = project.settings.feature === 'QUICK_REFRAME' && quickOrigin?.aiMode !== 'ONLINE';
   const [consent, setConsent] = useState<'loading' | 'needed' | 'declined' | 'granted'>('loading');
   useEffect(() => {
-    setConsent(user?.aiProcessingConsentAt ? 'granted' : 'needed');
-  }, [user?.aiProcessingConsentAt]);
+    setConsent(freeQuick || user?.aiProcessingConsentAt ? 'granted' : 'needed');
+  }, [freeQuick, user?.aiProcessingConsentAt]);
   const aiMode = mode ?? ownMode;
   const setAiMode = (next: AiMode) => { setOwnMode(next); onModeChange?.(next); };
   const sheet = layout === 'sheet';
-  if (consent !== 'granted') return <section data-testid='ask-ai-consent' className='panel grid content-start gap-4 p-4 shadow-card sm:p-5'>
+  if (consent !== 'granted' && !freeQuick) return <section data-testid='ask-ai-consent' className='panel grid content-start gap-4 p-4 shadow-card sm:p-5'>
     <div className='flex items-center gap-3'>
       <span className='grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary-soft'><ShieldCheck size={20} aria-hidden /></span>
       <h2 className='text-lg font-semibold'>Ask AI</h2>

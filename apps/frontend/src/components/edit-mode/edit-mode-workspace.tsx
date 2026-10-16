@@ -624,14 +624,18 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
     onImportSource: (videoId) => run('import', () => importEditSource(project.id, project.revision, videoId)),
     onUploadAsset: (role, file) => void uploadLibraryAsset(role, file),
     onAddAsset: addAsset, onDeleteAsset: (asset) => void deleteLibraryAsset(asset),
-    postCopyPanel: reframe ? <PostCopyPanel session={{...reframe,revision:project.revision}} onSession={setReframe} busy={!!busy} /> : undefined,
+    postCopyPanel: reframe ? <PostCopyPanel session={{...reframe,revision:project.revision}} onSession={acceptReframe} busy={!!busy} /> : undefined,
     hooksPanel: reframe ? <QuickReframeHooksTool session={reframe} project={project} busy={!!busy}
-      onSession={setReframe} onCommand={(command) => void applyCommand(command)}
+      onSession={acceptReframe} onCommand={(command) => void applyCommand(command)}
       onCommands={(commands) => void applySequence(commands)}
       onSelectElement={setSelectedElementId}
       onOpenTool={(tool) => isMobile ? openMobilePanel(tool) : selectTool(tool)} /> : <EditorSuggestedHooks project={project} busy={!!busy}
       onApply={text => {const hook=(project.elements??[]).find(e=>e.type==='TEXT'&&e.properties.presetRole==='HOOK');
         void applyCommand(hook?{action:'set-text-content',elementId:hook.id,content:text}:{action:'add-text',textStyleId:'HOOK',content:text,origin:'ASSISTANT',presetRole:'HOOK'});}} /> };
+  function acceptReframe(next: ReframeSession) {
+    setReframe(next);
+    if (next.revision !== projectRef.current.revision) void refreshProject();
+  }
   const exportReframe = () => { if (reframe) router.push(quickReframeUrl(reframe.id, 'export')); };
 
   const closeMobilePanel = () => {
@@ -693,7 +697,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
       onUndo={() => void travelHistory('undo')} onRedo={() => void travelHistory('redo')}
       onExport={() => reframe ? exportReframe() : isMobile ? openMobilePanel('EXPORT') : setExportOpen(true)}
       exportDisabled={!source || !!busy}
-      {...(reframe ? { back: { href: quickReframeUrl(reframe.id, 'choose'), label: 'Style' }, title: 'Quick Reframe · Manual editing',
+      {...(reframe ? { back: { href: quickReframeUrl(reframe.id, 'choose'), label: 'Style' }, title: `Quick Reframe · ${reframe.mode === 'XEEPRO' ? 'XeePro' : 'XeeFree'}`,
         below: <StepIndicator className='border-t border-border px-1.5 py-1 sm:px-3' active='edit'
           reachable={(step) => step !== 'edit'} onSelect={(step) => router.push(quickReframeUrl(reframe.id, step))} /> } : {})} />
 

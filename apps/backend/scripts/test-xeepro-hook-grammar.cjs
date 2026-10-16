@@ -93,6 +93,15 @@ function judged(text, over={}) {
   input.elements[1].properties.content=corrected;
   input.project.settings={contentIntelligence:{hookLanguageGate:'XEEPRO_V1',hooks:[approved]}};
   assert.equal(buildRenderPlan(input).plan.textOverlays[0].content,corrected);cases++;
+  input.elements[1].properties.uppercase=true;
+  assert.equal(buildRenderPlan(input).plan.textOverlays[0].content,corrected.toUpperCase());cases++;
+  input.elements[1].properties.uppercase=false;
+  input.project.settings.feature='QUICK_REFRAME';input.elements[1].properties.manualHookText=true;
+  input.elements[1].properties.content='My manually chosen headline';
+  assert.equal(buildRenderPlan(input).plan.textOverlays[0].content,'My manually chosen headline');cases++;
+  input.elements[1].properties.manualHookText=false;
+  assert.throws(()=>buildRenderPlan(input),e=>e.code==='HOOK_LANGUAGE_GATE');cases++;
+  input.elements[1].properties.content=corrected;
   // New editor suggestions cannot erase an existing Pro requirement.
   const editor=Object.create(EditModeService.prototype);let saved;
   editor.prisma={editProject:{findUniqueOrThrow:async()=>({settings:input.project.settings}),
@@ -118,6 +127,7 @@ function judged(text, over={}) {
     const quick=Object.create(QuickReframeService.prototype);
     quick.load=async()=>({externalAiAuthorized:true,editProject:{revision:0}});
     quick.assertEditable=()=>{};quick.view=()=>({hooks:[approved],hasTranscript:true});
+    quick.externalFor=async()=>true; // This fixture isolates the Pro grammar gate; mode routing has its own suite.
     await assert.rejects(quick.applyStyleOne('test',{revision:0,hookText:bad},true),/grammar and clarity review/);cases++;
     // The stronger reviewer and its budget apply only to hook-review schemas, without network calls.
     process.env.OPENAI_API_KEY='synthetic-test-key';process.env.OPENAI_MODEL='configured-base-model';process.env.OPENAI_ENABLED='true';

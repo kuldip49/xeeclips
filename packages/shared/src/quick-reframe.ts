@@ -36,7 +36,8 @@ export type ReframeHookCategory = 'BOLD' | 'CURIOSITY' | 'QUESTION' | 'CONTRARIA
   | 'HIDDEN_TRUTH' | 'UNEXPECTED_RESULT' | 'TENSION' | 'CHALLENGE' | 'CONFLICT' | 'MISTAKE' | 'WAIT_UNTIL' | 'MYTH_REALITY' | 'BEFORE_AFTER' | 'REVEAL';
 export type ReframeHook = { text: string; category: ReframeHookCategory; score: number; recommended: boolean;
   source: 'OPENAI' | 'LOCAL'; CLICKABILITY_SCORE?: number; CONTEXT_SCORE?: number };
-export type ReframeEditPath = 'STYLEONE' | 'STYLETWO' | 'MANUAL';
+export type ReframeEditPath = 'STYLEZERO' | 'STYLEONE' | 'STYLETWO' | 'MANUAL';
+export type ReframeMode = 'XEEFREE' | 'XEEPRO';
 /** Social post copy is metadata, never a timeline element or burned-in subtitle. */
 export type ReframeSocialSource = { sourcePostText: string; sourceHashtags: string[];
   sourcePlatform: 'instagram' | 'x'; sourcePostUrl: string; sourceAuthor?: string; sourcePostTitle?: string };
@@ -54,6 +55,7 @@ export type ReframePostCopy = { version: number; generatedCaptions: ReframeSocia
 export type ReframeExport = { id: string; url: string; revision: number | null; width: number | null;
   height: number | null; duration: number | null; sizeBytes: number | null; createdAt: string; current: boolean };
 export type ReframeSession = { id: string; editProjectId: string; revision: number; name: string; duration: number;
+  mode: ReframeMode; errorCode: string | null;
   /** Uploaded file (browser-playable copy when the codec needed one). Crop coordinates refer to this. */
   width: number; height: number; originalUrl: string | null;
   /** The confirmed, cropped and cleaned SOURCE every editing path renders from. */
@@ -61,6 +63,7 @@ export type ReframeSession = { id: string; editProjectId: string; revision: numb
   /** True when SOURCE matches the current plan's crop and cleanup. */
   cropConfirmed: boolean; confirmed: ReframePreparation | null; editPath: ReframeEditPath | null;
   styleOneApplied: boolean;
+  styleZeroApplied: boolean;
   styleTwoApplied: boolean;
   previewUrl: string | null; exportUrl: string | null; previewRevision: number | null; exportRevision: number | null;
   exports: ReframeExport[];

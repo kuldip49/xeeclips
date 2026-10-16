@@ -71,18 +71,19 @@ test('StyleOne: crop -> Done -> StyleOne -> preview -> export -> download -> His
   await page.setViewportSize({ width: 1366, height: 900 });
   const id = await uploadAndCrop(page);
   await page.getByTestId('choose-styleone').click();
-  const preview = page.getByLabel('StyleOne preview');
+  await expect(page).toHaveURL(/\/edit-mode\//, { timeout: 15 * 60 * 1000 });
+  const preview = page.getByTestId('edit-preview-video');
   await expect(preview).toBeVisible({ timeout: 15 * 60 * 1000 });
   await expect.poll(() => preview.evaluate((v: HTMLVideoElement) => v.readyState), { timeout: 30000 }).toBeGreaterThanOrEqual(2);
   await page.screenshot({ path: 'test-results/qr-flow-styleone.png', fullPage: true });
-  await page.getByTestId('go-export').click();
+  await page.getByRole('button', { name: 'Export', exact: true }).click();
   await exportAndDownload(page, '1080p');
   await page.screenshot({ path: 'test-results/qr-flow-styleone-export.png', fullPage: true });
   await page.getByRole('link', { name: 'Open History' }).click();
   const card = page.getByTestId('quick-reframe-history-item').filter({ has: page.locator(`a[href*="${id}"]`) });
   await expect(card.getByText('StyleOne', { exact: true })).toBeVisible();
   await card.getByRole('link', { name: 'Re-edit' }).click();
-  await expect(page.getByLabel('StyleOne preview').or(page.getByRole('button', { name: 'Render preview' }))).toBeVisible({ timeout: 60000 });
+  await expect(page.getByTestId('edit-preview-canvas')).toBeVisible({ timeout: 60000 });
   expect(errors).toEqual([]);
 });
 
