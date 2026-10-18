@@ -3,7 +3,9 @@ import { semanticSimilarity } from '../processing/semantic-similarity.service';
 import { videoLayout } from '../edit-mode/edit-mode-transform';
 const unique = (items: string[]) => [...new Set(items.map(s => s.trim()).filter(Boolean))];
 export const words = (s: string) => s.toLocaleLowerCase('en-US').match(/[\p{L}\p{N}]+/gu) ?? [];
-export const contains = (text: string, term: string) => (' ' + words(text).join(' ') + ' ').includes(' ' + words(term).join(' ') + ' ');
+export const contains=(text:string,term:string)=>words(term).length?(' '+words(text).join(' ')+' ').includes(' '+words(term).join(' ')+' '):!!term.trim()&&text.includes(term.trim());
+export const hasMention=(text:string,mention:string)=>{let at=text.indexOf(mention);while(at>=0){if(!/[\p{L}\p{N}_.]/u.test(text[at+mention.length]??' '))return true;at=text.indexOf(mention,at+mention.length);}return false;};
+export function requirementPolicy(value:string):'OFF'|'OPTIONAL'|'REQUIRED'{return /^(?:none|off|no(?: (?:logo|music|captions|subtitles))?)$/i.test(value.trim())?'OFF':/^(?:optional|not required)$/i.test(value.trim())?'OPTIONAL':'REQUIRED';}
 const parts = (s: string) => unique(s.replace(/[“”"']/g, '').split(/[,;\n]|\s+and\s+/i));
 export function emptyBrief(): StructuredCampaignBrief { return { ...Object.fromEntries(CAMPAIGN_LIST_FIELDS.map(k => [k, []])), ...Object.fromEntries(CAMPAIGN_TEXT_FIELDS.map(k => [k, ''])), minDurationSec: null, maxDurationSec: null, aspectRatio: null, warnings: [], confidence: 'EXPLICIT', assetInstructions: [] } as unknown as StructuredCampaignBrief; }
 /** Only explicit, attributable rules become constraints. Unclassified instructions stay visible. */
@@ -36,7 +38,7 @@ export function parseCampaignRules(source: string, platforms: string[] = []): St
             continue;
         }
         if (!kv && Object.hasOwn(listKeys, heading)) {
-            b[listKeys[heading]].push(...parts(line));
+            const field=listKeys[heading];b[field].push(...(field==='requiredHashtags'?(line.match(/#[\p{L}\p{N}_]+/gu)??[]):field==='requiredMentions'?(line.match(/@[\p{L}\p{N}_.]+/gu)??[]):parts(line)));
             continue;
         }
         if (!kv && Object.hasOwn(scalar, heading)) {
@@ -44,6 +46,7 @@ export function parseCampaignRules(source: string, platforms: string[] = []): St
             b[field] = [b[field], line].filter(Boolean).join('; ');
             continue;
         }
+        if(!kv&&/^no (?:music|soundtrack|captions|subtitles|logo)$/i.test(line)){const field=/music|soundtrack/i.test(line)?'musicRequirements':/logo/i.test(line)?'logoRequirements':'captionRequirements';b[field]=line;continue;}
         let known = false;
         const range = /(\d+(?:\.\d+)?)\s*(?:-|–|—|to)\s*(\d+(?:\.\d+)?)\s*(?:sec(?:ond)?s?\b|s\b)/i.exec(line);
         if (range) {
@@ -99,8 +102,8 @@ export function parseCampaignRules(source: string, platforms: string[] = []): St
                 known = true;
             }
         }
-        if (!known)
-            b.unresolvedRules.push(line);
+        const explicit=kv&&['duration','length','platform','platforms','aspect ratio'].includes(key);
+        if (!known||!explicit) b.unresolvedRules.push(line);
     }
     for (const k of CAMPAIGN_LIST_FIELDS)
         b[k] = unique(b[k]);
@@ -109,6 +112,7 @@ export function parseCampaignRules(source: string, platforms: string[] = []): St
     const conflicts = [...b.requiredTopics.filter(t => b.forbiddenTopics.some(f => contains(t, f) || contains(f, t))), ...b.requiredKeywords.filter(t => b.forbiddenKeywords.some(f => contains(t, f)))];
     if (conflicts.length)
         b.unresolvedRules.push('Required and forbidden rules conflict: ' + conflicts.join(', '));
+    addCampaignConflicts(b);
     b.warnings = b.unresolvedRules.map(s => 'NEEDS_CONFIRMATION: ' + s);
     b.confidence = b.warnings.length ? 'NEEDS_CONFIRMATION' : 'EXPLICIT';
     return b;
@@ -142,10 +146,12 @@ export function normalizeBrief(value: unknown): StructuredCampaignBrief {
         throw Error('Invalid asset instructions.');
     b.assetInstructions = raw.assetInstructions.map((a: any) => { if (!a || typeof a.assetId !== 'string' || !['LOGO_TOP_RIGHT', 'BACKGROUND_MUSIC', 'IMAGE_OVERLAY'].includes(a.use) || typeof a.required !== 'boolean')
         throw Error('Invalid asset instruction.'); return { assetId: a.assetId, use: a.use, required: a.required }; });
+    addCampaignConflicts(b);
     b.warnings = b.unresolvedRules.map(s => 'NEEDS_CONFIRMATION: ' + s);
     b.confidence = b.warnings.length ? 'NEEDS_CONFIRMATION' : 'EXPLICIT';
     return b;
 }
+export function addCampaignConflicts(b:StructuredCampaignBrief){const conflicts=[...b.requiredTopics.filter(t=>b.forbiddenTopics.some(f=>contains(t,f)||contains(f,t))),...b.requiredKeywords.filter(t=>b.forbiddenKeywords.some(f=>contains(t,f)||contains(f,t)))];if(conflicts.length)b.unresolvedRules.push('Required and forbidden rules conflict: '+conflicts.join(', '));if(b.requiredCTA&&b.forbiddenCTA&&(contains(b.requiredCTA,b.forbiddenCTA)||contains(b.forbiddenCTA,b.requiredCTA)))b.unresolvedRules.push('Required and forbidden CTA rules conflict.');for(const [value,use]of [[b.logoRequirements,'LOGO_TOP_RIGHT'],[b.musicRequirements,'BACKGROUND_MUSIC']]as const)if(value&&requirementPolicy(value)==='OFF'&&b.assetInstructions.some(a=>a.required&&a.use===use))b.unresolvedRules.push('A required asset conflicts with the instruction to omit it: '+use);b.unresolvedRules=[...new Set(b.unresolvedRules)];}
 export type CampaignCandidate = {
     id: string;
     transcriptText: string;
@@ -191,26 +197,28 @@ export function socialPackage(b: StructuredCampaignBrief, content: {
 }): SocialPostPackage {
     const caption = content.caption?.trim() || content.transcriptText?.trim().slice(0, 400) || '';
     const banned = (s: string) => b.forbiddenKeywords.some(k => contains(s, k));
-    const mentions = b.requiredMentions.filter(mention => !caption.includes(mention));
+    const mentions = b.requiredMentions.filter(mention => !hasMention(caption,mention));
     return { caption: banned(caption) ? '' : [caption, mentions.join(' ')].filter(Boolean).join('\n'), alternateCaptions: [], hashtags: unique([...b.requiredHashtags, ...(Array.isArray(content.hashtags) ? content.hashtags.filter((v): v is string => typeof v === 'string' && /^#[\p{L}\p{N}_]+$/u.test(v)) : [])]).filter(v => !banned(v)), requiredMentions: b.requiredMentions, cta: b.requiredCTA, postingNotes: [b.postingRules, b.submissionRules].filter(Boolean).join('\n') };
 }
 export function evaluateCampaignCompliance(b: StructuredCampaignBrief, p: ComplianceProject, sourceText: string, social: SocialPostPackage, version: number): CampaignCompliance {
     const checks: CampaignCheck[] = [], add = (code: string, status: CampaignCheck['status'], detail: string, fixable = false) => checks.push({ code, status, detail, fixable });
-    const visible = p.elements.filter(e => e.properties?.hidden !== true && Number(e.properties?.opacity ?? 1) > 0 && Number(e.duration) > 0), texts = visible.filter(e => ['TEXT', 'SUBTITLE'].includes(e.type)).map(e => String(e.properties?.content ?? '')).join(' ');
     const layout = videoLayout(p.elements), duration = layout.reduce((n, e) => Math.max(n, e.end), 0);
+    const visible = p.elements.filter(e => e.properties?.hidden !== true && Number(e.properties?.opacity ?? 1) > 0 && Number(e.duration)>0&&Number(e.startTime??0)<duration&&Number(e.startTime??0)+Number(e.duration)>0), texts = visible.filter(e => ['TEXT', 'SUBTITLE'].includes(e.type)).map(e => String(e.properties?.content ?? '')).join(' ');
     add('DURATION', duration > 0 && (b.minDurationSec === null || duration >= b.minDurationSec - .05) && (b.maxDurationSec === null || duration <= b.maxDurationSec + .05) ? 'PASS' : 'FAIL', `Edited duration ${duration.toFixed(2)}s; allowed ${b.minDurationSec ?? 'any'}–${b.maxDurationSec ?? 'any'}s.`);
     for (const [code, terms, forbidden] of [['REQUIRED_TOPIC', b.requiredTopics, false], ['FORBIDDEN_TOPIC', b.forbiddenTopics, true], ['REQUIRED_KEYWORD', b.requiredKeywords, false], ['FORBIDDEN_KEYWORD', b.forbiddenKeywords, true]] as const) {
         if (!terms.length) {
             add(code, 'NOT_APPLICABLE', 'No confirmed rule.');
             continue;
         }
+        const checkText=sourceText+' '+texts+(forbidden?' '+social.caption+' '+social.hashtags.join(' ')+' '+social.cta:'');
+        const hits=terms.filter(t=>contains(checkText,t)||(code==='REQUIRED_TOPIC'&&semanticSimilarity.similarity(sourceText,t)>=.4));
+        if(forbidden&&hits.length){add(code,'FAIL','Forbidden content found: '+hits.join(', '));continue;}
         if (!sourceText.trim()) {
             add(code, 'UNKNOWN', 'Source speech evidence is missing.');
             continue;
         }
-        const hits = terms.filter(t => contains(sourceText + ' ' + texts, t) || (code === 'REQUIRED_TOPIC' && semanticSimilarity.similarity(sourceText, t) >= .4));
         const okay = forbidden ? !hits.length : hits.length === terms.length;
-        add(code, okay ? 'PASS' : forbidden ? 'FAIL' : 'UNKNOWN', okay ? 'Supported by available transcript/text evidence.' : forbidden ? 'Forbidden content found: ' + hits.join(', ') : 'Review topic/word support in the edited speech.');
+        add(code, okay?'PASS':forbidden||code==='REQUIRED_KEYWORD'?'FAIL':'UNKNOWN', okay ? 'Supported by available transcript/text evidence.' : forbidden ? 'Forbidden content found: ' + hits.join(', ') : 'Review topic/word support in the edited speech.');
     }
     const assetById = new Map(p.assets.map(a => [a.id, a]));
     const mappedLogos = visible.filter(e => e.type === 'IMAGE' && b.assetInstructions.some(a => a.required && a.use === 'LOGO_TOP_RIGHT' && assetById.get(e.assetId)?.metadata?.campaignAssetId === a.assetId));
@@ -221,6 +229,9 @@ export function evaluateCampaignCompliance(b: StructuredCampaignBrief, p: Compli
     }));
     if (overlap) add('LOGO_VISIBILITY', 'WARN', 'Text overlaps the required logo. Review the visible brand mark in the editor and export; manual text placement is preserved.');
     for (const [code, requirement, use, type] of [['LOGO', b.logoRequirements, 'LOGO_TOP_RIGHT', 'IMAGE'], ['MUSIC', b.musicRequirements, 'BACKGROUND_MUSIC', 'AUDIO'], ['IMAGE', b.brandingRequirements, 'IMAGE_OVERLAY', 'IMAGE']] as const) {
+        const policy=requirement?requirementPolicy(requirement):'REQUIRED';
+        if(policy==='OFF'){const present=visible.some(e=>e.type===type&&(type==='AUDIO'||assetById.get(e.assetId)?.metadata?.campaignAssetId));add(code,present?'FAIL':'PASS','The confirmed rule excludes '+code.toLowerCase()+'.');continue;}
+        if(policy==='OPTIONAL'){add(code,'NOT_APPLICABLE','This media is optional.');continue;}
         const required = b.assetInstructions.filter(a => a.required && a.use === use);
         if (!requirement && !required.length) {
             add(code, 'NOT_APPLICABLE', 'No confirmed requirement.');
@@ -241,14 +252,14 @@ export function evaluateCampaignCompliance(b: StructuredCampaignBrief, p: Compli
         } return !matched.some(e => a.use !== 'LOGO_TOP_RIGHT' || Number(e.properties?.x) >= .5 && Number(e.properties?.x) + Number(e.properties?.width ?? .2) >= .9 && Number(e.properties?.y) <= .15); });
         add(code, missing.length ? 'FAIL' : 'PASS', missing.length ? 'Required mapped asset is absent, hidden or muted.' : 'Confirmed campaign asset is present.', !!missing.length);
     }
-    add('CAPTIONS', !b.captionRequirements ? 'NOT_APPLICABLE' : /^(none|off|no captions)$/i.test(b.captionRequirements) ? (visible.some(e => e.type === 'SUBTITLE') ? 'FAIL' : 'PASS') : visible.some(e => e.type === 'SUBTITLE') ? 'PASS' : 'FAIL', b.captionRequirements || 'No caption rule.', !!b.captionRequirements && !/^(none|off|no captions)$/i.test(b.captionRequirements));
-    add('HEADLINE', !b.hookRequirements ? 'NOT_APPLICABLE' : visible.some(e => e.type === 'TEXT' && e.properties?.content) ? 'WARN' : 'FAIL', b.hookRequirements ? 'Review the headline against: ' + b.hookRequirements : 'No hook rule.');
+    add('CAPTIONS', !b.captionRequirements||requirementPolicy(b.captionRequirements)==='OPTIONAL'?'NOT_APPLICABLE':requirementPolicy(b.captionRequirements)==='OFF' ? (visible.some(e=>e.type==='SUBTITLE'&&String(e.properties?.content??'').trim()) ? 'FAIL' : 'PASS') : visible.some(e=>e.type==='SUBTITLE'&&String(e.properties?.content??'').trim()) ? 'PASS' : 'FAIL', b.captionRequirements || 'No caption rule.', !!b.captionRequirements && !/^(none|off|no captions)$/i.test(b.captionRequirements));
+    add('HEADLINE', !b.hookRequirements ? 'NOT_APPLICABLE' : visible.some(e=>e.type==='TEXT'&&e.properties?.content&&(e.properties.presetRole==='HOOK'||e.properties.templateRole==='HOOK')) ? 'WARN' : 'FAIL', b.hookRequirements ? 'Review the headline against: ' + b.hookRequirements : 'No hook rule.');
     add('CTA', !b.requiredCTA ? 'NOT_APPLICABLE' : contains(texts, b.requiredCTA) ? 'PASS' : 'FAIL', b.requiredCTA ? 'Required on-screen CTA: ' + b.requiredCTA : 'No CTA requirement.', !!b.requiredCTA);
     add('FORBIDDEN_CTA', !b.forbiddenCTA ? 'NOT_APPLICABLE' : contains(texts + ' ' + social.caption, b.forbiddenCTA) ? 'FAIL' : 'PASS', b.forbiddenCTA || 'No forbidden CTA.');
     add('REQUIRED_TEXT', !b.requiredText ? 'NOT_APPLICABLE' : contains(texts, b.requiredText) ? 'PASS' : 'FAIL', b.requiredText || 'No text requirement.', !!b.requiredText);
     add('ASPECT_RATIO', !b.aspectRatio ? 'NOT_APPLICABLE' : p.settings?.aspectRatio === b.aspectRatio ? 'PASS' : 'FAIL', `Expected ${b.aspectRatio ?? 'any'}; current ${p.settings?.aspectRatio ?? 'unknown'}.`, !!b.aspectRatio);
     add('HASHTAGS', !b.requiredHashtags.length ? 'NOT_APPLICABLE' : b.requiredHashtags.every(h => social.hashtags.includes(h)) ? 'PASS' : 'FAIL', b.requiredHashtags.join(', ') || 'No required hashtags.');
-    add('MENTIONS', !b.requiredMentions.length ? 'NOT_APPLICABLE' : b.requiredMentions.every(mention => social.caption.includes(mention)) ? 'PASS' : 'FAIL', b.requiredMentions.join(', ') || 'No required mentions.');
+    add('MENTIONS', !b.requiredMentions.length ? 'NOT_APPLICABLE' : b.requiredMentions.every(mention => hasMention(social.caption,mention)) ? 'PASS' : 'FAIL', b.requiredMentions.join(', ') || 'No required mentions.');
     for (const [code, rule] of [['TONE', b.tone], ['AUDIENCE', b.audience], ['BRANDING', b.brandingRequirements], ['MUSIC_DETAIL', b.musicRequirements], ['CAPTION_DETAIL', b.captionRequirements], ['REFERENCE_STYLE', b.referenceStyleHints], ['BRAND_COLOR', b.brandColor], ['POSTING', b.postingRules], ['SUBMISSION', b.submissionRules], ['CONTENT_DO', b.contentDo.join('; ')], ['CONTENT_DONT', b.contentDont.join('; ')]] as const)
         if (rule)
             add(code, 'WARN', 'Human review: ' + rule);

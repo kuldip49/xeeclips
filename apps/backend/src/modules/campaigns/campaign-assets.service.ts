@@ -1,12 +1,13 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, HttpException, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, rm, open } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { promisify } from 'node:util';
 import { PrismaService } from '../database/prisma.service';
 import { StorageService } from '../storage/storage.service';
 import { requestIdentity } from '../auth/request-context';
+import {campaignPage,campaignText} from './campaign-contract';
 const exec = promisify(execFile);
 export function campaignOwner() { const id = requestIdentity.getStore()?.userId; if (!id)
     throw new ForbiddenException(); return id; }
@@ -44,7 +45,9 @@ export class CampaignAssetsService {
             await this.campaign(id);
             if (!file?.path)
                 throw new BadRequestException('Select a campaign file.');
-            const bytes = await readFile(file.path), spec = validateAssetSignature(file.originalname, file.mimetype, bytes.subarray(0, 64), file.size);
+            const handle=await open(file.path,'r');let size:number,head:Buffer;try{size=(await handle.stat()).size;head=Buffer.alloc(Math.min(64,size));await handle.read(head,0,head.length,0);}finally{await handle.close();}
+            const spec=validateAssetSignature(file.originalname,file.mimetype,head!,size!);
+            if(body.type!==undefined&&(!['LOGO','REFERENCE','IMAGE','MUSIC','DOCUMENT'].includes(String(body.type))||body.type==='LOGO'&&spec.kind!=='IMAGE'||!['LOGO','REFERENCE'].includes(String(body.type))&&body.type!==spec.kind))throw new BadRequestException('Asset type does not match its contents.');
             const relativePath = safeRelativePath(body.relativePath);
             let media: any = {};
             let extractedText = '';
@@ -66,7 +69,7 @@ export class CampaignAssetsService {
             }
             else if (spec.ext === '.txt') {
                 try {
-                    extractedText = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+                    extractedText = new TextDecoder('utf-8', { fatal: true }).decode(await readFile(file.path));
                     if (extractedText.includes('\0'))
                         throw Error();
                 }
@@ -78,8 +81,9 @@ export class CampaignAssetsService {
             }
             const type = body.type === 'LOGO' && spec.kind === 'IMAGE' ? 'LOGO' : spec.kind;
             stored = await this.storage.uploadFile({ filePath: file.path, objectKey: `campaigns/${campaignOwner()}/${id}/${randomUUID()}${spec.ext}`, mimeType: spec.mime[0] });
-            const row = await this.prisma.campaignAsset.create({ data: { campaignId: id, type, fileName: file.originalname.replaceAll('\\', '/').split('/').at(-1)!.slice(0, 200), mimeType: spec.mime[0], bucket: stored.bucket, storageKey: stored.objectKey, sizeBytes: BigInt(file.size), label: String(body.label ?? '').slice(0, 200), extractedText, metadata: { relativePath, handling: extractedText ? 'TEXT_EXTRACTED' : spec.kind === 'DOCUMENT' ? 'REFERENCE_ONLY' : 'VERIFIED_MEDIA', duration: Number(media.format?.duration) || null, width: media.streams?.[0]?.width ?? null, height: media.streams?.[0]?.height ?? null } } });
-            await this.invalidate(id);
+            const uploaded=stored;
+            const row = await this.prisma.$transaction(async tx=>{const created=await tx.campaignAsset.create({data: { campaignId: id, type, fileName: this.fileName(file.originalname,spec.ext), mimeType: spec.mime[0], bucket: uploaded.bucket, storageKey: uploaded.objectKey, sizeBytes: BigInt(size!), label: campaignText(body.label,'Label',200), extractedText, metadata: { relativePath, handling: extractedText ? 'TEXT_EXTRACTED' : spec.kind === 'DOCUMENT' ? 'REFERENCE_ONLY' : 'VERIFIED_MEDIA', duration: Number(media.format?.duration) || null, width: media.streams?.[0]?.width ?? null, height: media.streams?.[0]?.height ?? null } } });
+            await tx.campaignBrief.updateMany({where:{campaignId:id},data:{confirmedByUser:false,confirmedAt:null,version:{increment:1}}});return created;});
             return this.public(row);
         }
         catch (e) {
@@ -92,18 +96,17 @@ export class CampaignAssetsService {
                 await rm(file.path, { force: true });
         }
     }
-    public(a: any) { const { bucket, storageKey, extractedText, ...v } = a; return { ...v, sizeBytes: Number(a.sizeBytes), fileUrl: `/campaigns/${a.campaignId}/assets/${a.id}/file`, extractedTextAvailable: !!extractedText }; }
-    async list() { return (await this.prisma.campaignAsset.findMany({ where: { campaign: { userId: campaignOwner() } }, orderBy: { uploadedAt: 'desc' }, take: 500 })).map(a => this.public(a)); }
+    private fileName(value:string,ext:string){const name=value.replaceAll('\\','/').split('/').at(-1)!.replace(/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/g,'').trim();const stem=name.toLowerCase().endsWith(ext)?name.slice(0,-ext.length):name;return (stem.slice(0,190-ext.length)||'campaign-asset')+ext;}
+    public(a:any){const metadata=a.metadata as any;return {id:a.id,campaignId:a.campaignId,type:a.type,fileName:a.fileName,mimeType:a.mimeType,sizeBytes:Number(a.sizeBytes),label:a.label,required:a.required,intendedUse:a.intendedUse,uploadedAt:a.uploadedAt,metadata:{relativePath:metadata?.relativePath??'',handling:metadata?.handling??'REFERENCE_ONLY',duration:metadata?.duration??null,width:metadata?.width??null,height:metadata?.height??null},fileUrl:`/campaigns/${a.campaignId}/assets/${a.id}/file`,extractedTextAvailable:!!a.extractedText};}
+    async list(page={}){return(await this.prisma.campaignAsset.findMany({where:{campaign:{userId:campaignOwner()}},orderBy:[{uploadedAt:'desc'},{id:'desc'}],...campaignPage(page,100)})).map(a=>this.public(a));}
     async get(id: string, key: string) { await this.campaign(id); const a = await this.prisma.campaignAsset.findFirst({ where: { id: key, campaignId: id } }); if (!a)
         throw new NotFoundException('Campaign asset not found.'); return a; }
-    async update(id: string, key: string, body: Record<string, unknown>) { const a = await this.get(id, key); const required = body.required ?? a.required, intendedUse = body.intendedUse ?? a.intendedUse; if (typeof required !== 'boolean' || typeof intendedUse !== 'string' || !['', 'LOGO_TOP_RIGHT', 'BACKGROUND_MUSIC', 'IMAGE_OVERLAY', 'REFERENCE'].includes(intendedUse))
-        throw new BadRequestException('Invalid asset usage.'); if (intendedUse === 'LOGO_TOP_RIGHT' && a.type !== 'LOGO' || intendedUse === 'BACKGROUND_MUSIC' && a.type !== 'MUSIC' || intendedUse === 'IMAGE_OVERLAY' && a.type !== 'IMAGE')
-        throw new BadRequestException('Asset type does not match this usage.'); const row = await this.prisma.campaignAsset.update({ where: { id: a.id }, data: { required, intendedUse, label: typeof body.label === 'string' ? body.label.slice(0, 200) : a.label } }); await this.invalidate(id); return this.public(row); }
-    async remove(id: string, key: string) { const a = await this.get(id, key); await this.storage.removeObject(a.bucket, a.storageKey); await this.prisma.campaignAsset.delete({ where: { id: a.id } }); await this.invalidate(id); return { deleted: true }; }
+    async update(id:string,key:string,body:Record<string,unknown>){const a=await this.get(id,key),required=body.required===undefined?a.required:body.required,intendedUse=body.intendedUse===undefined?a.intendedUse:body.intendedUse;if(typeof required!=='boolean'||typeof intendedUse!=='string'||!['','LOGO_TOP_RIGHT','BACKGROUND_MUSIC','IMAGE_OVERLAY','REFERENCE'].includes(intendedUse))throw new BadRequestException('Invalid asset usage.');if(intendedUse==='LOGO_TOP_RIGHT'&&a.type!=='LOGO'||intendedUse==='BACKGROUND_MUSIC'&&a.type!=='MUSIC'||intendedUse==='IMAGE_OVERLAY'&&a.type!=='IMAGE')throw new BadRequestException('Asset type does not match this usage.');const label=body.label===undefined?a.label:campaignText(body.label,'Label',200);const row=await this.prisma.$transaction(async tx=>{const changed=await tx.campaignAsset.update({where:{id:a.id},data:{required,intendedUse,label}});await tx.campaignBrief.updateMany({where:{campaignId:id},data:{confirmedByUser:false,confirmedAt:null,version:{increment:1}}});return changed;});return this.public(row);}
+    async remove(id:string,key:string){const a=await this.get(id,key);await this.prisma.$transaction(async tx=>{await tx.campaignAsset.delete({where:{id:a.id}});await tx.campaignBrief.updateMany({where:{campaignId:id},data:{confirmedByUser:false,confirmedAt:null,version:{increment:1}}});});await this.storage.removeObject(a.bucket,a.storageKey).catch(()=>Logger.warn('Campaign asset cleanup will require a retry.','CampaignAssets'));return{deleted:true};}
     async file(id: string, key: string, range?: string) { const a = await this.get(id, key), size = Number(a.sizeBytes); let start = 0, end = size - 1; const match = range && /^bytes=(\d*)-(\d*)$/.exec(range); if (range && !match)
-        throw new BadRequestException('Invalid byte range.'); if (match) {
+        throw new HttpException({code:'CAMPAIGN_INVALID_RANGE',message:'The requested byte range is not available.',rangeSize:size},416); if (match) {
         if (!match[1] && !match[2])
-            throw new BadRequestException('Invalid byte range.');
+            throw new HttpException({code:'CAMPAIGN_INVALID_RANGE',message:'The requested byte range is not available.',rangeSize:size},416);
         if (!match[1])
             start = Math.max(0, size - Number(match[2]));
         else {
@@ -112,6 +115,6 @@ export class CampaignAssetsService {
                 end = Math.min(end, Number(match[2]));
         }
         if (!Number.isSafeInteger(start) || start < 0 || start > end || start >= size)
-            throw new BadRequestException('Invalid byte range.');
+            throw new HttpException({code:'CAMPAIGN_INVALID_RANGE',message:'The requested byte range is not available.',rangeSize:size},416);
     } return { a, size, start, end, partial: !!range, stream: range ? await this.storage.getPartialObject(a.bucket, a.storageKey, start, end - start + 1) : await this.storage.getObject(a.bucket, a.storageKey) }; }
 }

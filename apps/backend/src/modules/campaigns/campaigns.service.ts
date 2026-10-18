@@ -14,11 +14,12 @@ import { editProjectEvidence } from '../content-intelligence/edit-project-eviden
 import { videoLayout } from '../edit-mode/edit-mode-transform';
 import { CampaignAssetsService, campaignOwner } from './campaign-assets.service';
 import { CampaignUnderstandingService } from './campaign-understanding.service';
-import { emptyBrief, normalizeBrief, evaluateCampaignCompliance, socialPackage } from './campaign-rules';
+import { emptyBrief, requirementPolicy, normalizeBrief, evaluateCampaignCompliance, socialPackage } from './campaign-rules';
+import {campaignPage,campaignDto,runDto,clipDto,postDto,campaignConflict,campaignText} from './campaign-contract';
 const json = (v: unknown) => v as Prisma.InputJsonValue;
 const publicJson = <T>(v: T): T => JSON.parse(JSON.stringify(v, (_k, x) => typeof x === 'bigint' ? Number(x) : x));
 const object = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : {};
-const text = (v: unknown, max = 4000) => typeof v === 'string' ? v.trim().slice(0, max) : '';
+const text = (v: unknown, max = 4000) => campaignText(v,'Field',max);
 const templates = { STYLEZERO: 'AUTOMATIC_1', STYLEONE: 'AUTOMATIC_2', STYLETWO: 'AUTOMATIC_3_STYLE_TWO' };
 const modeOf = (v: unknown): CampaignMode => { if (v !== 'XEEFREE' && v !== 'XEEPRO')
     throw new BadRequestException('Choose XeeFree or XeePro.'); return v; };
@@ -40,13 +41,13 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
         if (!user?.aiProcessingConsentAt)
             throw new ForbiddenException({ code: 'AI_CONSENT_REQUIRED', message: 'Allow AI processing in Settings first.' });
     } return mode; }
-    async list() { return this.prisma.campaign.findMany({ where: { userId: campaignOwner() }, include: { brief: { select: { version: true, confirmedByUser: true } }, _count: { select: { assets: true, sources: true, clips: true } } }, orderBy: { createdAt: 'desc' } }); }
+    async list(page={}) {const rows=await this.prisma.campaign.findMany({where:{userId:campaignOwner()},include:{brief:{select:{version:true,confirmedByUser:true}},_count:{select:{assets:true,sources:true,clips:true}}},orderBy:[{createdAt:'desc'},{id:'desc'}],...campaignPage(page)});return rows.map(campaignDto);}
     async campaign(id: string) { return this.assets.campaign(id); }
     async create(body: Record<string, unknown>) {
         const name = text(body.name, 120);
         if (!name)
             throw new BadRequestException('Enter a campaign name.');
-        const platforms = this.platforms(body.platforms ?? []), deadline = body.deadline ? dateOf(body.deadline) : null, userId = campaignOwner();
+        const platforms = this.platforms(body.platforms === undefined ? [] : body.platforms), deadline = body.deadline === undefined ? null : dateOf(body.deadline), userId = campaignOwner();
         return this.prisma.$transaction(async (tx) => { const project = await tx.project.create({ data: { userId, name: 'Campaign · ' + name } }); return tx.campaign.create({ data: { userId, projectId: project.id, name, description: text(body.description, 10000), platforms, deadline, payoutDescription: text(body.payoutDescription), brief: { create: { sourceText: text(body.sourceText, 50000), data: json({ ...emptyBrief(), targetPlatforms: platforms }) } } } }); });
     }
     private platforms(value: unknown) { if (!Array.isArray(value) || value.length > 10 || value.some(v => typeof v !== 'string' || v.length > 80))
@@ -72,26 +73,29 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
             data.defaultClipCount = body.defaultClipCount;
         }
         if (body.status !== undefined) {
-            if (!['DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETED', 'ARCHIVED'].includes(String(body.status)))
+            if (typeof body.status!=='string'||!['DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETED', 'ARCHIVED'].includes(body.status))
                 throw new BadRequestException('Invalid campaign status.');
             if (body.status === 'ACTIVE' && !(await this.prisma.campaignBrief.findUnique({ where: { campaignId: id } }))?.confirmedByUser)
                 throw new ConflictException('Confirm the campaign brief first.');
             data.status = body.status;
         }
-        const next = await this.prisma.campaign.update({ where: { id: c.id }, data });
-        if (body.description !== undefined || body.platforms !== undefined)
-            await this.assets.invalidate(id);
-        return next;
+        return this.prisma.$transaction(async tx => {
+            const next = await tx.campaign.update({ where: { id: c.id }, data });
+            if (body.description !== undefined || body.platforms !== undefined)
+                await tx.campaignBrief.updateMany({ where: { campaignId: id }, data: { confirmedByUser: false, confirmedAt: null, version: { increment: 1 } } });
+            return next;
+        });
     }
-    async detail(id: string) { const c = await this.campaign(id); const [brief, assets, sources, runs, clips] = await Promise.all([this.prisma.campaignBrief.findUnique({ where: { campaignId: id } }), this.prisma.campaignAsset.findMany({ where: { campaignId: id }, orderBy: { uploadedAt: 'asc' } }), this.prisma.campaignSource.findMany({ where: { campaignId: id }, include: { video: { select: { id: true, originalName: true, duration: true, processingJobs: { orderBy: { createdAt: 'desc' }, take: 1, select: { status: true, errorCode: true, error: true, aiMode: true } } } } } }), this.prisma.campaignRun.findMany({ where: { campaignId: id }, orderBy: { createdAt: 'desc' }, take: 50 }), this.clips(id)]); return publicJson({ ...c, brief, assets: assets.map(a => this.assets.public(a)), sources, runs: runs.map(({ snapshot, ...run }) => run), clips }); }
+    async detail(id:string,page={}){const c=await this.campaign(id);const pagination=campaignPage(page);const [brief,assets,sources,runs,clips]=await Promise.all([this.prisma.campaignBrief.findUnique({where:{campaignId:id}}),this.prisma.campaignAsset.findMany({where:{campaignId:id},orderBy:[{uploadedAt:'asc'},{id:'asc'}],...pagination}),this.prisma.campaignSource.findMany({where:{campaignId:id},include:{video:{select:{id:true,originalName:true,duration:true,processingJobs:{orderBy:{createdAt:'desc'},take:1,select:{status:true,errorCode:true,aiMode:true}}}}},orderBy:[{createdAt:'asc'},{id:'asc'}],...pagination}),this.prisma.campaignRun.findMany({where:{campaignId:id},orderBy:[{createdAt:'desc'},{id:'desc'}],...pagination}),this.clips(id,page)]);return publicJson({...campaignDto(c),brief,assets:assets.map(a=>this.assets.public(a)),sources:sources.map(source=>({...source,video:{...source.video,processingJobs:source.video.processingJobs.map(job=>({...job,errorCode:job.errorCode==='XEEPRO_BUSY'?'XEEPRO_BUSY':job.status==='FAILED'?'SOURCE_ANALYSIS_FAILED':null,error:job.status==='FAILED'?'Source analysis could not finish.':null}))}})),runs:runs.map(runDto),clips});}
     async understand(id: string, body: Record<string, unknown>) {
         const c = await this.campaign(id), mode = await this.mode(body.mode);
         const current = await this.prisma.campaignBrief.findUniqueOrThrow({ where: { campaignId: id } });
         if (body.version !== current.version)
             throw new ConflictException('Campaign rules changed. Refresh and retry.');
-        const sourceText = typeof body.sourceText === 'string' ? body.sourceText.slice(0, 50000) : current.sourceText;
+        const sourceText = body.sourceText===undefined?current.sourceText:text(body.sourceText,50000);
         const assets = await this.prisma.campaignAsset.findMany({ where: { campaignId: id } });
-        const result = await this.understanding.understand({ mode, text: [sourceText, ...assets.filter(a => a.extractedText).map(a => a.extractedText)].join('\n'), platforms: c.platforms, assetLabels: assets.map(a => `${a.type}: ${a.label || a.fileName} (${a.intendedUse || 'reference only'})`) });
+        const combined=[sourceText,...assets.filter(a=>a.extractedText).map(a=>a.extractedText)].join('\n');if(combined.length>100000)throw new BadRequestException({code:'CAMPAIGN_BRIEF_TOO_LARGE',message:'Combined pasted and text-file rules must fit within 100,000 characters.'});
+        const result = await this.understanding.understand({ mode, text: combined, platforms: c.platforms, assetLabels: assets.map(a => `${a.type}: ${a.label || a.fileName} (${a.intendedUse || 'reference only'})`) });
         result.brief.assetInstructions = assets.filter(a => a.required && ['LOGO_TOP_RIGHT', 'BACKGROUND_MUSIC', 'IMAGE_OVERLAY'].includes(a.intendedUse)).map(a => ({ assetId: a.id, use: a.intendedUse as never, required: true }));
         const changed = await this.prisma.campaignBrief.updateMany({ where: { campaignId: id, version: current.version }, data: { sourceText, mode, data: json(result.brief), version: { increment: 1 }, confirmedByUser: false, confirmedAt: null } });
         if (!changed.count)
@@ -110,7 +114,7 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
             throw new BadRequestException((e as Error).message);
         }
         await this.validateMappings(id, data);
-        const changed = await this.prisma.campaignBrief.updateMany({ where: { campaignId: id, version: Number(body.version) }, data: { data: json(data), ...(typeof body.sourceText === 'string' ? { sourceText: body.sourceText.slice(0, 50000) } : {}), version: { increment: 1 }, confirmedByUser: false, confirmedAt: null } });
+        const changed = await this.prisma.campaignBrief.updateMany({ where: { campaignId: id, version: Number(body.version) }, data: { data: json(data), ...(body.sourceText!==undefined?{sourceText:text(body.sourceText,50000)}:{}), version: { increment: 1 }, confirmedByUser: false, confirmedAt: null } });
         if (!changed.count)
             throw new ConflictException('Rules changed. Refresh before saving.');
         return this.prisma.campaignBrief.findUniqueOrThrow({ where: { campaignId: id } });
@@ -138,7 +142,7 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
         if (!brief.confirmedByUser)
             throw new ConflictException('Confirm the current campaign brief before generation.');
         const mode = await this.mode(body.mode), style = String(body.style) as CampaignStyle;
-        if (!Object.hasOwn(templates, style))
+        if(typeof body.style!=='string'||!Object.hasOwn(templates,style))
             throw new BadRequestException('Choose StyleZero, StyleOne or StyleTwo.');
         if (!Number.isInteger(body.count) || Number(body.count) < 1 || Number(body.count) > 20)
             throw new BadRequestException('Request 1–20 clips per source.');
@@ -152,25 +156,35 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
             throw new NotFoundException('Campaign source not found.');
         const data = normalizeBrief(brief.data);
         await this.validateMappings(id, data);
-        const runs = [];
-        for (const source of sources) {
-            const context: CampaignGenerationContext = { campaignId: id, runId: randomUUID(), briefVersion: brief.version, mode, brief: data };
-            runs.push(await this.prisma.campaignRun.upsert({ where: { campaignId_requestKey_sourceId: { campaignId: id, requestKey, sourceId: source.id } }, update: {}, create: { id: context.runId, campaignId: id, sourceId: source.id, requestKey, mode, style, requestedClipCount: Number(body.count), briefVersion: brief.version, snapshot: json({ context, notes: text(body.notes, 1500) }) } }));
-        }
-        void this.sweep();
-        return runs;
+        const runs=await this.prisma.$transaction(async tx=>{
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${id+':'+requestKey}, 64018))`;
+            const current=await tx.campaignBrief.findFirst({where:{campaignId:id,version:brief.version,confirmedByUser:true}});
+            if(!current)throw campaignConflict();
+            const result=[];
+            for(const source of sources){const context:CampaignGenerationContext={campaignId:id,runId:randomUUID(),briefVersion:brief.version,mode,brief:data};const notes=text(body.notes,1500);
+                const run=await tx.campaignRun.upsert({where:{campaignId_requestKey_sourceId:{campaignId:id,requestKey,sourceId:source.id}},update:{},create:{id:context.runId,campaignId:id,sourceId:source.id,requestKey,mode,style,requestedClipCount:Number(body.count),briefVersion:brief.version,snapshot:json({context,notes})}});
+                if(run.mode!==mode||run.style!==style||run.requestedClipCount!==body.count||run.briefVersion!==brief.version||object(run.snapshot).notes!==notes)throw new ConflictException({code:'CAMPAIGN_REQUEST_CONFLICT',message:'This request key already belongs to a different campaign generation request.'});
+                result.push(runDto(run));
+            }return result;
+        });void this.sweep();return runs;
     }
+
     /** Persistent workflow orchestration only: the existing queues still transcribe/select/render. */
     async sweep() { if (this.sweeping)
         return; this.sweeping = true; try {
         const runs = await requestIdentity.run({}, () => this.prisma.campaignRun.findMany({ where: { status: { in: ['QUEUED', 'STARTING', 'GENERATING', 'PREPARING'] } }, include: { campaign: { select: { userId: true } }, source: true }, orderBy: { createdAt: 'asc' }, take: 20 }));
         for (const run of runs)
             await requestIdentity.run({ userId: run.campaign.userId }, async () => { try {
-                await this.advance(run);
+                await this.prisma.$transaction(async tx=>{
+                    const [lock]=await tx.$queryRaw<Array<{locked:boolean}>>`SELECT pg_try_advisory_xact_lock(hashtextextended(${run.source.videoId}, 64017)) AS locked`;
+                    if(!lock.locked)return;
+                    const fresh=await this.prisma.campaignRun.findFirst({where:{id:run.id,status:{in:['QUEUED','STARTING','GENERATING','PREPARING']}},include:{campaign:{select:{userId:true}},source:true}});
+                    if(fresh)await this.advance(fresh);
+                },{maxWait:5000,timeout:300000});
             }
             catch (error) {
-                const busy = isXeeProBusyError(error);
-                await this.prisma.campaignRun.update({ where: { id: run.id }, data: { status: 'FAILED', errorCode: busy ? 'XEEPRO_BUSY' : 'CAMPAIGN_RUN_FAILED', error: busy ? XEEPRO_BUSY_MESSAGE : error instanceof Error ? error.message.slice(0, 500) : 'Campaign processing failed.' } });
+                const busy = isXeeProBusyError(error);const response=error&&typeof (error as any).getResponse==='function'?(error as any).getResponse():{};const noCredits=response?.code==='NO_CREDITS';
+                await this.prisma.campaignRun.update({ where: { id: run.id }, data: { status: 'FAILED', errorCode:busy?'XEEPRO_BUSY':noCredits?'NO_CREDITS':'CAMPAIGN_RUN_FAILED',error:busy?XEEPRO_BUSY_MESSAGE:noCredits?'No generations remaining.':'Campaign processing could not finish. Review the source and campaign requirements, then retry.' } });
                 this.logger.warn('Campaign run ended: ' + run.id);
             } });
     }
@@ -263,37 +277,27 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
         }
         await this.prisma.campaignRun.update({ where: { id: run.id }, data: { status: waiting ? 'PREPARING' : 'COMPLETED' } });
     }
-    async ownClip(id: string) { const clip = await this.prisma.campaignClip.findFirst({ where: { id, campaign: { userId: campaignOwner() } }, include: { campaign: { include: { brief: true } }, post: true, generatedClip: { include: { candidate: true } } } }); if (!clip)
+    async ownClip(id: string) { const clip = await this.prisma.campaignClip.findFirst({ where: { id, campaign: { userId: campaignOwner() } }, include: { campaign: { include: { brief: true } }, post:true,editProject:{select:{id:true,revision:true}},generatedClip:{select:{editTelemetry:true,contentPackaging:true,candidate:{select:{title:true}}}} } }); if (!clip)
         throw new NotFoundException('Campaign clip not found.'); return clip; }
-    async checkClip(id: string, force = false) {
-        const clip = await this.ownClip(id);
-        if (!clip.editProjectId)
-            return clip;
-        const p = await this.edit.get(clip.editProjectId), brief = clip.campaign.brief;
-        if (!brief)
-            return clip;
-        if (!force && clip.checkedRevision === p.revision && clip.checkedBriefVersion === brief.version && !(brief.confirmedByUser && object(clip.compliance).checks?.some((c: any) => c.code === 'BRIEF_CONFIRMATION')))
-            return clip;
-        const data = normalizeBrief(brief.data), evidence = editProjectEvidence(p), speech = evidence.transcript ?? '';
-        const comp = evaluateCampaignCompliance(data, p as any, speech, clip.socialPackage as unknown as SocialPostPackage, brief.version);
-        if (!brief.confirmedByUser) {
-            comp.checks.push({ code: 'BRIEF_CONFIRMATION', status: 'UNKNOWN', detail: 'Campaign rules changed; confirm the current brief.', fixable: false });
-            comp.status = 'UNKNOWN';
-        }
-        const changed = clip.checkedRevision !== p.revision;
-        const lifecycle = clip.lifecycleStatus === 'POSTED' ? 'POSTED' : changed || ['FAIL', 'UNKNOWN'].includes(comp.status) ? 'NEEDS_REVIEW' : clip.lifecycleStatus;
-        await this.prisma.campaignClip.update({ where: { id }, data: { compliance: json(comp), complianceScore: comp.overallScore ?? 0, complianceStatus: comp.status, checkedRevision: p.revision, checkedBriefVersion: brief.version, lifecycleStatus: lifecycle } });
-        return this.ownClip(id);
+    async checkClip(id:string,force=false,attempt=0):Promise<any>{
+        const clip=await this.ownClip(id),brief=clip.campaign.brief;
+        const p=clip.editProjectId?await this.edit.get(clip.editProjectId):null;
+        if(!force&&p&&brief&&clip.checkedRevision===p.revision&&clip.checkedBriefVersion===brief.version&&brief.confirmedByUser&&!object(clip.compliance).checks?.some((c:any)=>c.code==='BRIEF_CONFIRMATION'))return clip;
+        const comp=p&&brief?evaluateCampaignCompliance(normalizeBrief(brief.data),p as any,editProjectEvidence(p).transcript??'',clip.socialPackage as unknown as SocialPostPackage,brief.version):{checks:[{code:'CANONICAL_PROJECT',status:'UNKNOWN',detail:'The canonical project or campaign brief is missing.',fixable:false}],status:'UNKNOWN',overallScore:null,revision:-1,briefVersion:brief?.version??0};
+        if(brief&&!brief.confirmedByUser){comp.checks.push({code:'BRIEF_CONFIRMATION',status:'UNKNOWN',detail:'Campaign rules changed; confirm the current brief.',fixable:false});comp.status='UNKNOWN';}
+        const changed=clip.checkedRevision!==(p?.revision??-1)||clip.checkedBriefVersion!==(brief?.version??0);
+        const lifecycle=clip.lifecycleStatus==='POSTED'?'POSTED':changed||['FAIL','UNKNOWN'].includes(comp.status)?'NEEDS_REVIEW':clip.lifecycleStatus;
+        const updated=await this.prisma.campaignClip.updateMany({where:{id,lifecycleStatus:clip.lifecycleStatus,checkedRevision:clip.checkedRevision,checkedBriefVersion:clip.checkedBriefVersion,socialPackage:{equals:json(clip.socialPackage)},...(p?{editProject:{revision:p.revision}}:{editProjectId:null}),campaign:{brief:brief?{version:brief.version,confirmedByUser:brief.confirmedByUser}:null}},data:{compliance:json(comp),complianceScore:comp.overallScore??0,complianceStatus:comp.status,checkedRevision:p?.revision??-1,checkedBriefVersion:brief?.version??0,lifecycleStatus:lifecycle}});
+        if(!updated.count){if(attempt<2)return this.checkClip(id,true,attempt+1);throw campaignConflict();}return this.ownClip(id);
     }
-    async clips(campaignId?: string) { const rows = await this.prisma.campaignClip.findMany({ where: { ...(campaignId ? { campaignId } : {}), campaign: { userId: campaignOwner() } }, orderBy: { createdAt: 'desc' }, select: { id: true } }); const output = []; for (const row of rows) {
-        const c = await this.checkClip(row.id);
-        const { campaign, generatedClip, ...clip } = c as any;
-        let exports: any[] = [];
-        if (c.editProjectId)
-            exports = await this.render.listExports(c.editProjectId);
-        const latest = exports[0], previewUrl = latest ? `/edit-mode/assets/${latest.id}/file` : null;
-        output.push(publicJson({ ...clip, campaignName: campaign.name, title: object(generatedClip?.editTelemetry).hookFinalText || object(object(generatedClip?.contentPackaging).sharedPackage).selectedHook || generatedClip?.candidate?.title || campaign.name, exportCurrent: latest?.current === true, previewUrl, downloadUrl: previewUrl ? previewUrl + '?download=1' : null, editorUrl: c.editProjectId ? `/edit-mode/${c.editProjectId}` : null, compliance: c.compliance }));
-    } return output; }
+    async publicClip(c:any){return publicJson(clipDto(c,c.editProjectId?await this.render.listExports(c.editProjectId):[]));}
+    async clips(campaignId?:string,page={}){
+        const rows=await this.prisma.campaignClip.findMany({where:{...(campaignId?{campaignId}:{}),campaign:{userId:campaignOwner()}},orderBy:[{createdAt:'desc'},{id:'desc'}],...campaignPage(page),include:{campaign:{include:{brief:true}},post:true,editProject:{select:{id:true,revision:true}},generatedClip:{select:{editTelemetry:true,contentPackaging:true,candidate:{select:{title:true}}}}}});
+        const projects=rows.flatMap(row=>row.editProjectId?[row.editProjectId]:[]);
+        const exports=projects.length?await this.prisma.editAsset.findMany({where:{editProjectId:{in:projects},role:'EXPORT'},select:{id:true,editProjectId:true,metadata:true},orderBy:[{createdAt:'desc'},{id:'desc'}]}):[];
+        const output=[];for(let row of rows){const brief=row.campaign.brief;const stale=!row.editProject||!brief||row.checkedRevision!==row.editProject.revision||row.checkedBriefVersion!==brief.version||!brief.confirmedByUser||object(row.compliance).checks?.some((c:any)=>c.code==='BRIEF_CONFIRMATION');if(stale)row=await this.checkClip(row.id);output.push(clipDto(row,exports.filter(e=>e.editProjectId===row.editProjectId).map(e=>({...e,current:Number(object(e.metadata).sourceRevision)===row.editProject?.revision}))));}return publicJson(output);
+    }
+
     async applyBranding(id: string, b: StructuredCampaignBrief, explicit = true) {
         const clip = await this.ownClip(id);
         if (!clip.editProjectId)
@@ -302,7 +306,7 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
         const [frameWidth, frameHeight] = String(b.aspectRatio ?? object(p.settings).aspectRatio ?? '9:16').split(':').map(Number);
         const frameAspect = frameWidth > 0 && frameHeight > 0 ? frameWidth / frameHeight : 9 / 16;
         const logoHeight = (media: {width?: number | null; height?: number | null}) => Math.max(.02, Math.min(.8, .2 * (media.height ?? 1) / (media.width ?? 1) * frameAspect));
-        for (const instruction of b.assetInstructions.filter(a => a.required)) {
+        for (const instruction of b.assetInstructions.filter(a=>a.required&&requirementPolicy(a.use==='BACKGROUND_MUSIC'?b.musicRequirements:a.use==='LOGO_TOP_RIGHT'?b.logoRequirements:b.brandingRequirements)==='REQUIRED')) {
             const existing = p.elements.filter(e => { const asset = p.assets.find(a => a.id === e.assetId); return object(asset?.metadata).campaignAssetId === instruction.assetId && object(e.properties).hidden !== true && Number(object(e.properties).opacity ?? 1) > 0 && e.duration > 0; });
             if (existing.length && instruction.use !== 'BACKGROUND_MUSIC') {
                 if (explicit && instruction.use === 'LOGO_TOP_RIGHT')
@@ -369,7 +373,7 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
             }
         if (b.aspectRatio && object(p.settings).aspectRatio !== b.aspectRatio)
             commands.push({ kind: 'ELEMENT', action: 'SET_VIDEO_FRAMING', payload: { scope: 'PROJECT', mode: 'ASPECT', aspectRatio: b.aspectRatio } });
-        if (b.captionRequirements && !p.elements.some(e => e.type === 'SUBTITLE' && object(e.properties).hidden !== true && Number(object(e.properties).opacity ?? 1) > 0) && !/^(none|off|no captions)$/i.test(b.captionRequirements))
+        if (b.captionRequirements && !p.elements.some(e => e.type === 'SUBTITLE' && object(e.properties).hidden !== true && Number(object(e.properties).opacity ?? 1) > 0) && requirementPolicy(b.captionRequirements)==='REQUIRED')
             commands.push({ kind: 'ELEMENT', action: 'GENERATE_CAPTIONS', payload: {} });
         if (commands.length)
             await this.edit.applyAssistantBundle(p.id, p.revision, { proposalId: randomUUID(), summary: 'Apply confirmed campaign requirements', userMessage: explicit ? 'Fix campaign compliance' : 'Initial campaign branding', commands, actor: explicit ? 'MANUAL_USER_ACTION' : 'TEMPLATE_ACTION' });
@@ -379,24 +383,23 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
     async fix(id: string) { const c = await this.ownClip(id); if (!c.campaign.brief?.confirmedByUser)
         throw new ConflictException('Confirm campaign rules before applying fixes.'); return this.applyBranding(id, normalizeBrief(c.campaign.brief.data)); }
     async exportClip(id: string) { const c = await this.ownClip(id); if (!c.editProjectId)
-        throw new ConflictException('Project is not ready.'); const p = await this.edit.get(c.editProjectId); return this.render.startExport(p.id, p.revision); }
-    async ready(id: string, body: Record<string, unknown>) { const c = await this.checkClip(id, true); if (!c.editProjectId)
-        throw new ConflictException('Canonical project is missing.'); if (c.lifecycleStatus === 'POSTED')
-        throw new ConflictException('This clip is already recorded as posted.'); if (['FAIL', 'UNKNOWN'].includes(c.complianceStatus) || c.complianceStatus === 'WARN' && body.acceptWarnings !== true)
-        throw new ConflictException('Resolve failures/unknown checks and explicitly review warnings before Ready to Post.'); const exports = await this.render.listExports(c.editProjectId); if (!exports[0]?.current)
-        throw new ConflictException('Export the current edit before marking it ready.'); const changed = await this.prisma.campaignClip.updateMany({ where: { id, editProject: { revision: c.checkedRevision }, campaign: { brief: { version: c.checkedBriefVersion, confirmedByUser: true } } }, data: { lifecycleStatus: 'READY' } }); if (!changed.count)
-        throw new ConflictException('The edit or brief changed. Review current compliance.'); return this.ownClip(id); }
-    async social(id: string, body: Record<string, unknown>) { const c = await this.ownClip(id), old = c.socialPackage as unknown as SocialPostPackage; const value: SocialPostPackage = { caption: text(body.caption ?? old.caption, 4000), alternateCaptions: old.alternateCaptions, hashtags: Array.isArray(body.hashtags) ? body.hashtags.filter((v): v is string => typeof v === 'string' && /^#[\p{L}\p{N}_]+$/u.test(v)).slice(0, 50) : old.hashtags, requiredMentions: old.requiredMentions, cta: old.cta, postingNotes: old.postingNotes }; await this.prisma.campaignClip.update({ where: { id }, data: { socialPackage: json(value), checkedRevision: -1 } }); return this.checkClip(id, true); }
+        throw new ConflictException('Project is not ready.'); const p = await this.edit.get(c.editProjectId); const result=await this.render.startExport(p.id,p.revision);return {export:result.export,project:{id:p.id,revision:p.revision}}; }
+    private reviewedState(c:any,exportId?:string):Prisma.CampaignClipWhereInput{return {id:c.id,lifecycleStatus:{in:['NEEDS_REVIEW','READY']},checkedRevision:c.checkedRevision,checkedBriefVersion:c.checkedBriefVersion,complianceStatus:{in:['PASS','WARN']},socialPackage:{equals:json(c.socialPackage)},editProject:{revision:c.checkedRevision,...(exportId?{assets:{some:{id:exportId,role:'EXPORT'}}}:{})},campaign:{brief:{version:c.checkedBriefVersion,confirmedByUser:true}}};}
+    async ready(id:string,body:Record<string,unknown>){const c=await this.checkClip(id,true);if(c.lifecycleStatus==='POSTED')throw campaignConflict('This clip is already recorded as posted.');if(!c.editProjectId||!['PASS','WARN'].includes(c.complianceStatus)||c.complianceStatus==='WARN'&&body.acceptWarnings!==true)throw campaignConflict('Resolve failed/unknown checks and explicitly accept warnings before Ready to Post.');const exported=(await this.render.listExports(c.editProjectId)).find(e=>e.current);if(!exported)throw campaignConflict('Export the current edit before marking it ready.');const changed=await this.prisma.campaignClip.updateMany({where:this.reviewedState(c,(exported as any).id),data:{lifecycleStatus:'READY'}});if(!changed.count)throw campaignConflict();return this.ownClip(id);}
+
+    async social(id:string,body:Record<string,unknown>){const c=await this.ownClip(id),old=c.socialPackage as unknown as SocialPostPackage;const caption=body.caption===undefined?old.caption:text(body.caption);if(body.hashtags!==undefined&&(!Array.isArray(body.hashtags)||body.hashtags.length>50||body.hashtags.some(v=>typeof v!=='string'||v.length>100||!/^#[\p{L}\p{N}_]+$/u.test(v))))throw new BadRequestException('Enter at most 50 valid hashtags.');const value:SocialPostPackage={caption,alternateCaptions:old.alternateCaptions,hashtags:body.hashtags===undefined?old.hashtags:[...new Set(body.hashtags as string[])],requiredMentions:old.requiredMentions,cta:old.cta,postingNotes:old.postingNotes};const changed=await this.prisma.campaignClip.updateMany({where:{id,socialPackage:{equals:json(c.socialPackage)},lifecycleStatus:c.lifecycleStatus},data:{socialPackage:json(value),checkedRevision:-1,...(c.lifecycleStatus!=='POSTED'?{lifecycleStatus:'NEEDS_REVIEW'}:{})}});if(!changed.count)throw campaignConflict();return this.checkClip(id,true);}
+
     async posted(id: string, body: Record<string, unknown>) {
         const c = await this.checkClip(id, true);
         if (c.lifecycleStatus !== 'READY')
             throw new ConflictException('Mark the current exported clip Ready to Post first.');
-        if (!c.editProjectId || (await this.render.listExports(c.editProjectId))[0]?.current !== true)
+        const exported=c.editProjectId?(await this.render.listExports(c.editProjectId)).find(e=>e.current):null;
+        if (!c.editProjectId || !exported)
             throw new ConflictException('Export the current edit first.');
         const platform = text(body.platform, 80);
         if (!platform)
             throw new BadRequestException('Choose the platform you posted to.');
-        const url = text(body.postUrl, 2000);
+        const url = body.postUrl===null?'':text(body.postUrl, 2000);
         if (url) {
             let parsed: URL;
             try {
@@ -405,11 +408,13 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
             catch {
                 throw new BadRequestException('Enter an HTTPS post URL.');
             }
-            if (parsed.protocol !== 'https:')
+            if (parsed.protocol !== 'https:' || parsed.username || parsed.password)
                 throw new BadRequestException('Post URL must use HTTPS.');
         }
-        return this.prisma.$transaction(async (tx) => { const changed = await tx.campaignClip.updateMany({ where: { id, lifecycleStatus: 'READY', editProject: { revision: c.checkedRevision }, campaign: { brief: { version: c.checkedBriefVersion, confirmedByUser: true } } }, data: { lifecycleStatus: 'POSTED' } }); if (!changed.count)
-            throw new ConflictException('Clip or rules changed.'); return tx.campaignPost.create({ data: { campaignClipId: id, platform, postUrl: url, postedAt: body.postedAt ? dateOf(body.postedAt)! : new Date(), notes: text(body.notes) } }); });
+        const postedAt = body.postedAt === undefined ? new Date() : dateOf(body.postedAt);
+        if (!postedAt) throw new BadRequestException('Enter a valid posted date, or omit it to use the current time.');
+        return this.prisma.$transaction(async (tx) => { const changed = await tx.campaignClip.updateMany({ where: {...this.reviewedState(c,(exported as any).id),lifecycleStatus:'READY'}, data: { lifecycleStatus: 'POSTED' } }); if (!changed.count)
+            throw campaignConflict(); return tx.campaignPost.create({ data: { campaignClipId: id, platform, postUrl: url, postedAt, notes: text(body.notes) } }); });
     }
     async metrics(id: string, body: Record<string, unknown>) { const c = await this.ownClip(id); if (!c.post)
         throw new ConflictException('Record the post before entering performance.'); const data: any = {}; for (const k of ['views', 'likes', 'comments', 'shares'])
@@ -418,6 +423,8 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
                 throw new BadRequestException('Metrics must be non-negative whole numbers up to 2,147,483,647.');
             data[k] = body[k];
         } if (body.earnings !== undefined) {
+        if (typeof body.earnings !== 'string' && typeof body.earnings !== 'number')
+            throw new BadRequestException('Enter recorded earnings as a decimal amount.');
         const s = String(body.earnings);
         if (!/^\d{1,12}(?:\.\d{1,2})?$/.test(s))
             throw new BadRequestException('Enter recorded earnings with at most two decimal places.');
@@ -427,7 +434,7 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
             throw new BadRequestException('Use a three-letter uppercase currency.');
         data.currency = body.currency;
     } if (body.notes !== undefined)
-        data.notes = text(body.notes); return publicJson(await this.prisma.campaignPost.update({ where: { campaignClipId: id }, data })); }
-    async overview(campaignId?: string) { const all = await this.prisma.campaign.findMany({ where: { userId: campaignOwner(), ...(campaignId ? { id: campaignId } : {}) }, include: { brief: { select: { version: true, confirmedByUser: true } }, clips: { include: { post: true, editProject: { select: { revision: true } } } } } }); const clips = all.flatMap(c => c.clips), posts = clips.flatMap(c => c.post ? [c.post] : []), earningsByCurrency: Record<string, string> = {}; for (const p of posts)
+        data.notes = text(body.notes); return publicJson(postDto(await this.prisma.campaignPost.update({where:{campaignClipId:id},data}))); }
+    async overview(campaignId?: string) { const all = await this.prisma.campaign.findMany({ where: { userId: campaignOwner(), ...(campaignId ? { id: campaignId } : {}) }, select:{id:true,name:true,status:true,brief:{select:{version:true,confirmedByUser:true}},clips:{select:{id:true,lifecycleStatus:true,complianceStatus:true,complianceScore:true,checkedRevision:true,checkedBriefVersion:true,post:{select:{campaignClipId:true,platform:true,postedAt:true,postUrl:true,views:true,likes:true,comments:true,shares:true,earnings:true,currency:true,notes:true,updatedAt:true}},editProject:{select:{revision:true}}}}} }); const clips = all.flatMap(c => c.clips), posts = clips.flatMap(c => c.post ? [c.post] : []), earningsByCurrency: Record<string, string> = {}; for (const p of posts)
         earningsByCurrency[p.currency] = new Prisma.Decimal(earningsByCurrency[p.currency] ?? 0).add(p.earnings).toFixed(2); const totalViews = posts.reduce((n, p) => n + p.views, 0), best = posts.slice().sort((a, b) => b.views - a.views)[0]; return { activeCampaigns: all.filter(c => c.status === 'ACTIVE').length, campaigns: all.length, clipsGenerated: clips.length, ready: all.reduce((n, c) => n + c.clips.filter(x => x.lifecycleStatus === 'READY' && !['FAIL', 'UNKNOWN'].includes(x.complianceStatus) && c.brief?.confirmedByUser && x.checkedBriefVersion === c.brief.version && x.checkedRevision === x.editProject?.revision).length, 0), posted: posts.length, totalViews, totalEngagement: posts.reduce((n, p) => n + p.likes + p.comments + p.shares, 0), earningsByCurrency, averageViews: posts.length ? totalViews / posts.length : null, bestClipId: best?.campaignClipId ?? null, bestCampaign: all.map(c => ({ id: c.id, name: c.name, views: c.clips.reduce((n, x) => n + (x.post?.views ?? 0), 0) })).filter(c => c.views > 0).sort((a, b) => b.views - a.views)[0] ?? null, averageCampaignMatch: clips.length ? clips.reduce((n, c) => n + c.complianceScore, 0) / clips.length : null }; }
 }

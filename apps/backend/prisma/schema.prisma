@@ -67,6 +67,7 @@ model CampaignSource {
   createdAt DateTime @default(now())
   runs CampaignRun[]
   @@unique([campaignId, videoId])
+  @@index([videoId])
 }
 
 model CampaignRun {
@@ -89,6 +90,7 @@ model CampaignRun {
   clips CampaignClip[]
   @@unique([campaignId, requestKey, sourceId])
   @@index([status, createdAt])
+  @@index([sourceId])
 }
 
 model CampaignClip {
@@ -116,6 +118,9 @@ model CampaignClip {
   post CampaignPost?
   @@unique([campaignId, generatedClipId])
   @@index([campaignId, lifecycleStatus, createdAt])
+  @@index([runId])
+  @@index([editProjectId])
+  @@index([generatedClipId])
 }
 
 model CampaignPost {

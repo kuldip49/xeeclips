@@ -1,0 +1,37 @@
+require('reflect-metadata');
+const assert=require('node:assert/strict');
+const {emptyBrief,parseCampaignRules,normalizeBrief,evaluateCampaignCompliance,socialPackage,rankCampaignCandidates}=require('../dist/modules/campaigns/campaign-rules');
+const {CampaignUnderstandingService}=require('../dist/modules/campaigns/campaign-understanding.service');
+const {campaignPage,campaignText,clipDto,runDto}=require('../dist/modules/campaigns/campaign-contract');
+const {CampaignAssetsService}=require('../dist/modules/campaigns/campaign-assets.service');
+const {CampaignExceptionFilter}=require('../dist/modules/campaigns/campaign-exception.filter');
+let checks=0;function check(value,name){assert(value,name);checks++;console.log('PASS '+name);}
+(async()=>{
+ const negative=parseCampaignRules('No music\nNo captions\nNo logo');check(!negative.forbiddenTopics.length&&negative.musicRequirements==='No music','media negation cannot become a forbidden speech topic');
+ const multiline=parseCampaignRules('Hashtags:\n#Arguments #Merits\nMentions:\n@brand @owner');check(multiline.requiredHashtags.length===2&&multiline.requiredMentions.length===2,'multiline hashtags and mentions remain separate requirements');
+ check(parseCampaignRules('Use our logo and promise guaranteed wealth.').unresolvedRules.length>0,'partially classified natural language remains uncertain');
+ check(normalizeBrief({...emptyBrief(),requiredTopics:['politics'],forbiddenTopics:['politics']}).unresolvedRules.length>0,'manual normalization cannot erase contradictory fields');
+ const p={revision:1,settings:{aspectRatio:'9:16'},assets:[{id:'logo',metadata:{campaignAssetId:'brand'}}],elements:[{id:'video',type:'VIDEO',track:0,position:0,startTime:0,duration:25,properties:{}},{id:'logo',type:'IMAGE',assetId:'logo',startTime:0,duration:25,properties:{x:.76,y:.04,width:.2,height:.1125}},{id:'caption',type:'SUBTITLE',startTime:0,duration:25,properties:{content:'Arguments stand on their merits.'}}]};
+ const b={...emptyBrief(),requiredTopics:['arguments'],assetInstructions:[{assetId:'brand',use:'LOGO_TOP_RIGHT',required:true}],logoRequirements:'top-right',captionRequirements:'required'};const social=socialPackage(b,{caption:'Arguments stand on their merits.'});const evaluate=(brief=b,project=p,pack=social)=>evaluateCampaignCompliance(brief,project,'Arguments stand on their merits.',pack,1);
+ let copy=structuredClone(p);copy.elements[1].startTime=40;check(evaluate(b,copy).checks.find(c=>c.code==='LOGO').status==='FAIL','logo outside retained timeline cannot pass');
+ copy=structuredClone(p);copy.elements[2].properties.content='';check(evaluate(b,copy).checks.find(c=>c.code==='CAPTIONS').status==='FAIL','blank subtitle elements cannot certify captions');
+ check(evaluate({...b,captionRequirements:'optional'}).checks.find(c=>c.code==='CAPTIONS').status==='NOT_APPLICABLE','optional captions do not become an invented obligation');
+ check(evaluate({...b,captionRequirements:'No captions'}).checks.find(c=>c.code==='CAPTIONS').status==='FAIL','explicit no-caption rule rejects captions');
+ check(evaluate({...b,requiredKeywords:['missing']}).checks.find(c=>c.code==='REQUIRED_KEYWORD').status==='FAIL','literal missing keyword fails with known speech evidence');
+ check(evaluate({...b,forbiddenKeywords:['guarantee']},p,{...social,caption:'A guarantee'}).checks.find(c=>c.code==='FORBIDDEN_KEYWORD').status==='FAIL','social edits cannot bypass forbidden keyword checks');
+ check(evaluate({...b,requiredMentions:['@brand']},p,{...social,caption:'@brandSpoof'}).checks.find(c=>c.code==='MENTIONS').status==='FAIL','mention prefixes cannot spoof the required account');
+ check(evaluate({...b,requiredCTA:'!!!'}).checks.find(c=>c.code==='CTA').status==='FAIL','punctuation-only CTA is not an automatic text match');
+ copy=structuredClone(p);copy.elements.push({id:'cta',type:'TEXT',startTime:0,duration:25,properties:{content:'Learn more'}});check(evaluate({...b,hookRequirements:'Strong hook'},copy).checks.find(c=>c.code==='HEADLINE').status==='FAIL','CTA alone is not a headline');
+ const pool=[{id:'A',startTime:0,endTime:25,transcriptText:'Arguments stand on their merits.',contentPotential:30},{id:'B',startTime:25,endTime:50,transcriptText:'Cooking vegetables for dinner.',contentPotential:100},{id:'C',startTime:50,endTime:75,transcriptText:'Arguments about politics.',contentPotential:100}];check(rankCampaignCandidates(pool,{mode:'XEEPRO',campaignId:'c',runId:'r',briefVersion:1,brief:{...b,forbiddenTopics:['politics']}},new Map([['A',1],['B',100],['C',100]])).map(c=>c.id).join()==='A','campaign requirements dominate generic viral and Pro relevance scores');
+ for(const input of [{limit:0},{limit:101},{offset:-1},{limit:['1']},{offset:'1e5'}]){assert.throws(()=>campaignPage(input));checks++;}check(campaignPage({limit:'10',offset:'20'}).take===10,'bounded page contract accepts explicit offsets');assert.throws(()=>campaignText(10,'Name',10));checks++;
+ const dto=clipDto({id:'c',campaignId:'campaign',campaign:{name:'Owned'},generatedClip:{bucket:'private',objectKey:'secret',candidate:{title:'Public',transcriptText:'private'},editTelemetry:{provider:'private'},contentPackaging:{}},post:null,socialPackage:social,compliance:{checks:[]}},[]);check(!/private|secret|transcript|bucket|objectKey|candidate/.test(JSON.stringify(dto)),'public clip DTO excludes storage, source evidence and provider internals');
+ check(!JSON.stringify(runDto({error:'OpenAI raw /app/private/key',errorCode:'FAILED',snapshot:{secret:true}})).includes('private'),'legacy raw run failures are sanitized too');
+ const assets=new CampaignAssetsService({},{});check(!/[\x00-\x1f\u202e]/.test(assets.fileName('folder/\u202ebrand\n.png','.png')),'display filenames remove control and bidi characters');
+ check(assets.fileName('x'.repeat(240)+'.PNG','.png').endsWith('.png')&&assets.fileName('x'.repeat(240)+'.PNG','.png').length<=190,'long display filenames preserve the verified extension');
+ check(runDto({errorCode:'OPENAI_PRIVATE_ERROR'}).errorCode==='CAMPAIGN_RUN_FAILED','legacy provider error codes stay private');
+ const filter=new CampaignExceptionFilter();let result;const response={status(code){this.code=code;return this;},json(body){result={status:this.code,...body};return this;}};const host={switchToHttp:()=>({getResponse:()=>response})};
+ filter.catch(new Error('s3://private/key model=private'),host);check(result.status===500&&result.code==='CAMPAIGN_REQUEST_FAILED'&&!JSON.stringify(result).includes('private'),'unexpected storage/provider errors return a clean product response');
+ filter.catch({code:'P2002',message:'private SQL'},host);check(result.status===409&&result.code==='CAMPAIGN_CONFLICT'&&!JSON.stringify(result).includes('SQL'),'raw database errors map to a useful safe conflict');
+ const pro=new CampaignUnderstandingService({isAnyConfigured:()=>true,generate:async()=>({data:{rules:[{field:'requiredTopics',text:'politics',evidence:'politics'}],warnings:[]}})});const interpreted=await pro.understand({mode:'XEEPRO',text:'Forbidden topics: politics',platforms:[],assetLabels:[]});check(interpreted.brief.confidence==='NEEDS_CONFIRMATION','grounded but contradictory Pro output cannot become an explicit clean brief');
+ console.log('CAMPAIGN_HARDENING_CHECKS_PASSED '+checks);
+})().catch(error=>{console.error(error);process.exitCode=1});
