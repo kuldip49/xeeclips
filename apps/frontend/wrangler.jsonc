@@ -17,7 +17,7 @@
     "not_found_handling": "404-page",
     // Browser navigations to a missing file get the 404 page from the asset layer without ever
     // reaching the Worker, so the per-id routes must run the router first.
-    "run_worker_first": ["/edit-mode/*", "/projects/*"]
+    "run_worker_first": ["/edit-mode/*", "/projects/*", "/clippers/campaigns/*"]
   },
   "observability": {
     "enabled": true

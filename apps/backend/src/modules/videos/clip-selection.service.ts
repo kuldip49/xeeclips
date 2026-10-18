@@ -1,6 +1,8 @@
 import { assertNewProcessingMode, assertProviderNotBusy, isXeeProBusyError, runInProviderBusyScope, XEEPRO_BUSY,
   XEEPRO_BUSY_MESSAGE, XeeProBusyError } from '../processing/generation-availability';
 import { isXeeFree } from '../processing/execution-policy';
+import type { CampaignGenerationContext } from '@ai-content-platform/shared';
+import { rankCampaignCandidates } from '../campaigns/campaign-rules';
 import { diversifyOrder } from '../free/free-moments';
 import { UsageService } from '../auth/usage.service';
 import { AUTOMATIC_RAW } from '../editing/raw-edit-plan';
@@ -49,6 +51,8 @@ import {
 
 /** Step 9-12: optional unified-generation inputs. All optional. */
 export type GenerationRequest = {
+  /** Server-created only. Public request parsing never accepts campaign constraints. */
+  campaign?: CampaignGenerationContext;
   templateId: string | null;
   components: Partial<Record<StyleCategory, string>>;
   brief: string;
@@ -117,6 +121,7 @@ export type StoredGenerationSettings = GenerationRequest & {
 
 /** Optional collaborators the Nest service wires in (AI brief reading, styling). */
 export type ClipSelectionHooks = {
+  campaignScores?: (candidates: ClipCandidate[], context: CampaignGenerationContext) => Promise<Map<string,number>|null>;
   interpretBrief?: (brief: string, aiMode: string) => Promise<InterpretedBrief>;
   semanticIntentScores?: (candidates: ClipCandidate[], settings: StoredGenerationSettings,
     aiMode: string) => Promise<Map<string, number> | null>;
@@ -426,7 +431,8 @@ export class ClipSelectionService {
         aiState: String((interpreted.ai as { state?: string }).state ?? 'UNKNOWN') },
       resolved, referenceStyle, key: '' };
     settings.key = JSON.stringify({ t: requestedTemplate, c: generation.components,
-      b: generation.brief, r: generation.referenceId, l: requestedTemplate });
+      b: generation.brief, r: generation.referenceId, l: requestedTemplate,
+      ...(generation.campaign ? {campaign:generation.campaign} : {}) });
     return settings;
   }
 
@@ -592,7 +598,8 @@ export class ClipSelectionService {
    */
   async create(videoId: string, request: ClipCreationRequest) {
     const { video, job } = await this.loadVideo(videoId);
-    assertNewProcessingMode(job?.aiMode);
+    const executionMode=request.generation?.campaign ? (request.generation.campaign.mode==='XEEPRO'?'ONLINE':'FALLBACK_ONLY') : String(jsonObject(job?.telemetry).effectiveAiMode ?? job?.aiMode);
+    assertNewProcessingMode(executionMode);
     if (isVideoTooLong(video.duration)) throw new BadRequestException(VIDEO_TOO_LONG_MESSAGE);
     const maxClipCount = maxClipCountForDuration(video.duration);
     const requestedClipCount = validateRequestedClipCount(request.requestedClipCount, maxClipCount);
@@ -602,7 +609,7 @@ export class ClipSelectionService {
     // is reserved or any state is written; it never continues on the local interpreter under a Pro label.
     const generationSettings = await runInProviderBusyScope(async () => {
       const settings = await this.buildGenerationSettings(request.generation,
-        String(jsonObject(job.telemetry).effectiveAiMode ?? job.aiMode));
+        executionMode);
       assertProviderNotBusy();
       return settings;
     });
@@ -716,7 +723,7 @@ export class ClipSelectionService {
       await this.render(video, job.id, job.requestedClipCount,
         job.maxClipCount ?? maxClipCountForDuration(video.duration), job.outputStyle, update,
         readGenerationSettings(job.generationSettings),
-        String(jsonObject(job.telemetry).effectiveAiMode ?? job.aiMode), request.requestedAt);
+        readGenerationSettings(job.generationSettings)?.campaign ? (readGenerationSettings(job.generationSettings)!.campaign!.mode==='XEEPRO'?'ONLINE':'FALLBACK_ONLY') : String(jsonObject(job.telemetry).effectiveAiMode ?? job.aiMode), request.requestedAt);
       await this.settleRequest(request);
       // Styling runs after delivery, in the editor, on each clip's own project.
       if (this.hooks.afterDelivery) void this.hooks.afterDelivery(request.videoId).catch((error) =>
@@ -743,6 +750,10 @@ export class ClipSelectionService {
     const intent = generation?.interpreted.intent;
     let intentSummary: Record<string, unknown> | null = null;
     const applyIntent = async (pool: ClipCandidate[]) => {
+      if(generation?.campaign){
+        const semantic=await this.hooks.campaignScores?.(pool,generation.campaign);
+        return rankCampaignCandidates(pool,generation.campaign,semantic??undefined);
+      }
       if (!intent || !hasContentIntent(intent)) return pool;
       const semantic = await (this.hooks.semanticIntentScores?.(pool, generation!, aiMode)
         .catch(() => null) ?? null);
@@ -811,6 +822,7 @@ export class ClipSelectionService {
           candidateId: candidate.id, rank: index + 1, workerIndex, stage: 'RENDERING_BASE' }));
         try {
           const exported = await this.exporter.export(video, candidate, { processingType, targetPlatform,
+            ...(generation?.campaign?{campaignMode:generation.campaign.mode}:{}),
             aspectRatio: '9:16', rank: index + 1,
             generationJobId: jobId, templateId: effectiveTemplate ?? undefined,
             generationRequestKey: requestedAt ? `${jobId}:${requestedAt}` : undefined,

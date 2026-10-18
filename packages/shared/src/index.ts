@@ -3,6 +3,7 @@ export type ServiceHealth = {
   status: "ok";
   timestamp: string;
 };
+export * from './campaign.js';
 
 export type ProcessingStage =
   | "uploaded"

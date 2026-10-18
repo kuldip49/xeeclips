@@ -4,6 +4,7 @@
  * prebuilt shell that reads its id from the URL. A rewrite, never a redirect, so the URL stays.
  */
 const SHELLS = [
+  { pattern: /^\/clippers\/campaigns\/(?!new(?:\.txt)?\/?$)[^/]+?(\.txt)?\/?$/u, shell: '/clippers/campaigns/_' },
   { pattern: /^\/edit-mode\/[^/]+?(\.txt)?\/?$/u, shell: '/edit-mode/_' },
   { pattern: /^\/projects\/[^/]+?(\.txt)?\/?$/u, shell: '/projects/_' }
 ];

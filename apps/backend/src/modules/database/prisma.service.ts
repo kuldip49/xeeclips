@@ -22,7 +22,7 @@ export class PrismaService
         for (const item of Object.values(value)) scopeNames(item);
       };
       scopeNames(args);
-      const roots = ['Project', 'EditProject', 'ReferenceAsset', 'SavedStyle', 'EditTemplate'];
+      const roots = ['Project', 'EditProject', 'ReferenceAsset', 'SavedStyle', 'EditTemplate', 'Campaign'];
       if (roots.includes(params.model)) {
         const stamp = (data: any) => { if (data) data.userId = identity.userId; };
         if (params.action === 'create') stamp(args.data);

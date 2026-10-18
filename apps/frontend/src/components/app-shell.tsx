@@ -3,7 +3,7 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { History, ScanLine, Plus, Settings } from 'lucide-react';
+import { History, ScanLine, Plus, Settings, Clapperboard } from 'lucide-react';
 import { BrandMark } from '@/components/brand';
 import { MobileNav } from '@/components/mobile-nav';
 import { cn } from '@/lib/utils';
@@ -12,6 +12,7 @@ import { useAuth } from './auth-provider';
 const links = [
   { label: 'Create', href: '/', icon: Plus },
   { label: 'Quick Reframe', href: '/quick-reframe', icon: ScanLine },
+  { label: 'Clippers', href: '/clippers', icon: Clapperboard },
   { label: 'History', href: '/history', icon: History },
   { label: 'Settings', href: '/settings', icon: Settings }
 ];
@@ -20,7 +21,7 @@ export function AppShell({ children }: { children: ReactNode; title?: string; ba
   backLabel?: string; action?: ReactNode }) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
-  const navigation = user?.role === 'ADMIN' ? [...links.slice(0, 3), { label: 'Admin', href: '/admin', icon: Settings }, links[3]] : links;
+  const navigation = user?.role === 'ADMIN' ? [...links.slice(0, -1), { label: 'Admin', href: '/admin', icon: Settings }, links.at(-1)!] : links;
   return <div className='min-h-screen overflow-x-clip bg-background text-foreground'>
     <header className='pt-safe sticky top-0 z-30 border-b border-border bg-background/85 backdrop-blur-xl'>
       <div className='mx-auto flex h-16 max-w-[1200px] items-center justify-between gap-2 px-4 sm:px-6 lg:gap-5 lg:px-8'>
@@ -29,6 +30,7 @@ export function AppShell({ children }: { children: ReactNode; title?: string; ba
         </Link>
         <Link href='/quick-reframe' aria-current={pathname.startsWith('/quick-reframe')?'page':undefined}
           aria-label='Quick Reframe' className={cn('inline-flex min-h-11 items-center gap-2 rounded-xl px-3 text-xs font-semibold md:hidden',pathname.startsWith('/quick-reframe')?'bg-primary/15 text-primary-soft':'bg-tint text-soft')}><ScanLine size={16}/><span className='hidden sm:inline'>Quick Reframe</span></Link>
+        <Link href='/clippers' aria-label='Clippers' aria-current={pathname.startsWith('/clippers')?'page':undefined} className={cn('inline-flex min-h-11 shrink-0 flex-col items-center justify-center gap-0.5 rounded-xl px-2 text-[9px] font-semibold md:hidden',pathname.startsWith('/clippers')?'bg-primary/15 text-primary-soft':'text-soft')}><Clapperboard size={16}/>Clippers</Link>
         <nav aria-label='Main navigation' className='hidden items-center gap-1 md:flex'>
           {navigation.map(({ label, href, icon: Icon }) => {
             const active = href === '/' ? pathname === '/' || pathname.startsWith('/create') : pathname.startsWith(href);

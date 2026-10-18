@@ -1,4 +1,5 @@
 import { assertNewProcessingMode } from '../processing/generation-availability';
+import { campaignSemanticScores } from '../campaigns/campaign-understanding.service';
 import { UsageService } from '../auth/usage.service';
 import { ModuleRef } from '@nestjs/core';
 import { LlmRouterService } from '../processing/llm-router.service';
@@ -139,6 +140,7 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
     // Steps 9-12: the unified-generation collaborators. Each is optional, so the
     // selection engine still runs (deterministically) in scripts and tests.
     this.clipSelection = new ClipSelectionService(prisma, clipExporter, clipRenderQueue, {
+      campaignScores: (pool,context)=>campaignSemanticScores(this.llm,pool,context),
       interpretBrief: async (brief, aiMode) => interpretBrief({ brief,
         llm: aiMode === 'ONLINE' ? this.llm ?? null : null, logger: this.logger, aiMode }),
       semanticIntentScores: async (candidates, settings, aiMode) => aiMode === 'ONLINE' && this.llm

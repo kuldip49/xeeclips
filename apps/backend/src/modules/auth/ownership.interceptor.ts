@@ -12,6 +12,10 @@ export class OwnershipInterceptor implements NestInterceptor {
     if (!requestIdentity.getStore()?.userId || requestIdentity.getStore()?.adminView) return;
     const mapping: Record<string, string> = { projectId: 'project', sourceProjectId: 'project', videoId: 'video', sourceVideoId: 'video', originalVideoId: 'video', clipId: 'generatedClip', generatedClipId: 'generatedClip', candidateId: 'clipCandidate', editProjectId: 'editProject', fromProjectId: 'editProject', assetId: 'editAsset', elementId: 'editElement', fromElementId: 'editElement', referenceId: 'referenceAsset', styleId: 'savedStyle', templateId: 'editTemplate' };
     const path = req.path as string;
+    if(path.startsWith('/campaigns')||path.startsWith('/campaign-clips')){
+      mapping.campaignId='campaign';mapping.assetId='campaignAsset';mapping.assetKey='campaignAsset';mapping.sourceId='campaignSource';
+      if(req.params.id)mapping.id=path.startsWith('/campaign-clips')?'campaignClip':'campaign';
+    }
     if (req.params.id) {
       if (path.startsWith('/edit-mode/projects/')) mapping.id = 'editProject';
       else if (path.startsWith('/quick-reframe/') && !path.includes('/uploads/')) mapping.id = 'quickReframe';

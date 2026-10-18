@@ -7,9 +7,10 @@ import { VideosModule } from "../videos/videos.module";
 import { EditModeModule } from "../edit-mode/edit-mode.module";
 import { QuickReframeModule } from '../quick-reframe/quick-reframe.module';
 import { AuthModule } from '../auth/auth.module';
+import { CampaignsModule } from '../campaigns/campaigns.module';
 
 @Module({
   imports: [DatabaseModule, AuthModule, HealthModule, ProjectsModule, ProcessingModule, VideosModule,
-    EditModeModule, QuickReframeModule]
+    EditModeModule, QuickReframeModule, CampaignsModule]
 })
 export class AppModule {}

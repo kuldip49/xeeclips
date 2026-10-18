@@ -212,7 +212,8 @@ async function testJudgeFallbackAndStrictRequest(candidates) {
   const router={isAnyConfigured:()=>true,async generate(input){calls++;
     const supplied=JSON.parse(input.request.userPrompt);
     assert(!JSON.stringify(supplied).includes('apiKey'));
-    const data=input.role==='clipUnderstanding'?{}:input.role==='critic'?{supported:true,failures:[]}:deterministicCreative(supplied.evidence);
+    const data=input.role==='clipUnderstanding'?{}:input.role==='critic'?require('./fixtures/hook-review.cjs')(input):deterministicCreative(supplied.evidence);
+    if(input.role!=='clipUnderstanding'&&input.role!=='critic')data.hashtagSets=['Focused','Niche','Broad'].map(label=>({label,hashtags:['#Approval','#Boundaries','#Decision','#Requests','#Disagreement']}));
     return{data,metadata:{role:input.role,model:'configured-test-model',provider:'test',cacheHit:false,attempts:[]}};
   }};
   const input=candidates.slice(0,2).map((c,i)=>({...c,videoId:'candidate-shared-test-'+i,transcriptText:transcript,clipUnderstanding:undefined}));
@@ -236,7 +237,9 @@ async function testJudgeFallbackAndStrictRequest(candidates) {
     });
     const unavailable=new OpenAiClipJudgeService({isAnyConfigured:()=>true,generate:async()=>{throw Error('unavailable');}});
     const fallback=await unavailable.judgeCandidates(input.map(c=>({...c,videoId:c.videoId+'-offline'})));
-    assert(fallback.every(c=>c.generationStatus==='FALLBACK' && c.fallbackUsed && c.bestHook && c.synopsis));
+    assert(fallback.every(c=>c.generationStatus==='FALLBACK' && c.fallbackUsed));
+    assert(fallback.every(c=>c.creativeCandidates.sharedPackage.status==='NEEDS_REVIEW'),
+      'an unavailable provider cannot certify creative copy that failed the local quality gate');
     assert(fallback.every(c=>c.creativeCandidates.sharedPackage.internal.routes.length===0));
     assert(fallback.every(c=>c.creativeCandidates.sharedPackage.hooks.every(h=>h.source==='LOCAL')),'unavailable provider uses grounded local hooks');
   });
@@ -304,10 +307,14 @@ async function testSelectionAndApi(candidates) {
 }
 
 async function testExportRetryIsIdempotent(candidates) {
+  const sentence='The experiment showed that the cooling system kept the equipment stable throughout the complete test.';
+  const tokens=sentence.split(' '),words=tokens.map((text,i)=>({text,start:2+16*i/tokens.length,end:2+16*(i+1)/tokens.length,confidence:.95}));
+  words.at(-1).tailPass={version:1,acousticsVersion:2,windowStart:10,windowEnd:20,finalWordEnd:18,words:words.map(w=>({...w})),acoustics:{stopped:true,speechContinues:false,audioEndsMs:2000,postSilenceMs:2000,eof:'TRAILING_SILENCE'}};
+  const candidate={...candidates[0],startTime:2,endTime:17,transcriptText:sentence};
   const persisted = { id: 'existing-clip', sizeBytes: 1000n, processingType: 'NORMAL_CLIPS',
     aspectRatio: '9:16', width: 1080, height: 1920 };
   let lookupCount = 0;
-  const prisma = { video:{findUniqueOrThrow:async()=>({transcript:null})},generatedClip: { findUnique: async (query) => {
+  const prisma = { processingJob:{findFirst:async()=>null},video:{findUniqueOrThrow:async()=>({transcript:{segments:[{start:2,end:18,text:sentence,words}]}})},generatedClip: { findUnique: async (query) => {
     if(query.where.objectKey)return null;
     lookupCount += 1;
     assert.deepEqual(query.where.videoId_rangeKey_variantKey, { videoId: 'long-video',
@@ -318,7 +325,7 @@ async function testExportRetryIsIdempotent(candidates) {
     throw new Error('an existing export must not download or invoke FFmpeg');
   } };
   const exporter = new ClipExportService(prisma, storage);
-  const result = await exporter.export({ id: 'long-video' }, candidates[0],
+  const result = await exporter.export({ id: 'long-video',duration:20 }, candidate,
     { processingType: 'NORMAL_CLIPS', targetPlatform: 'TIKTOK', aspectRatio: '9:16' });
   assert.equal(result, persisted);
   assert.equal(lookupCount, 1);

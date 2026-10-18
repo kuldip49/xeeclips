@@ -2,6 +2,138 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Clipper Workspace is an ownership-scoped workflow over existing media and editor records.
+model Campaign {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  projectId String @unique
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  name String
+  description String @default("")
+  status String @default("DRAFT")
+  platforms String[] @default([])
+  payoutDescription String @default("")
+  deadline DateTime?
+  defaultClipCount Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  brief CampaignBrief?
+  assets CampaignAsset[]
+  sources CampaignSource[]
+  runs CampaignRun[]
+  clips CampaignClip[]
+  @@index([userId, status, createdAt])
+}
+
+model CampaignBrief {
+  campaignId String @id
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  version Int @default(1)
+  sourceText String @default("")
+  data Json
+  mode String @default("XEEFREE")
+  confirmedByUser Boolean @default(false)
+  confirmedAt DateTime?
+  updatedAt DateTime @updatedAt
+}
+
+model CampaignAsset {
+  id String @id @default(uuid())
+  campaignId String
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  type String
+  fileName String
+  mimeType String
+  bucket String
+  storageKey String @unique
+  sizeBytes BigInt
+  label String @default("")
+  required Boolean @default(false)
+  intendedUse String @default("")
+  extractedText String @default("")
+  metadata Json
+  uploadedAt DateTime @default(now())
+  @@index([campaignId, type])
+}
+
+model CampaignSource {
+  id String @id @default(uuid())
+  campaignId String
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  videoId String
+  video Video @relation(fields: [videoId], references: [id], onDelete: Restrict)
+  ownershipNote String @default("")
+  createdAt DateTime @default(now())
+  runs CampaignRun[]
+  @@unique([campaignId, videoId])
+}
+
+model CampaignRun {
+  id String @id @default(uuid())
+  campaignId String
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  sourceId String
+  source CampaignSource @relation(fields: [sourceId], references: [id], onDelete: Restrict)
+  requestKey String
+  mode String
+  style String
+  requestedClipCount Int
+  briefVersion Int
+  snapshot Json
+  status String @default("QUEUED")
+  error String?
+  errorCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  clips CampaignClip[]
+  @@unique([campaignId, requestKey, sourceId])
+  @@index([status, createdAt])
+}
+
+model CampaignClip {
+  id String @id @default(uuid())
+  campaignId String
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  runId String
+  run CampaignRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  generatedClipId String?
+  generatedClip GeneratedClip? @relation(fields: [generatedClipId], references: [id], onDelete: SetNull)
+  editProjectId String?
+  editProject EditProject? @relation(fields: [editProjectId], references: [id], onDelete: SetNull)
+  mode String
+  style String
+  compliance Json
+  complianceScore Int @default(0)
+  complianceStatus String @default("UNKNOWN")
+  checkedRevision Int @default(-1)
+  checkedBriefVersion Int @default(0)
+  lifecycleStatus String @default("NEEDS_REVIEW")
+  brandingApplied Boolean @default(false)
+  socialPackage Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  post CampaignPost?
+  @@unique([campaignId, generatedClipId])
+  @@index([campaignId, lifecycleStatus, createdAt])
+}
+
+model CampaignPost {
+  campaignClipId String @id
+  campaignClip CampaignClip @relation(fields: [campaignClipId], references: [id], onDelete: Cascade)
+  platform String
+  postedAt DateTime @default(now())
+  postUrl String @default("")
+  views Int @default(0)
+  likes Int @default(0)
+  comments Int @default(0)
+  shares Int @default(0)
+  earnings Decimal @default(0) @db.Decimal(14, 2)
+  currency String @default("USD")
+  notes String @default("")
+  updatedAt DateTime @updatedAt
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
@@ -50,6 +182,7 @@ model User {
   references ReferenceAsset[]
   styles SavedStyle[]
   templates EditTemplate[]
+  campaigns Campaign[]
   @@index([createdAt])
 }
 model Session {
@@ -101,6 +234,7 @@ model AuditLog {
 }
 
 model Project {
+  campaign Campaign?
   userId String?
   user User? @relation(fields: [userId], references: [id], onDelete: Restrict)
   @@index([userId, createdAt])
@@ -114,6 +248,7 @@ model Project {
 }
 
 model Video {
+  campaignSources CampaignSource[]
   id               String                 @id @default(uuid())
   projectId        String
   project          Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -484,6 +619,7 @@ model ClipCandidate {
 }
 
 model GeneratedClip {
+  campaignClips CampaignClip[]
   id                 String          @id @default(uuid())
   videoId            String
   video              Video           @relation(fields: [videoId], references: [id], onDelete: Cascade)
@@ -625,6 +761,7 @@ enum EditHistoryActor {
 }
 
 model EditProject {
+  campaignClips CampaignClip[]
   userId String?
   user User? @relation(fields: [userId], references: [id], onDelete: Restrict)
   @@index([userId, createdAt])

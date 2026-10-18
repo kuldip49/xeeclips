@@ -42,6 +42,8 @@ import { detectSponsorSegment } from '../editing/sponsor-segment';
 import { probeMedia } from '../processing/media-probe';
 
 export type ClipExportOptions = {
+  /** Server-owned campaign request mode; never accepted by public clip-selection parsing. */
+  campaignMode?: 'XEEFREE' | 'XEEPRO';
   processingType: ProcessingType;
   aspectRatio?: OutputAspectRatio;
   targetPlatform?: TargetPlatform | null;
@@ -288,8 +290,12 @@ export class ClipExportService {
       select: { transcript: { include: { segments: { orderBy: { position: 'asc' } } } } } });
     const boundaryWords = transcriptBoundaryWords(transcriptContext.transcript?.segments ?? []);
     let cachedJob: ProcessingJob | null | undefined;
-    const latestJob = async () => cachedJob !== undefined ? cachedJob : (cachedJob = await this.prisma.processingJob
-      .findFirst({ where: { videoId: video.id }, orderBy: { createdAt: 'desc' } }));
+    const latestJob = async () => {
+      if(cachedJob!==undefined)return cachedJob;
+      const job=await this.prisma.processingJob.findFirst({where:{videoId:video.id},orderBy:{createdAt:'desc'}});
+      cachedJob=job&&options?.campaignMode?{...job,aiMode:normalizeAiProcessingMode(options.campaignMode==='XEEPRO'?'ONLINE':'FALLBACK_ONLY') as ProcessingJob['aiMode']}:job;
+      return cachedJob;
+    };
     const boundaryMode = normalizeAiProcessingMode((await latestJob())?.aiMode ?? AiProcessingMode.FALLBACK_ONLY);
     // Same bounded, cached tail checks as analysis. Anything stored there is reused; a fill candidate that never had one gets it now.
     const storedSegments = transcriptContext.transcript?.segments ?? [];
@@ -363,7 +369,7 @@ export class ClipExportService {
         await this.storage.downloadToFile(video.bucket, video.objectKey, sourcePath);
       const sourcePreparationMs = options?.preparedSourcePath ? 0 : Date.now() - sourcePreparationStarted;
       const job = await latestJob();
-      if (normalize(originalTranscript ?? '') !== normalize(candidate.transcriptText ?? '') ||
+      if (options?.campaignMode || normalize(originalTranscript ?? '') !== normalize(candidate.transcriptText ?? '') ||
         !(candidate.creativeCandidates as unknown as {sharedPackage?:CreativePackage}|null)?.sharedPackage) {
         const mode = normalizeAiProcessingMode(job?.aiMode ?? AiProcessingMode.FALLBACK_ONLY);
         const packaging = await performanceContext.run(createPerformanceTelemetry(mode), () => this.contentPackager.create({
@@ -428,6 +434,12 @@ export class ClipExportService {
         }
       }
       const storageMs = Date.now() - storageStarted;
+      // Source analysis can be reused across campaign modes. Persist the render's
+      // selected mode so History and the canonical editor inherit the correct tier.
+      if (options?.campaignMode) editTelemetry = {
+        ...(editTelemetry && typeof editTelemetry === 'object' && !Array.isArray(editTelemetry) ? editTelemetry : {}),
+        effectiveAiMode: job!.aiMode, requestedAiMode: job!.aiMode
+      };
       if (editTelemetry && typeof editTelemetry === 'object' && !Array.isArray(editTelemetry))
         Object.assign(editTelemetry, { sourcePreparationMs,
           sourceCacheHit: Boolean(options?.preparedSourcePath), storageMs,

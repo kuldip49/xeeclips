@@ -44,7 +44,7 @@ export class SecurityGuard implements CanActivate {
     }
     if (req.method === 'POST') assertNewProcessingMode(req.body?.aiMode);
     const submission = req.method === 'POST' && /clip-selection|\/export$|\/retry$|\/import|\/analyze$|\/hooks$|\/post-copy$|\/styleone$|\/agent\/run|\/chat\/plan|\/creative\/resolve|\/review|\/brief/.test(path);
-    if (submission) await this.limit('submit:' + user.id, 30, 60);
+    if (submission || req.method === 'POST' && /^\/campaigns\/[^/]+\/(generate|understand)$/.test(path)) await this.limit('submit:' + user.id, 30, 60);
     // Avoid uploads/import downloads when the definitive current balance is already zero.
     if (user.role !== 'ADMIN' && user.creditBalance <= 0 && req.method === 'POST' &&
       (/^\/videos\/[^/]+\/clip-selection$/.test(path) || /^\/quick-reframe\/[^/]+\/export$/.test(path) ||
@@ -52,8 +52,9 @@ export class SecurityGuard implements CanActivate {
       Logger.warn('generation_blocked_no_credits', 'Security');
       throw new ForbiddenException({ code: 'NO_CREDITS', message: 'No generations remaining.' });
     }
-    const askAi = /\/agent\/run|\/chat\/(plan|apply)|\/review(\/propose)?$|\/brief/.test(path) || path.endsWith('/creative/resolve') && req.body?.useAi === true
-      || /\/(post-copy|hooks)$/.test(path) && req.body?.externalAiAuthorized === true;
+    // Campaign endpoints enforce consent against their explicit saved/requested product mode.
+    const askAi = !path.startsWith('/campaigns/') && (/\/agent\/run|\/chat\/(plan|apply)|\/review(\/propose)?$|\/brief/.test(path) || path.endsWith('/creative/resolve') && req.body?.useAi === true
+      || /\/(post-copy|hooks)$/.test(path) && req.body?.externalAiAuthorized === true);
     if (askAi && isXeeProEnabled() && !user.aiProcessingConsentAt) {
       const editId = /^\/edit-mode\/projects\/([^/]+)\//.exec(path)?.[1];
       const reframeId = /^\/quick-reframe\/([^/]+)\/(hooks|post-copy)$/.exec(path)?.[1];

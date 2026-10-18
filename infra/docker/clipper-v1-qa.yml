@@ -1,0 +1,72 @@
+# Dedicated disposable database/storage/network. Never point this stack at production volumes.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_PASSWORD: disposable-clipper-qa
+      POSTGRES_DB: clipper_v1_qa
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U postgres -d clipper_v1_qa]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+  minio:
+    image: minio/minio:latest
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: clipperqa
+      MINIO_ROOT_PASSWORD: disposable-clipper-qa
+  ai-service:
+    image: ai-content-platform-ai-service:latest
+    environment:
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ROOT_USER: clipperqa
+      MINIO_ROOT_PASSWORD: disposable-clipper-qa
+      WHISPER_MODEL_PATH: /models/whisper-base
+      WHISPER_TAIL_MODEL_PATH: /models/whisper-medium
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: int8
+      HF_HUB_OFFLINE: 1
+      TRANSFORMERS_OFFLINE: 1
+      VISUAL_MODEL_DIR: /models/visual
+      VISUAL_OCR_ENABLED: 'false'
+      VISUAL_YOLO_ENABLED: 'false'
+    volumes:
+      - ../../models:/models:ro
+  backend:
+    image: xeeclip-backend:clipper-v1-qa
+    command: [sh, -c, 'npm run db:migrate && node -r ./scripts/campaign-qa-provider.cjs dist/main.js']
+    ports:
+      - 127.0.0.1:4200:4000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:disposable-clipper-qa@postgres:5432/clipper_v1_qa
+      REDIS_URL: redis://redis:6379
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_ROOT_USER: clipperqa
+      MINIO_ROOT_PASSWORD: disposable-clipper-qa
+      MINIO_BUCKET: clipper-v1-qa
+      AI_SERVICE_URL: http://ai-service:8000
+      FRONTEND_ORIGIN: http://localhost:3200,http://127.0.0.1:3200
+      PASSWORD_HASH_PEPPER: disposable-clipper-v1-qa-pepper-20261017
+      XEEPRO_ENABLED: 'true'
+      OPENAI_ENABLED: 'true'
+      OPENAI_API_KEY: synthetic-qa-key
+      EDIT_MODE_CHAT_AI_MODE: ONLINE
+      QUICK_REFRAME_QA: '1'
+      QUICK_REFRAME_QA_STATE: /qa/provider-state.json
+      CLIPPER_QA: '1'
+      GENERATION_STYLING_RECOVERY: 'false'
+    volumes:
+      - ../../apps/backend/dist:/app/apps/backend/dist:ro
+      - ../../apps/backend/scripts:/app/apps/backend/scripts:ro
+      - ../../packages/shared:/app/packages/shared:ro
+      - ../../.cache/clippers/qa:/qa
