@@ -17,9 +17,10 @@ const links = [
   { label: 'Settings', href: '/settings', icon: Settings }
 ];
 
-export function AppShell({ children }: { children: ReactNode; title?: string; backHref?: string;
+export function AppShell({ children, navigationPath }: { children: ReactNode; navigationPath?:string; title?: string; backHref?: string;
   backLabel?: string; action?: ReactNode }) {
-  const pathname = usePathname();
+  const routePath = usePathname();
+  const pathname = navigationPath??routePath;
   const { user, logout } = useAuth();
   const navigation = user?.role === 'ADMIN' ? [...links.slice(0, -1), { label: 'Admin', href: '/admin', icon: Settings }, links.at(-1)!] : links;
   return <div className='min-h-screen overflow-x-clip bg-background text-foreground'>
@@ -44,6 +45,6 @@ export function AppShell({ children }: { children: ReactNode; title?: string; ba
       </div>
     </header>
     <main className='page-enter pb-mobile-nav mx-auto min-w-0 max-w-[1200px] px-4 pt-7 sm:px-6 md:pt-10 lg:px-8'>{children}</main>
-    <MobileNav />
+    <MobileNav navigationPath={pathname}/>
   </div>;
 }

@@ -77,12 +77,13 @@ export function EditTopBar({ projectName, revision, busy, exportPhase, uploadPer
   /** A workflow strip under the bar (Quick Reframe's step indicator). */
   below?: ReactNode;
 }) {
+  const BackLink=back.href.startsWith('/clippers/')?'a':Link;
   return <header className='pt-safe shrink-0 border-b border-border bg-surface'>
     <div className='flex h-12 items-center gap-2 px-1.5 sm:gap-3 sm:px-3'>
-    <Link href={back.href} aria-label={`Back to ${back.label}`}
+    <BackLink href={back.href} aria-label={`Back to ${back.label}`}
       className='flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-soft hover:bg-tint-strong max-md:h-11 max-md:w-11 max-md:justify-center max-md:rounded-full max-md:p-0'>
       <ArrowLeft size={15} className='max-md:h-5 max-md:w-5' /><span className='hidden md:inline'>{back.label}</span>
-    </Link>
+    </BackLink>
     <span className='hidden h-5 w-px shrink-0 bg-tint-strong sm:block' />
     <h1 className='min-w-0 flex-1 truncate text-sm font-semibold tracking-tight'>{title}</h1>
     <SaveStatus busy={busy} exportPhase={exportPhase} revision={revision} uploadPercent={uploadPercent} />

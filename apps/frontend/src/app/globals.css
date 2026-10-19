@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Keep campaign controls comfortably tappable without changing the editor or other flows. */
+.clipper-workspace button, .clipper-workspace summary { min-height: 44px; }
+
 /*
  * XeeClip design tokens.
  *

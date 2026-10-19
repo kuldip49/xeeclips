@@ -13,8 +13,9 @@ const tabs = [
   { label: 'Settings', href: '/settings', icon: Settings, match: (path: string) => path.startsWith('/settings') }
 ];
 
-export function MobileNav() {
-  const pathname = usePathname();
+export function MobileNav({navigationPath}:{navigationPath?:string}={}) {
+  const routePath = usePathname();
+  const pathname = navigationPath??routePath;
   const typing = useTypingFlag();
   return <nav aria-label='Mobile navigation' data-testid='mobile-nav' aria-hidden={typing || undefined}
     className={cn('px-safe fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/85 pb-safe backdrop-blur-xl transition-transform md:hidden',

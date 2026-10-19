@@ -14,10 +14,10 @@
     "directory": "out",
     "binding": "ASSETS",
     "html_handling": "auto-trailing-slash",
-    "not_found_handling": "404-page",
-    // Browser navigations to a missing file get the 404 page from the asset layer without ever
-    // reaching the Worker, so the per-id routes must run the router first.
-    "run_worker_first": ["/edit-mode/*", "/projects/*", "/clippers/campaigns/*"]
+    "not_found_handling": "single-page-application",
+    // Campaign navigations use the asset SPA fallback. Legacy editor/project paths still use
+    // their existing static-shell router. Clippers does not need that runtime.
+    "run_worker_first": ["/edit-mode/*", "/projects/*"]
   },
   "observability": {
     "enabled": true

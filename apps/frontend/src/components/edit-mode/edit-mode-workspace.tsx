@@ -59,6 +59,8 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
 }) {
   const router = useRouter();
   const [reframe, setReframe] = useState(quickReframe);
+  const [campaignBack,setCampaignBack]=useState<{href:string;label:string}|undefined>();
+  useEffect(()=>{try{const saved=JSON.parse(sessionStorage.getItem('xeeclip-campaign-return')||'null');if(saved?.project===initialProject.id&&typeof saved.campaign==='string'&&/^[a-zA-Z0-9_-]+$/.test(saved.campaign))setCampaignBack({href:'/clippers/campaigns/'+encodeURIComponent(saved.campaign)+'?tab=Generated%20Clips',label:'Campaign'});}catch{}},[initialProject.id]);
   const [project, setProjectState] = useState(initialProject);
   const projectRef = useRef(initialProject);
   const savedElements = useRef(initialProject.elements ?? []);
@@ -699,7 +701,7 @@ export function EditModeWorkspace({ initialProject, initialHistory, initialRight
       exportDisabled={!source || !!busy}
       {...(reframe ? { back: { href: quickReframeUrl(reframe.id, 'result'), label: 'Result' }, title: `Quick Reframe · ${reframe.mode === 'XEEPRO' ? 'XeePro' : 'XeeFree'}`,
         below: <StepIndicator className='border-t border-border px-1.5 py-1 sm:px-3' active='edit'
-          reachable={(step) => step !== 'edit'} onSelect={(step) => router.push(quickReframeUrl(reframe.id, step))} /> } : {})} />
+          reachable={(step) => step !== 'edit'} onSelect={(step) => router.push(quickReframeUrl(reframe.id, step))} /> } : {back:campaignBack})} />
 
     {busy === 'upload' && musicUploadPercent !== null && <div role='status'
       className='shrink-0 border-b border-border bg-surface px-4 py-1.5 text-xs text-soft md:hidden'>
