@@ -74,6 +74,9 @@ async function main() {
   assert.equal((await req('/generated-clips/' + cb.id + '/file', a.cookie)).status, 404); assert.equal((await req('/generated-clips/' + cb.id, a.cookie, 'DELETE')).status, 404);
   assert.equal((await req('/history/clips', a.cookie)).body.length, 1); assert.equal((await req('/history/clips', b.cookie)).body[0].id, cb.id);
   const download = await fetch(base + '/generated-clips/' + ca.id + '/file?download=1', { headers: { Cookie: a.cookie, Origin: origin } }); assert.equal(download.status, 200); await download.arrayBuffer();
+  const noLocators=value=>!value||typeof value!=='object'||Object.entries(value).every(([key,item])=>!['bucket','objectKey','storageKey','storageObjectKey','audioBucket','audioObjectKey','thumbnailObjectKey','passwordHash','tokenHash'].includes(key)&&noLocators(item));
+  for(const route of ['/videos','/videos/'+va.id+'/generated-clips','/edit-mode/projects/'+ea.body.id]){const response=await req(route,a.cookie);assert.equal(response.status,200,route);assert(noLocators(response.body),route+' exposes private storage/auth fields');}
+  passed('HTTP media/editor responses omit private locators while authenticated streams remain usable');
   assert.equal((await req('/auth/session', a.cookie)).body.creditBalance, 5);
   const anonymousStorage = await fetch((process.env.TEST_MINIO_ORIGIN || 'http://localhost:9000') + '/' + process.env.MINIO_BUCKET + '/' + ca.objectKey); assert.equal(anonymousStorage.status, 403);
   passed('owned byte-range playback, private MinIO, reciprocal History and free downloads');

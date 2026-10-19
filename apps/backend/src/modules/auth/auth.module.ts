@@ -1,12 +1,14 @@
 import { Global, Module } from '@nestjs/common';
-import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { OwnershipInterceptor } from './ownership.interceptor';
+import { PublicResponseInterceptor } from './public-response.interceptor';
+import { PublicExceptionFilter } from './public-exception.filter';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { SecurityGuard } from './security.guard';
 import { UsageService } from './usage.service';
 import { AdminController } from './admin.controller';
 @Global()
-@Module({ providers: [AuthService, UsageService, { provide: APP_GUARD, useClass: SecurityGuard }, { provide: APP_INTERCEPTOR, useClass: OwnershipInterceptor }],
+@Module({ providers: [AuthService, UsageService, { provide: APP_GUARD, useClass: SecurityGuard }, { provide: APP_INTERCEPTOR, useClass: OwnershipInterceptor }, { provide: APP_INTERCEPTOR, useClass: PublicResponseInterceptor }, { provide: APP_FILTER, useClass: PublicExceptionFilter }],
   controllers: [AuthController, AdminController], exports: [AuthService, UsageService] })
 export class AuthModule {}
