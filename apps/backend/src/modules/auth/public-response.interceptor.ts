@@ -9,7 +9,7 @@ const privateFields = new Set(['bucket', 'objectKey', 'storageKey', 'storageObje
 export function publicErrorMessage(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(publicErrorMessage);
   if (typeof value !== 'string') return value;
-  return /prisma|ffmpeg|ffprobe|libav\w*|stack\s*trace|\n\s+at\s|s3:\/\/|storage[ _-]?key|object[ _-]?key|openai|anthropic|gemini|nemotron|gpt-\d|provider\s*[:={]|"(?:model|provider|error)"\s*:/i.test(value)
+  return /^The export render failed\b|^The exported file did not pass EditMode QA\b|prisma|ffmpeg|ffprobe|libav\w*|stack\s*trace|\n\s+at\s|s3:\/\/|storage[ _-]?key|object[ _-]?key|openai|anthropic|gemini|nemotron|gpt-\d|provider\s*[:={]|"(?:model|provider|error)"\s*:/i.test(value)
     ? 'Processing could not finish. Please try again.' : value;
 }
 

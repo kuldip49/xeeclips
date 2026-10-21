@@ -12,6 +12,8 @@ assert(!JSON.stringify(projected).includes('secret'));assert(!JSON.stringify(pro
 assert.equal(data.assets[0].objectKey,'secret','Internal render data must remain unchanged');
 function response(error){let status,body;const res={status(n){status=n;return this;},json(b){body=b;return this;}};new PublicExceptionFilter().catch(error,{switchToHttp:()=>({getResponse:()=>res})});return{status,body};}
 assert.equal(response(new BadRequestException('FFmpeg failed: s3://private/key')).body.message,'Processing could not finish. Please try again.');
+assert.equal(publicResponse({phase:'FAILED',errorCode:'RENDER_FAILED',message:'The export render failed. [Parsed_overlay_1 @ 0x123] Error reinitializing filters'}).message,'Processing could not finish. Please try again.');
+assert.equal(publicResponse({error:'The exported file did not pass EditMode QA: internal_frame_geometry'}).error,'Processing could not finish. Please try again.');
 assert.equal(response(new BadRequestException('Choose a valid video.')).body.message,'Choose a valid video.');
 assert.deepEqual(response(new HttpException({code:'XEEPRO_BUSY',message:'provider JSON'},503)),{status:503,body:{statusCode:503,code:'XEEPRO_BUSY',message:'XeePro is busy right now. Try XeeFree or try again later.'}});
 assert.equal(response(new HttpException({code:'NO_CREDITS',message:'No generations remaining.'},403)).body.code,'NO_CREDITS');
