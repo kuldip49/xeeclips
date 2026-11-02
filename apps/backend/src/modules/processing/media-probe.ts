@@ -31,7 +31,7 @@ export const MEDIA_ERROR_MESSAGES: Record<MediaErrorCode, string> = {
     'The uploaded video could not be read back correctly from storage. You can retry; if it ' +
     'keeps failing, re-upload the source file.',
   VIDEO_TOO_LONG:
-    'This video is longer than the 2-hour limit. Please upload a video shorter than 2 hours.'
+    'This video is longer than the 3-hour limit. Please upload a video up to 3 hours.'
 };
 
 // A media failure is retryable only when a fresh attempt against the *same* stored object could

@@ -92,8 +92,8 @@ export const MEDIA_ERROR_UI_MESSAGES: Record<MediaErrorCode, { title: string; de
       'if it keeps failing, re-upload the source file.'
   },
   VIDEO_TOO_LONG: {
-    title: 'This video is longer than the 2-hour limit.',
-    description: 'Please upload a video shorter than 2 hours.'
+    title: 'This video is longer than the 3-hour limit.',
+    description: 'Please upload a video up to 3 hours.'
   }
 };
 

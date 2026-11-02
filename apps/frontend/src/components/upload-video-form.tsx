@@ -16,7 +16,7 @@ import { clipDuration, formatBytes } from '@/lib/format';
 import { isServerUnavailable } from '@/lib/use-backend-status';
 import { cn } from '@/lib/utils';
 
-const MAX_VIDEO_SECONDS = 7200;
+const MAX_VIDEO_SECONDS = 3 * 60 * 60;
 const YOUTUBE_LINK = /^https:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?|shorts\/)|youtu\.be\/)/i;
 const YOUTUBE_ID = /(?:[?&]v=|youtu\.be\/|shorts\/)([\w-]{6,})/i;
 const FALLBACK_HINT = 'You can upload the video file instead.';
@@ -164,7 +164,7 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
     if (!file) { setError({ message: 'Select a video to upload.', fallback: false }); return false; }
     const duration = await readDuration(file);
     if (duration != null && duration > MAX_VIDEO_SECONDS) {
-      setError({ message: 'This video is longer than the 2-hour limit. Please upload a video shorter than 2 hours.',
+      setError({ message: 'This video is longer than the 3-hour limit. Please upload a video up to 3 hours.',
         fallback: false });
       return false;
     }
@@ -280,7 +280,7 @@ export function UploadVideoForm({ projectId, createProject, onStarted, initialSe
           className={cn('rounded-2xl border border-dashed p-5 text-center transition-colors sm:p-7', dragging ? 'border-primary bg-primary/10' : 'border-border-strong bg-sunken hover:border-primary/50', file && 'hidden sm:block')}>
           <span className='mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-primary/10 text-primary-soft'><Upload size={22} aria-hidden /></span>
           <p className='mt-3 text-sm font-semibold'><span className='fine:hidden'>Choose a video from your phone</span><span className='hidden fine:inline'>Drag and drop your video here</span></p>
-          <p className='mt-1 text-xs text-muted-foreground'>Gallery or Files · Maximum video length: 2 hours</p>
+          <p className='mt-1 text-xs text-muted-foreground'>Gallery or Files · Maximum video length: 3 hours</p>
           <input ref={inputRef} id='file' name='file' type='file' accept='video/*' className='sr-only' aria-label='Video file' onChange={handleFile} />
           <Button type='button' variant='outline' className='mt-4 h-12 w-full sm:h-10 sm:w-auto' disabled={busy} onClick={() => inputRef.current?.click()}><FolderOpen size={17} aria-hidden /><span className='sm:hidden'>Choose video</span><span className='hidden sm:inline'>Browse files</span></Button>
         </div>

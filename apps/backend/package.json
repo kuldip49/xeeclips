@@ -63,7 +63,7 @@
     "verify:online-live": "npm run build && node scripts/verify-online-live.cjs",
     "test:visual-intelligence": "npm run build && node scripts/test-visual-intelligence.cjs",
     "test:media-probe": "npm run build && node scripts/test-media-probe.cjs && node scripts/test-retry-classification.cjs",
-    "test:upload": "npm run build && node scripts/test-video-upload-session.cjs",
+    "test:upload": "npm run build && node scripts/test-video-upload-session.cjs && node scripts/test-source-upload-duration.cjs",
     "db:push": "prisma db push",
     "test:edit-mode-color": "npm run build && node scripts/test-edit-mode-color.cjs",
     "test:edit-mode-music": "npm run build && node scripts/test-edit-mode-music.cjs",

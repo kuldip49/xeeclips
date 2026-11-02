@@ -5,12 +5,12 @@ const policy = require('../dist/modules/processing/clip-selection-policy.js');
 const { orderCandidatesForSelection } = require('../dist/modules/videos/clip-selection.service.js');
 
 const minutes = (value) => value * 60;
-// Limits: 8 under 15 min, 20 up to an hour, 30 up to two hours.
+// Limits: 8 under 15 min, 20 up to an hour, 30 up to three hours.
 for (const [duration, expected] of [[minutes(5), 8], [minutes(14), 8], [minutes(15), 20], [minutes(45), 20],
-  [minutes(60), 20], [minutes(61), 30], [minutes(120), 30], [minutes(121), 0]])
+  [minutes(60), 20], [minutes(61), 30], [minutes(120), 30], [minutes(121), 30], [minutes(180), 30], [minutes(181), 0]])
   assert.equal(policy.maxClipCountForDuration(duration), expected, `max for ${duration}s`);
 assert.equal(policy.MAX_REQUESTABLE_CLIPS, 30);
-assert.equal(policy.validateRequestedClipCount(30, policy.maxClipCountForDuration(minutes(120))), 30);
+assert.equal(policy.validateRequestedClipCount(30, policy.maxClipCountForDuration(minutes(180))), 30);
 assert.throws(() => policy.validateRequestedClipCount(21, policy.maxClipCountForDuration(minutes(60))), /at most 20/);
 
 const speech = (seed, count = 40) => Array.from({ length: count }, (_, index) => `${seed}word${index}`).join(' ');

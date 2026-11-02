@@ -4,11 +4,11 @@ import { semanticSimilarity } from './semantic-similarity.service';
 // Product-level contract for the simplified "tell us how many clips" workflow. Everything here is
 // pure and deterministic so the same analyzed video always yields the same ordered selection.
 
-export const MAX_SOURCE_VIDEO_DURATION_SECONDS = 7200;
+export const MAX_SOURCE_VIDEO_DURATION_SECONDS = 3 * 60 * 60;
 export const FINAL_CLIP_MIN_SECONDS = 15;
 export const FINAL_CLIP_MAX_SECONDS = 120;
 export const VIDEO_TOO_LONG_MESSAGE =
-  'This video is longer than the 2-hour limit. Please upload a video shorter than 2 hours.';
+  'This video is longer than the 3-hour limit. Please upload a video up to 3 hours.';
 
 export type TargetPlatform = 'INSTAGRAM_REELS' | 'YOUTUBE_SHORTS' | 'TIKTOK';
 export type OutputStyle = 'NORMAL' | 'AI_EDITED';
@@ -39,12 +39,12 @@ export function isVideoTooLong(durationSeconds: number | null | undefined) {
     durationSeconds > MAX_SOURCE_VIDEO_DURATION_SECONDS;
 }
 
-/** Returns 0 for a source longer than the 2-hour limit (such a video is rejected). */
+/** Returns 0 for a source longer than the 3-hour limit (such a video is rejected). */
 export function maxClipCountForDuration(durationSeconds: number | null | undefined) {
   const duration = typeof durationSeconds === 'number' && Number.isFinite(durationSeconds)
     ? Math.max(0, durationSeconds) : 0;
   // 1..8 for every accepted source, up to 20 for sources up to an hour and up to 30 for
-  // sources up to two hours. Selection then delivers exactly the requested count (see the fill
+  // sources up to three hours. Selection then delivers exactly the requested count (see the fill
   // tiers below), so the requested value is never silently clamped.
   if (duration < 900) return 8;
   if (duration <= 3600) return 20;
@@ -52,7 +52,7 @@ export function maxClipCountForDuration(durationSeconds: number | null | undefin
   return 0;
 }
 
-/** The largest count any accepted source allows (a two-hour source). */
+/** The largest count any accepted source allows (a three-hour source). */
 export const MAX_REQUESTABLE_CLIPS = 30;
 
 /** Convenience starting value for the counter; never presented as a recommendation. */

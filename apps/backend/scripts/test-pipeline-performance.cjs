@@ -59,11 +59,11 @@ async function main() {
     hookScore: 65, standaloneScore: 65, payoffScore: 65, flowScore: 65, informationScore: 65,
     retentionScore: 65, shareabilityScore: 65, contentPotential: 65, reject: false,
     reason: 'test', rejectionReason: '', judgeSource: 'HEURISTIC_FALLBACK' }));
-  assert.deepEqual([600, 900, 1800, 3600, 7200].map(aiShortlistLimit), [12, 21, 21, 25, 35]);
+  assert.deepEqual([600, 900, 1800, 3600, 7200, 10800].map(aiShortlistLimit), [24, 40, 40, 40, 40, 40]);
   const shortlist = shortlistForUnderstanding(raw, 900);
-  assert.equal(shortlist.length, 21);
-  assert.equal(shortlistForCreative(shortlist, 900).length, 12);
-  assert.ok(shortlistForCreative(shortlist, 900).every(item => item.overallScore >= raw[11].overallScore));
+  assert.equal(shortlist.length, 40);
+  assert.equal(shortlistForCreative(shortlist, 900).length, 40);
+  assert.ok(shortlistForCreative(shortlist, 900).every(item => item.overallScore >= raw[39].overallScore));
   const duplicate = { ...raw[0], rangeKey: 'duplicate', overallScore: 99 };
   const deduped = shortlistForUnderstanding([...raw, duplicate], 900);
   assert.equal(deduped.filter(item => item.startTime === 0).length, 1);
@@ -81,8 +81,8 @@ async function main() {
       mainClaim: 'preserved expensive response', candidateId: item.candidateId }) }, metadata: {} };
   } });
   const recovered = await understanding.understand(shortlist, evidences);
-  assert.equal(evaluated, 21); assert.equal(peak, 1);
-  assert.equal(recovered.understandings.filter(item => item.mainClaim === 'preserved expensive response').length, 21);
+  assert.equal(evaluated, 40); assert.equal(peak, 1);
+  assert.equal(recovered.understandings.filter(item => item.mainClaim === 'preserved expensive response').length, 40);
 
   // One missing middle ID cannot shift another candidate's understanding.
   const missing = new ClipIntelligenceService({ async generate(input) {
@@ -93,17 +93,24 @@ async function main() {
   const aligned = await missing.understand(shortlist.slice(0, 5), evidences.slice(0, 5));
   assert.equal(aligned.understandings[3].mainClaim, shortlist[3].rangeKey);
 
-  // creativeGeneration batches CLIP_JUDGE_BATCH_SIZE (default 2) candidates per request so a
-  // 12-candidate creative shortlist (a 15-minute video may request up to 12 clips) costs 6 calls
-  // instead of 12 (see openai-clip-judge.service.ts).
+  // The shared creative pipeline now processes candidates individually. A three-hour
+  // source must still be capped at 40 candidates, with bounded attempts on failure.
   let packages = 0;
-  const judge = new ClipJudgeService({ isAnyConfigured: () => true, routesFor: () => [],
+  const creativeRoles = {};
+  const judge = new ClipJudgeService({ isAnyConfigured: () => false, routesFor: () => [],
     configuredRouteFor: () => undefined, async generate(input) {
-      assert.equal(JSON.parse(input.request.userPrompt).length, 2); packages++;
+      packages++;
+      creativeRoles[input.role] = (creativeRoles[input.role] ?? 0) + 1;
       throw new Error('synthetic fallback');
     } });
-  await judge.judgeCandidates(shortlistForCreative(shortlist, 900));
-  assert.equal(packages, 6, 'twelve shortlisted candidates batch into six creativeGeneration calls');
+  const creativeProgress = [];
+  const judged = await judge.judgeCandidates(shortlistForCreative(raw, 10800),
+    async (completed, total) => { creativeProgress.push([completed, total]); });
+  assert.equal(judged.length, 40);
+  assert.ok(judged.every(candidate => candidate.fallbackUsed));
+  assert.equal(packages, 120, 'one understanding and two creative attempts per candidate, with no runaway retries');
+  assert.equal(creativeRoles.creativeGeneration, 80);
+  assert.deepEqual(creativeProgress.at(-1), [40, 40]);
 
   const itemSchema = { type: 'object', additionalProperties: false,
     properties: { value: { type: 'number' } }, required: ['value'] };
@@ -184,7 +191,9 @@ async function main() {
     Object.assign(process.env, env);
   }
   console.log(JSON.stringify({ performanceRegression: true, raw: 76, understood: evaluated,
-    creative: packages, partialRecovery: true, boundedTimeout: true,
+    creative: judged.length, creativeRouterAttempts: packages, partialRecovery: true, boundedTimeout: true,
     singleProviderOnlineContract: true, responseCaching: true, telemetry: true }));
 }
-main().catch(error => { console.error(error); process.exitCode = 1; });
+// These provider batching/cache checks explicitly exercise Pro; an absent context is XeeFree.
+performanceContext.run(createPerformanceTelemetry('ONLINE'), main)
+  .catch(error => { console.error(error); process.exitCode = 1; });

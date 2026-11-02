@@ -21,15 +21,15 @@ export type EntrySettings = {
   aiMode: AiProcessingMode;
 };
 
-/** The largest count any accepted source allows (a two-hour source). */
+/** The largest count any accepted source allows (a three-hour source). */
 export const ENTRY_MAX_CLIPS = 30;
 
-/** Mirrors the backend rule: up to 8 under 15 min, 20 up to an hour, 30 up to two hours. */
+/** Mirrors the backend rule: up to 8 under 15 min, 20 up to an hour, 30 up to three hours. */
 export function maxClipsForDuration(seconds: number | null | undefined) {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return ENTRY_MAX_CLIPS;
   return seconds < 900 ? 8 : seconds <= 3600 ? 20 : 30;
 }
-export const CLIP_LIMIT_HINT = 'Up to 8 clips for videos under 15 min, 20 up to 1 hour, 30 up to 2 hours.';
+export const CLIP_LIMIT_HINT = 'Up to 8 clips for videos under 15 min, 20 up to 1 hour, 30 up to 3 hours.';
 
 export const DEFAULT_ENTRY_SETTINGS: EntrySettings = {
   template: 'AUTOMATIC_1', count: 3, brief: '', platform: 'YOUTUBE_SHORTS', aspectRatio: '9:16',

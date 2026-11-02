@@ -79,12 +79,30 @@ async function main() {
   await assert.rejects(adapter.metadata(`https://www.youtube.com/watch?v=${id}`,
     new AbortController().signal), { code: 'IMPORT_UNAVAILABLE' });
   assert.equal((await adapter.describeBinary()).version, null);
-  // Timeouts come from the new variables, with the platform's 2-hour cap on duration.
+  // Timeouts come from the new variables, with the platform's 3-hour cap on duration.
   process.env.YOUTUBE_IMPORT_TOTAL_TIMEOUT = '7200';
   process.env.YOUTUBE_IMPORT_MAX_DURATION = '99999';
   const configured = new YouTubeImportAdapter().config;
   assert.equal(configured.totalTimeoutMs, 7_200_000);
-  assert.equal(configured.maxDuration, 7200);
+  assert.equal(configured.maxDuration, 10800);
+  delete process.env.YOUTUBE_IMPORT_MAX_DURATION;
+  delete process.env.MAX_IMPORT_DURATION_SECONDS;
+  const bounded = new YouTubeImportAdapter();
+  assert.equal(bounded.maxDuration, 10800, 'default allows three hours');
+  let duration = 10800;
+  bounded.run = async () => ({ code: 0, stderr: '', stdout: JSON.stringify({
+    id, extractor_key: 'Youtube', duration, availability: 'public'
+  }) + '\n' + JSON.stringify([{ vcodec: 'avc1', acodec: 'mp4a', protocol: 'https' }]) });
+  assert.equal((await bounded.metadata(`https://youtu.be/${id}`, new AbortController().signal)).duration, 10800);
+  duration = 10800.001;
+  await assert.rejects(bounded.metadata(`https://youtu.be/${id}`, new AbortController().signal),
+    error => error.code === 'DURATION_LIMIT' && /180 minute limit/.test(error.message));
+  process.env.YOUTUBE_IMPORT_MAX_DURATION = '3600';
+  assert.equal(new YouTubeImportAdapter().maxDuration, 3600, 'explicit lower deployment limits are preserved');
+  delete process.env.YOUTUBE_IMPORT_MAX_DURATION;
+  process.env.MAX_IMPORT_DURATION_SECONDS = '99999';
+  assert.equal(new YouTubeImportAdapter().maxDuration, 10800, 'legacy overrides cannot bypass the platform cap');
+
   console.log('YouTube URL validation, failure classification, retry policy and config checks passed');
 }
 main().catch((error) => { console.error(error); process.exitCode = 1; });

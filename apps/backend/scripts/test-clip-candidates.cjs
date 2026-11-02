@@ -127,7 +127,9 @@ function testRecommendationPolicy() {
   assert.equal(maximumClipCountForDuration(3600), 20);
   assert.equal(maximumClipCountForDuration(3601), 30);
   assert.equal(maximumClipCountForDuration(7200), 30);
-  assert.equal(maximumClipCountForDuration(7201), 0);
+  assert.equal(maximumClipCountForDuration(7201), 30);
+  assert.equal(maximumClipCountForDuration(10800), 30);
+  assert.equal(maximumClipCountForDuration(10800.001), 0);
   assert.equal(recommendationTierForScore(75), 'PRIMARY');
   assert.equal(recommendationTierForScore(74.99), 'SECONDARY');
   assert.equal(recommendationTierForScore(59.99), null);

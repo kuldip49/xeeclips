@@ -49,19 +49,20 @@ function testDurationMatrix() {
   const matrix = [
     [minutes(2), 8], [minutes(5), 8], [minutes(10), 8], [minutes(10) + 1, 8], [minutes(12), 8],
     [minutes(14) + 59, 8], [minutes(15), 20], [minutes(30), 20], [minutes(60), 20],
-    [minutes(60) + 1, 30], [minutes(90), 30], [minutes(120), 30]
+    [minutes(60) + 1, 30], [minutes(90), 30], [minutes(120), 30], [minutes(120) + 1, 30],
+    [minutes(150), 30], [minutes(180), 30]
   ];
   for (const [duration, expected] of matrix)
     assert.equal(maxClipCountForDuration(duration), expected, `max clips for ${duration}s`);
-  assert.equal(isVideoTooLong(minutes(120)), false);
-  assert.equal(isVideoTooLong(minutes(120) + 1), true, '120:01 must be rejected');
-  assert.equal(maxClipCountForDuration(minutes(120) + 1), 0);
+  assert.equal(isVideoTooLong(minutes(180)), false);
+  assert.equal(isVideoTooLong(minutes(180) + 0.001), true, 'any duration over 3 hours must be rejected');
+  assert.equal(maxClipCountForDuration(minutes(180) + 1), 0);
   assert.equal(isVideoTooLong(null), false, 'unknown duration is decided by the worker probe');
 
   const tooLong = new MediaProcessingError('VIDEO_TOO_LONG');
   assert.equal(tooLong.retryable, false);
   assert.equal(isRetryableErrorCode('VIDEO_TOO_LONG'), false);
-  assert.match(tooLong.message, /longer than the 2-hour limit/);
+  assert.match(tooLong.message, /longer than the 3-hour limit/);
 
   assert.deepEqual([8, 20, 30].map(defaultClipCountForMax), [4, 8, 8]);
 }
@@ -472,7 +473,7 @@ async function testStrictCountLongSourceMatrix() {
   process.env.AI_EDITED_RENDER_CONCURRENCY = '2';
   process.env.CLIP_SELECTION_SYNC = 'true';
   try {
-    for (const durationMin of [20, 50, 60, 120]) {
+    for (const durationMin of [20, 50, 60, 120, 180]) {
       for (const requestedClipCount of [8, 12]) {
         const usable = Array.from({ length: 12 }, (_, index) =>
           candidate(`long${durationMin}m-${requestedClipCount}-${index}`, 100 - index, index));
