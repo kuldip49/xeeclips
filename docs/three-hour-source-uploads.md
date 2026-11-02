@@ -39,3 +39,5 @@ run `node apps/frontend/scripts/serve-static-qa.cjs`, set `E2E_FRONTEND_URL` to
 `http://127.0.0.1:3301` and `E2E_API_URL` to the same origin as the build, then run
 `npx playwright test e2e/source-upload-duration.spec.ts` from `apps/frontend`.
 FFmpeg and ffprobe must be on PATH for the media fixtures.
+
+Production deployment completed after this change: [deployment report](three-hour-production-release.md).
