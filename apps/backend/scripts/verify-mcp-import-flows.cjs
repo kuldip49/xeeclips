@@ -1,7 +1,8 @@
 const fs=require('fs'),path=require('path'),assert=require('assert/strict');
-const {connect,call,accounts}=require('./mcp-acceptance-client.cjs');
+const {connect,call:baseCall,accounts}=require('./mcp-acceptance-client.cjs');
 const dir=process.env.MCP_QA_DIR,file=path.join(dir,'import-flows.json'),sources=JSON.parse(fs.readFileSync(path.join(dir,'source-import-acceptance.json'))).providers;
 const report=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):{},save=()=>fs.writeFileSync(file,JSON.stringify(report,null,2)),sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function call(...args){for(let n=0;n<3;n++){try{return await baseCall(...args);}catch(e){const error=e.result?.structuredContent?.error;if(error?.code!=='RATE_LIMITED'||n===2)throw e;console.log('Respecting the canonical rate limit before retrying the same action.');await sleep(Math.min(60000,error.recommendedPollAfterMs||60000));}}}
 async function poll(c,name,args,label){const end=Date.now()+1200000;let log=0;while(Date.now()<end){const r=await call(c,name,args);if(r.status==='COMPLETE')return r;if(['FAILED','PARTIAL'].includes(r.status))throw Error(label+' '+JSON.stringify(r));if(Date.now()-log>30000){console.log(label+': '+r.status);log=Date.now();}await sleep(r.recommendedPollAfterMs||5000);}throw Error(label+' timeout');}
 (async()=>{const c=await connect(accounts[0]);try{
 const youtube=sources.YOUTUBE,instagram=sources.INSTAGRAM;assert(youtube?.sourceId&&instagram?.sourceId);assert(instagram.duration<=180);
@@ -19,5 +20,5 @@ if(!report.confirmed){const camp=await call(c,'get_campaign',{campaignId});await
 if(!report.campaignSource){report.campaignSource=await call(c,'attach_campaign_source',{campaignId,sourceId:youtube.sourceId,rightsConfirmed:true,idempotencyKey:'import-flow-attach-001'});save();}
 if(!report.campaignJob){report.campaignJob=await call(c,'generate_campaign_clips',{campaignId,campaignSourceIds:[report.campaignSource.campaignSourceId],mode:'XEEFREE',style:'STYLE_ONE',clipCount:1,idempotencyKey:'import-flow-campaign-001'});save();}
 if(!report.campaign){const done=await poll(c,'get_job',{jobId:report.campaignJob.jobId},'Imported YouTube → campaign');assert.equal(done.mode,'XEEFREE');assert(done.campaignClipIds.length);const compliance=await call(c,'get_campaign_clip_compliance',{campaignClipId:done.campaignClipIds[0]});assert(!['FAIL','UNKNOWN'].includes(compliance.compliance.status));report.campaign={passed:true,compliance:compliance.compliance.status};save();}
-report.passed=true;report.at=new Date().toISOString();save();console.log('PASS imported URL → real clips → canonical edit/export, Instagram → StyleTwo Quick Reframe, and imported source → confirmed campaign generation/compliance.');
+delete report.failure;report.passed=true;report.at=new Date().toISOString();save();console.log('PASS imported URL → real clips → canonical edit/export, Instagram → StyleTwo Quick Reframe, and imported source → confirmed campaign generation/compliance.');
 }finally{await c.close()}})().catch(e=>{report.failure=e.message;save();console.error(e.message);process.exitCode=1});
