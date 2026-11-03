@@ -141,4 +141,3 @@ ALTER TABLE "McpAction" ADD CONSTRAINT "McpAction_userId_fkey" FOREIGN KEY ("use
 
 -- AddForeignKey
 ALTER TABLE "McpAudit" ADD CONSTRAINT "McpAudit_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-
