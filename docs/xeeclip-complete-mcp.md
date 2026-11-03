@@ -98,15 +98,27 @@ Stable errors include AUTH_REQUIRED, AUTH_EXPIRED, TOKEN_REVOKED, INSUFFICIENT_S
 
 ## Connect ChatGPT
 
-Use an account/workspace that permits custom MCP connections. Follow [OpenAI's connection guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt) and [Add custom MCP server](https://developers.openai.com/api/docs/guides/custom-mcp-server): create a custom connection/plugin named XeeClip, enter the HTTPS endpoint, choose OAuth automatic registration, request offline_access for renewal, complete XeeClip login/consent and scan tools. Enable the intended write actions, install/select the connection in a chat and approve actions when prompted. Account/workspace permissions and labels vary.
+The following UI steps follow [OpenAI's current connection guide](https://help.openai.com/en/articles/12584461-connecting-custom-mcp-servers-in-chatgpt), checked 2026-11-03. Actual branded UI acceptance is not claimed; the OAuth automatic-registration method was tested with the official SDK/Inspector. Full write support currently requires an eligible Business/Enterprise/Edu workspace and creation/action permissions.
 
-Metadata follows [OpenAI authentication guidance](https://developers.openai.com/plugins/build/auth). Connecting requires no new OpenAI API key. Assistant-plan capabilities and XeeClip Free/Pro modes are independent.
+1. On ChatGPT web, open Plugins → + → Add custom MCP server.
+2. Name it XeeClip; enter **https://api.xeeclip.me/mcp** under Connection.
+3. Choose OAuth with automatic registration. Include **offline_access** when configuring requested scopes for continuing access.
+4. Complete XeeClip login, review permissions and select Allow. Acknowledge ChatGPT's server notice, create the plugin and review discovered tools.
+5. Install/select it in a chat, enable the intended actions, and try **“Show my XeeClip credits and source videos.”** Approve writes when prompted. Legacy workspaces may expose Apps → Create → Scan Tools instead.
+
+No new OpenAI API key is required. XeeClip Settings → Integrations → AI Assistants → Revoke immediately removes access.
 
 ## Connect Claude
 
-Add a custom connector in Claude's connector settings with the HTTPS endpoint. Under OAuth client choose **Register automatically**, complete XeeClip login/consent and enable it in the chat. See [Claude's remote connector guide](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp). Organization policy may require an administrator. Published-identity/CIMD is not the selected mechanism.
+These UI steps follow [Claude's current remote connector guide](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp), checked 2026-11-03. Branded Claude UI was not tested; automatic DCR/OAuth was verified with the compatible official SDK/Inspector.
 
-SDK/Inspector results do not constitute branded ChatGPT/Claude UI testing. The release report states actual client evidence separately.
+1. Open Customize → Connectors → + Add → Add custom connector. Team/Enterprise owners configure the connector in Organization settings first.
+2. Name it XeeClip and enter **https://api.xeeclip.me/mcp**. Continue through detected authentication.
+3. Choose **Sign in now** and OAuth client **Register automatically**. XeeClip does not implement Claude's published-identity/CIMD option. Leave fixed credential headers empty.
+4. Add/connect, sign in to XeeClip, review requested permissions and Allow.
+5. Enable it from the chat's + → Connectors menu. Try **“Show my XeeClip credits and source videos.”**
+
+Revoke in XeeClip Settings → Integrations → AI Assistants, or remove the client connection. Consent displays the requested permissions from the scope table above; offline access is optional.
 
 ## Example requests
 
