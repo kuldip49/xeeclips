@@ -16,6 +16,6 @@ import { VideoUploadSessionService } from './video-upload-session.service';
   controllers: [VideosController, VideoImportController],
   providers: [ClipExportService, ClipRenderQueueService, VideosService, VideoImportService,
     VideoUploadSessionService],
-  exports: [VideosService]
+  exports: [VideosService, VideoImportService]
 })
 export class VideosModule {}

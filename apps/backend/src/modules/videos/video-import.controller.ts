@@ -10,7 +10,7 @@ export class VideoImportController {
 
   @Get('videos/import-capabilities')
   capabilities() {
-    return { youtubeEnabled: process.env.YOUTUBE_IMPORT_APPROVED === 'true', ...generationCapabilities() };
+    return { youtubeEnabled: process.env.YOUTUBE_IMPORT_APPROVED === 'true', ...generationCapabilities(), ...this.imports.supportedSources() };
   }
 
   @Post('videos/import-url')

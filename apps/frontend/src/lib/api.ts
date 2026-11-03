@@ -137,7 +137,7 @@ export type Video = {
   id: string;
   projectId: string;
   originalName: string;
-  sourceType?: 'UPLOAD' | 'YOUTUBE';
+  sourceType?: 'UPLOAD' | 'YOUTUBE' | 'INSTAGRAM' | 'X';
   sourceUrl?: string | null;
   externalVideoId?: string | null;
   objectKey: string;

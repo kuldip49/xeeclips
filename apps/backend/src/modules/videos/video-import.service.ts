@@ -1,10 +1,10 @@
-import { assertNewProcessingMode } from '../processing/generation-availability';
+import { generationCapabilities, assertNewProcessingMode } from '../processing/generation-availability';
 import { ConflictException, Injectable, Logger, NotFoundException, OnModuleDestroy,
   OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
 import { VideosService } from './videos.service';
-import { AttemptLog, DownloadResult, ImportError, importFailure, ImportMetadata, parseYouTubeUrl,
-  YouTubeImportAdapter } from './youtube-import.adapter';
+import { AttemptLog, DownloadResult, ImportError, importFailure, ImportMetadata,
+  SourceImportAdapter } from './youtube-import.adapter';
 import { normalizeImportedMedia, NormalizedMedia } from './media-normalize';
 import { normalizeAiProcessingMode } from '../processing/ai-processing-mode';
 import { parseProcessingType, parseOutputAspectRatio } from '../processing/processing-type';
@@ -20,18 +20,22 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { UsageService } from '../auth/usage.service';
 import { randomUUID } from 'crypto';
+import { requestIdentity } from '../auth/request-context';
+import { checkpointOperation } from '../auth/operation-checkpoint';
+import { resolveSourceUrl, SOURCE_PROVIDERS, sourceProviderEnabled, requireSourceProvider, sourceImportErrorCode } from './source-import-policy';
 
 const QUEUE = 'video-import';
-const JOB = 'import-youtube';
+const JOB = 'import-source';
 
 @Injectable()
 export class VideoImportService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(VideoImportService.name);
-  private readonly adapter = new YouTubeImportAdapter();
+  private readonly adapter = new SourceImportAdapter();
   private readonly connection = new IORedis(process.env.REDIS_URL ?? 'redis://localhost:6379',
-    { maxRetriesPerRequest: null });
+    { maxRetriesPerRequest: 1 });
   private readonly queue = new Queue<{ importId: string }, unknown, string>(QUEUE, { connection: this.connection });
   private worker?: Worker<{ importId: string }>;
+  private recovery?: NodeJS.Timeout;
   private readonly running = new Map<string, AbortController>();
 
   constructor(private readonly prisma: PrismaService, private readonly videos: VideosService,
@@ -46,7 +50,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
         connectTimeoutSec: config.connectTimeoutSec, totalTimeoutSec: config.totalTimeoutMs / 1000,
         stallTimeoutSec: config.stallTimeoutMs / 1000, maxDurationSec: config.maxDuration,
         maxBytes: config.maxBytes, maxAttempts: config.maxAttempts }));
-      if (enabled && !binary.version) this.logger.error(`YouTube importing is enabled but ${binary.binary} could not be run`);
+      if (enabled && !binary.version) this.logger.error(`Video link importing is enabled but ${binary.binary} could not be run`);
     });
     this.worker = new Worker(QUEUE, async (job) => this.process(job.data.importId),
       { connection: new IORedis(process.env.REDIS_URL ?? 'redis://localhost:6379',
@@ -61,9 +65,15 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
     const pending = await this.prisma.videoImport.findMany({ where: { status: 'PENDING' },
       select: { id: true } });
     for (const row of pending) await this.enqueue(row.id);
+    // Admission receipts commit before queue delivery; bounded recovery closes the
+    // process-crash gap without creating a second import or downloader.
+    this.recovery = setInterval(() => void this.recoverPending().catch(() =>
+      this.logger.warn('Source import queue recovery is temporarily unavailable.')), 30000);
+    this.recovery.unref();
   }
 
   async onModuleDestroy() {
+    if (this.recovery) clearInterval(this.recovery);
     // A restart is not a user cancel: interrupted imports go back to PENDING and resume on boot.
     for (const controller of this.running.values()) controller.abort(new ImportError('IMPORT_INTERRUPTED',
       'Import was interrupted by a restart and will resume.'));
@@ -72,14 +82,91 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
     await this.connection.quit();
   }
 
+  supportedSources() {
+    return { providers: SOURCE_PROVIDERS.map(p => ({ id: p.id, urlImport: sourceProviderEnabled(p.id),
+      access: 'PUBLIC_AUTHORIZED_VIDEO_ONLY' })), maxDurationSeconds: this.adapter.maxDuration,
+      maxBytes: this.adapter.maxBytes, quickReframeMaxDurationSeconds: 180,
+      analysisMode: 'XEEFREE', importCreditCost: 0,
+      // Match DEFAULT_ENTRY_SETTINGS in the existing Create entry flow.
+      generationDefaults: { mode: generationCapabilities().xeePro ? 'XEEPRO' : 'XEEFREE', style: 'STYLE_ZERO', clipCount: 3 },
+      recommendedPollAfterMs: 5000 };
+  }
+
+  /** Generic assistant admission into the normal website Project/VideoImport pipeline.
+   * Source analysis stays Free; explicit generation is a later canonical operation.
+   */
+  async importSource(url: string, title?: string) {
+    const source = resolveSourceUrl(url);
+    requireSourceProvider(source.provider);
+    const userId = requestIdentity.getStore()?.userId;
+    if (!userId) throw new NotFoundException('Account not found.');
+    const row = await this.prisma.$transaction(async tx => {
+      const lock = `source-import:${userId}:${source.provider}:${source.externalVideoId}`;
+      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lock}, 0))::text`;
+      // Reuse only the authenticated user's normal library. Never take another
+      // account's import, source URL, output, settings or source-analysis result.
+      let row = await tx.videoImport.findFirst({ where: { provider: source.provider,
+        externalVideoId: source.externalVideoId, project: { userId } }, orderBy: { createdAt: 'desc' } });
+      if (row?.status === 'READY') {
+        const analysis = row.videoId ? await tx.processingJob.findFirst({ where: { videoId: row.videoId },
+          orderBy: { createdAt: 'desc' }, select: { status: true } }) : null;
+        // A new import intention must not join a deleted source or permanently
+        // failed analysis. Keep the old website record/settings intact.
+        if (!analysis || analysis.status === 'FAILED') row = null;
+      } else if (row && ['IMPORT_FAILED', 'CANCELLED'].includes(row.status) && row.videoId) row = null;
+      if (!row) {
+        const project = await tx.project.create({ data: { userId, name: title?.trim() || 'Imported video' } });
+        row = await tx.videoImport.create({ data: { projectId: project.id, ...source,
+          title: title?.trim() || null, aiMode: 'FALLBACK_ONLY', processingType: 'NORMAL_CLIPS', outputAspectRatio: null } });
+      }
+      if (['IMPORT_FAILED', 'CANCELLED'].includes(row.status) && !row.videoId &&
+        !row.autoGeneration && row.aiMode === 'FALLBACK_ONLY') {
+        // A new action key is an explicit retry; identical retries return the
+        // durable original receipt before reaching this admission path.
+        row = await tx.videoImport.update({ where: { id: row.id }, data: {
+          status: 'PENDING', stage: 'FETCHING_INFO', progress: 0, error: null, errorCode: null, sourceUrl: source.sourceUrl } });
+      }
+      await checkpointOperation(tx, { importId: row.id, provider: row.provider, status: 'QUEUED',
+        recommendedPollAfterMs: 5000 }, row.id);
+      return row;
+    });
+    if (row.status === 'PENDING') void this.enqueue(row.id).catch(() =>
+      this.logger.warn('Source import admitted; queue delivery will be retried.'));
+    return { importId: row.id, provider: row.provider, status: 'QUEUED', recommendedPollAfterMs: 5000 };
+  }
+
+  /** A source is ready only after the existing analysis job has completed. */
+  async sourceImportSummary(id: string) {
+    const row = await this.prisma.videoImport.findUnique({ where: { id } });
+    if (!row) throw new NotFoundException('Import not found.');
+    const base = { importId: row.id, provider: row.provider, title: row.title,
+      duration: row.durationSec, recommendedPollAfterMs: 5000 };
+    if (['IMPORT_FAILED', 'CANCELLED'].includes(row.status)) return { ...base,
+      status: 'FAILED', errorCode: sourceImportErrorCode(row.errorCode) };
+    if (row.status !== 'READY' || !row.videoId) return { ...base,
+      status: row.status === 'PENDING' ? 'QUEUED' : 'PROCESSING', progress: row.progress };
+    const source = await this.videos.sourceSummary(row.videoId);
+    if (source.status === 'FAILED') return { ...base, status: 'FAILED', errorCode: sourceImportErrorCode(source.job?.errorCode) };
+    return { ...base, title: row.title || source.name, duration: source.duration,
+      status: source.status === 'COMPLETED' ? 'COMPLETE' : 'PROCESSING',
+      ...(source.status === 'COMPLETED' ? { sourceId: source.sourceId, sourceStatus: 'READY' } : {}) };
+  }
+
+  private async recoverPending() {
+    await this.prisma.videoImport.updateMany({ where: { status: 'IMPORTING',
+      id: { notIn: [...this.running.keys()] }, updatedAt: { lt: new Date(Date.now() - 120000) } },
+      data: { status: 'PENDING', stage: 'FETCHING_INFO', progress: 0 } });
+    const rows = await this.prisma.videoImport.findMany({ where: { status: 'PENDING' },
+      select: { id: true }, orderBy: { createdAt: 'asc' }, take: 100 });
+    for (const row of rows) await this.enqueue(row.id);
+  }
+
   async submit(body: Record<string, unknown>) {
     assertNewProcessingMode(body.aiMode);
-    const parsed = parseYouTubeUrl(body.url);
+    const parsed = resolveSourceUrl(body.url);
     if (body.rightsConfirmed !== true) throw new ImportError('MEDIA_ACCESS_DENIED',
-      'Confirm you have the right to process this video, or upload the video file instead.');
-    // Deployment-level eligibility stays a server decision; users only see the outcome.
-    if (process.env.YOUTUBE_IMPORT_APPROVED !== 'true') throw new ImportError('IMPORT_UNAVAILABLE',
-      "YouTube links can't be imported right now. You can upload the video file instead.");
+      'Confirm you have the right to process this video.');
+    requireSourceProvider(parsed.provider);
     if (typeof body.projectId !== 'string') throw new ImportError('INVALID_PROJECT', 'Select a project.');
     const project = await this.prisma.project.findUnique({ where: { id: body.projectId }, select: { id: true } });
     if (!project) throw new NotFoundException('Project not found');
@@ -95,7 +182,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
     const autoGenerationJson = autoGeneration
       ? autoGeneration as unknown as Prisma.InputJsonValue : Prisma.DbNull;
     const where = { projectId_provider_externalVideoId: {
-      projectId: project.id, provider: 'YOUTUBE', externalVideoId: parsed.externalVideoId } };
+      projectId: project.id, provider: parsed.provider, externalVideoId: parsed.externalVideoId } };
     const found = await this.prisma.videoImport.findUnique({ where });
     if (found) {
       // The latest choice wins, so a resubmitted link never resets the user's settings.
@@ -112,7 +199,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
     }
     const row = await this.prisma.$transaction(async tx => {
       const row = await tx.videoImport.upsert({ where, update: {},
-      create: { projectId: project.id, provider: 'YOUTUBE',
+      create: { projectId: project.id, provider: parsed.provider,
         externalVideoId: parsed.externalVideoId, sourceUrl: parsed.sourceUrl, ...settings,
         autoGeneration: autoGenerationJson } });
       return row.status === 'PENDING' ? this.reserveImport(tx, row) : row;
@@ -121,8 +208,8 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
     if (row.status === 'IMPORT_FAILED' || row.status === 'CANCELLED' || row.status === 'READY')
       return this.retry(row.id);
     try { await this.enqueue(row.id); } catch {
-      await this.fail(row.id, 'IMPORT_UNAVAILABLE', "YouTube import isn't available right now. You can upload the video file instead.");
-      throw new ImportError('IMPORT_UNAVAILABLE', "YouTube import isn't available right now. You can upload the video file instead.");
+      await this.fail(row.id, 'IMPORT_UNAVAILABLE', "Video link import isn't available right now. You can upload the video file instead.");
+      throw new ImportError('IMPORT_UNAVAILABLE', "Video link import isn't available right now. You can upload the video file instead.");
     }
     return this.publicJob(row);
   }
@@ -229,7 +316,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
       });
       if (!claimed.count) return;
       const existingVideo = await this.prisma.video.findFirst({ where: { projectId: row.projectId,
-        sourceType: 'YOUTUBE', externalVideoId: row.externalVideoId } });
+        sourceType: row.provider, externalVideoId: row.externalVideoId } });
       if (existingVideo) {
         phase = 'storage';
         const cachedStat = await this.storage.statObject(existingVideo.bucket, existingVideo.objectKey).catch(() => {
@@ -249,7 +336,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
       metadata = await this.adapter.metadata(row.sourceUrl, abort.signal, attempts);
       clock = mark('metadataMs', clock);
       await this.prisma.videoImport.update({ where: { id: importId }, data: {
-        title: metadata.title?.slice(0, 300), durationSec: metadata.duration,
+        title: (row.title || metadata.title)?.slice(0, 300), durationSec: metadata.duration,
         thumbnailUrl: metadata.thumbnail?.slice(0, 1000), stage: 'DOWNLOADING', progress: 1 } });
       phase = 'download';
       directory = await mkdtemp(join(tmpdir(), 'youtube-import-'));
@@ -262,13 +349,13 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
       await this.prisma.videoImport.update({ where: { id: importId }, data: {
         stage: 'VALIDATING', progress: 90 } });
       phase = 'validate';
-      normalized = await normalizeImportedMedia(download.filePath, directory, abort.signal);
+      normalized = await normalizeImportedMedia(download.filePath, directory, abort.signal, { localOnly: true });
       clock = mark('normalizeMs', clock);
       // Never accept a truncated retrieval: the stored source must cover the whole video.
       const probed = normalized.probe.durationSec ?? 0;
-      if (probed < metadata.duration * 0.97 - 2)
+      if (metadata.duration > 0 && probed < metadata.duration * 0.97 - 2)
         throw importFailure('MEDIA_INVALID', `retrieved ${probed}s of ${metadata.duration}s`);
-      if (probed > this.adapter.maxDuration + 5)
+      if (probed > this.adapter.maxDuration + 1e-6)
         throw new ImportError('DURATION_LIMIT', `This video is longer than the ${Math.floor(this.adapter.maxDuration / 60)} minute limit. Upload a shorter video instead.`, `probed=${probed}`);
       const finalizing = await this.prisma.videoImport.updateMany({
         where: { id: importId, status: 'IMPORTING' },
@@ -279,10 +366,10 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
       // Reuse the upload path verbatim: it stores the file, creates the canonical Video,
       // and enqueues the existing media processor. No generation logic lives here.
       const video = await this.videos.createFromUpload(row.projectId, {
-        path: normalized.filePath, originalname: `${(metadata.title || row.externalVideoId).replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 200)}.mp4`,
+        path: normalized.filePath, originalname: `${(row.title || metadata.title || row.externalVideoId).replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 200)}.mp4`,
         mimetype: 'video/mp4', size: normalized.size
       } as Express.Multer.File, row.aiMode, row.processingType, row.outputAspectRatio,
-      row.targetPlatform, { sourceUrl: row.sourceUrl, externalVideoId: row.externalVideoId, creditReservationKey: row.creditReservationKey },
+      row.targetPlatform, { provider: row.provider, sourceUrl: row.sourceUrl, externalVideoId: row.externalVideoId, creditReservationKey: row.creditReservationKey },
       row.autoGeneration as unknown as ClipCreationRequest | null);
       const storedVideo = await this.prisma.video.findUniqueOrThrow({ where: { id: video.id },
         select: { bucket: true, objectKey: true, sizeBytes: true } });
@@ -291,8 +378,8 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
         throw importFailure('STORAGE_FAILED', 'Stored object size does not match the normalized file');
       mark('storageMs', clock);
       await this.prisma.videoImport.update({ where: { id: importId }, data: {
-        videoId: video.id, status: 'READY', stage: 'READY', progress: 100 } });
-      this.logger.log(JSON.stringify({ event: 'external_video_import', provider: 'YOUTUBE',
+        videoId: video.id, durationSec: normalized.probe.durationSec, status: 'READY', stage: 'READY', progress: 100 } });
+      this.logger.log(JSON.stringify({ event: 'external_video_import', provider: row.provider,
         externalVideoId: row.externalVideoId, importJobId: importId, videoId: video.id, stage: 'READY',
         durationSec: normalized.probe.durationSec, formatStep: download.formatStep,
         formatId: download.formatId, vcodec: download.vcodec, acodec: download.acodec,
@@ -308,7 +395,7 @@ export class VideoImportService implements OnModuleInit, OnModuleDestroy {
         where: { id: importId, status: 'IMPORTING' },
         data: { status: 'PENDING', stage: 'FETCHING_INFO', progress: 0 } });
       else if (failure.code !== 'IMPORT_CANCELLED') await this.fail(importId, failure.code, failure.message);
-      this.logger.warn(JSON.stringify({ event: 'external_video_import', provider: 'YOUTUBE',
+      this.logger.warn(JSON.stringify({ event: 'external_video_import', provider: row.provider,
         externalVideoId: row.externalVideoId, importJobId: importId, stage: 'IMPORT_FAILED', phase,
         category: failure.code, reason: failure.detail ?? failure.message, title: metadata?.title ?? null,
         durationSec: metadata?.duration ?? null, formatStep: download?.formatStep ?? null,

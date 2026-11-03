@@ -5,70 +5,11 @@ import { delimiter, isAbsolute, join } from 'path';
 import { probeMedia } from '../processing/media-probe';
 import { MAX_SOURCE_VIDEO_DURATION_SECONDS } from '../processing/clip-selection-policy';
 
-/**
- * Structured import failure. `code` is the real category (persisted as VideoImport.errorCode and
- * logged), `message` is the user-facing sentence, `detail` is the provider's own reason for logs.
- */
-export class ImportError extends Error {
-  constructor(readonly code: string, message: string, readonly detail?: string) { super(message); }
-}
-
-export const IMPORT_FAILURE_CODES = ['VIDEO_NOT_FOUND', 'PRIVATE_VIDEO', 'LOGIN_REQUIRED',
-  'AGE_RESTRICTED', 'REGION_RESTRICTED', 'LIVE_STREAM_UNSUPPORTED', 'NO_VIDEO_FORMAT',
-  'NO_AUDIO_FORMAT', 'RATE_LIMITED', 'BOT_CHALLENGE', 'NETWORK_TIMEOUT', 'DOWNLOAD_FAILED',
-  'MEDIA_INVALID', 'STORAGE_FAILED', 'UNKNOWN_PROVIDER_ERROR'] as const;
-export type ImportFailureCode = typeof IMPORT_FAILURE_CODES[number];
-
-const UPLOAD = 'You can upload the video file instead.';
-export const IMPORT_FAILURE_MESSAGES: Record<ImportFailureCode, string> = {
-  VIDEO_NOT_FOUND: `This video doesn't exist or has been removed. Check the link, or upload the file instead.`,
-  PRIVATE_VIDEO: `This video is private and can't be imported. ${UPLOAD}`,
-  LOGIN_REQUIRED: `This video requires sign-in and can't be imported automatically. ${UPLOAD}`,
-  AGE_RESTRICTED: `This video is age-restricted and can't be imported automatically. ${UPLOAD}`,
-  REGION_RESTRICTED: `This video is not available in this region. ${UPLOAD}`,
-  LIVE_STREAM_UNSUPPORTED: `Live streams can't be imported while they are live. Try again after the stream has ended, or upload the file.`,
-  NO_VIDEO_FORMAT: `Automatic import isn't available for this video. ${UPLOAD}`,
-  NO_AUDIO_FORMAT: `This video has no usable audio track, so clips can't be made from it automatically. ${UPLOAD}`,
-  RATE_LIMITED: `Import temporarily failed. Try again in a few minutes, or upload the file instead.`,
-  BOT_CHALLENGE: `YouTube is temporarily blocking automatic import. Try again later, or upload the file instead.`,
-  NETWORK_TIMEOUT: `Import temporarily failed. Try again, or upload the file instead.`,
-  DOWNLOAD_FAILED: `Import failed while downloading. Try again, or upload the file instead.`,
-  MEDIA_INVALID: `The imported video couldn't be used. ${UPLOAD}`,
-  STORAGE_FAILED: `Import failed while saving the video. Try again.`,
-  UNKNOWN_PROVIDER_ERROR: `Automatic import isn't available for this video. ${UPLOAD}`
-};
-
-export function importFailure(code: ImportFailureCode, detail?: string) {
-  return new ImportError(code, IMPORT_FAILURE_MESSAGES[code], detail);
-}
-
-/** Failures worth retrying with backoff: the same request can succeed moments later. */
-export const TRANSIENT_IMPORT_FAILURES = new Set<string>(['NETWORK_TIMEOUT', 'RATE_LIMITED']);
-
-export function parseYouTubeUrl(input: unknown) {
-  if (typeof input !== 'string' || input.length > 2048) {
-    throw new ImportError('INVALID_URL', 'Enter a valid YouTube video URL.');
-  }
-  let url: URL;
-  try { url = new URL(input.trim()); } catch {
-    throw new ImportError('INVALID_URL', 'Enter a valid YouTube video URL.');
-  }
-  if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash) {
-    throw new ImportError('INVALID_URL', 'Use a public HTTPS YouTube video URL.');
-  }
-  const host = url.hostname.toLowerCase();
-  if (!['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'].includes(host)) {
-    throw new ImportError('UNSUPPORTED_PROVIDER', 'Only YouTube video links are supported.');
-  }
-  const segments = url.pathname.split('/').filter(Boolean);
-  const id = host === 'youtu.be' && segments.length === 1 ? segments[0]
-    : segments.length === 1 && segments[0] === 'watch' ? url.searchParams.get('v')
-    : segments.length === 2 && ['shorts', 'live'].includes(segments[0]) ? segments[1] : null;
-  if (!id || !/^[A-Za-z0-9_-]{11}$/.test(id)) {
-    throw new ImportError('INVALID_URL', 'The YouTube link must identify one video.');
-  }
-  return { externalVideoId: id, sourceUrl: `https://www.youtube.com/watch?v=${id}` };
-}
+import { ImportError, importFailure, TRANSIENT_IMPORT_FAILURES, type ImportFailureCode } from './source-import-errors';
+import { resolveSourceUrl, SOURCE_PROVIDERS } from './source-import-policy';
+import { publicImportProxy } from './source-import-proxy';
+export * from './source-import-errors';
+export { parseYouTubeUrl } from './source-import-policy';
 
 /**
  * Classifies yt-dlp's stderr into a failure category. Order matters: YouTube's private,
@@ -80,18 +21,19 @@ export function classifyYtDlpError(stderr: string, phase: 'metadata' | 'download
   const errors = stderr.split('\n').filter((line) => /^\s*ERROR:/.test(line)).join('\n');
   const text = (errors || stderr).toLowerCase();
   const has = (pattern: RegExp) => pattern.test(text);
-  if (has(/private video|this video is private/)) return 'PRIVATE_VIDEO';
+  if (has(/private video|this video is private|this account is private|protected tweets/)) return 'PRIVATE_VIDEO';
   if (has(/not a bot|captcha challenge/)) return 'BOT_CHALLENGE';
   if (has(/rate-limited by youtube|this content isn't available, try again later|http error 429|too many requests/))
     return 'RATE_LIMITED';
   if (has(/confirm your age|age-restricted|inappropriate for some users|age verification/)) return 'AGE_RESTRICTED';
   if (has(/available in your country|geo restriction|not available from your location|geo-restricted/))
     return 'REGION_RESTRICTED';
-  if (has(/members-only|members only|join this channel|available to this channel's members|only available for registered users|premium|requires payment|purchase|sign in|log in|login required|--cookies/))
+  if (has(/members-only|members only|join this channel|available to this channel's members|only available for registered users|premium|requires payment|purchase|sign in|log in|login required|requires authentication|only accessible.*authenticated|--cookies/))
     return 'LOGIN_REQUIRED';
   if (has(/live event will begin|premieres in|is_upcoming|this live stream recording is not available|live stream|is live|post-live/))
     return 'LIVE_STREAM_UNSUPPORTED';
-  if (has(/drm protected|requested format is not available|no video formats found/)) return 'NO_VIDEO_FORMAT';
+  if (has(/drm[ -]protected/)) return 'DRM_PROTECTED';
+  if (has(/requested format is not available|no video formats found/)) return 'NO_VIDEO_FORMAT';
   if (has(/this video is unavailable|video unavailable|has been removed|no longer available|account associated with this video has been terminated|does not exist|incomplete youtube id|http error 404|http error 410/))
     return 'VIDEO_NOT_FOUND';
   if (has(/timed? ?out|connection (reset|refused|aborted)|temporary failure in name resolution|name or service not known|network is unreachable|remote end closed|incompleteread|eof occurred|http error 5\d\d|ssl:|unable to download (webpage|api page)/))
@@ -192,7 +134,7 @@ export function backoffMs(code: string, attempt: number) {
 
 type RunResult = { stdout: string; stderr: string; code: number | null };
 
-export class YouTubeImportAdapter {
+export class SourceImportAdapter {
   readonly config = importConfig();
   get maxDuration() { return this.config.maxDuration; }
   get maxBytes() { return this.config.maxBytes; }
@@ -214,11 +156,12 @@ export class YouTubeImportAdapter {
    * caption tables (the original failure: a 2.8 MB dump tripped the output cap).
    */
   async metadata(sourceUrl: string, signal: AbortSignal, attempts: AttemptLog[] = []): Promise<ImportMetadata> {
-    const expectedId = parseYouTubeUrl(sourceUrl).externalVideoId;
+    const source = resolveSourceUrl(sourceUrl);
+    const expectedId = source.externalVideoId;
     const result = await this.withRetries('metadata', undefined, attempts, signal, async () => {
       const run = await this.run(['--ignore-config', '--no-playlist', '--skip-download',
         '--socket-timeout', String(this.config.connectTimeoutSec), '--extractor-retries', '2',
-        '-O', '%(.{id,title,duration,availability,age_limit,is_live,was_live,live_status,extractor_key,thumbnail,width,height})j',
+        '-O', '%(.{id,title,duration,availability,age_limit,is_live,was_live,live_status,extractor_key,display_id,thumbnail,width,height})j',
         '-O', '%(formats.:.{format_id,ext,vcodec,acodec,protocol,height,has_drm,filesize,filesize_approx,tbr})j',
         sourceUrl], signal, this.config.metadataTimeoutMs);
       if (run.code !== 0) throw this.failure(run, 'metadata');
@@ -234,7 +177,11 @@ export class YouTubeImportAdapter {
     } catch {
       throw importFailure('UNKNOWN_PROVIDER_ERROR', 'Unreadable metadata output');
     }
-    if (info.extractor_key !== 'Youtube' || info.id !== expectedId)
+    // Social extractors identify the media asset in id and the requested post
+    // in display_id. A media id is not interchangeable with the post id.
+    const returnedId = source.provider === 'YOUTUBE' ? String(info.id) : String(info.display_id ?? info.id);
+    const expectedPostId = source.externalVideoId.split(':')[0];
+    if (!SOURCE_PROVIDERS.find(p => p.id === source.provider)!.extractor.test(String(info.extractor_key)) || returnedId !== expectedPostId)
       throw importFailure('UNKNOWN_PROVIDER_ERROR', `Unexpected extractor result ${String(info.extractor_key)}/${String(info.id)}`);
     const liveStatus = typeof info.live_status === 'string' ? info.live_status : null;
     // An active, upcoming or still-processing broadcast is not a VOD; an archived one is.
@@ -248,16 +195,18 @@ export class YouTubeImportAdapter {
     if (availability && !['public', 'unlisted'].includes(availability))
       throw importFailure('LOGIN_REQUIRED', `availability=${availability}`);
     const duration = typeof info.duration === 'number' && Number.isFinite(info.duration) ? info.duration : 0;
-    if (duration <= 0) throw importFailure('UNKNOWN_PROVIDER_ERROR', 'No duration in metadata');
+    if (duration <= 0 && source.provider === 'YOUTUBE') throw importFailure('UNKNOWN_PROVIDER_ERROR', 'No duration in metadata');
     if (duration > this.config.maxDuration) throw new ImportError('DURATION_LIMIT',
       `This video is longer than the ${Math.floor(this.config.maxDuration / 60)} minute limit. Upload a shorter video instead.`,
       `duration=${duration}`);
     const usable = formats.filter((format) => !format.has_drm && format.protocol !== 'mhtml');
     if (!usable.length && formats.some((format) => format.has_drm))
-      throw importFailure('NO_VIDEO_FORMAT', 'All formats are DRM protected');
-    if (!usable.some((format) => format.vcodec && format.vcodec !== 'none'))
+      throw importFailure('DRM_PROTECTED', 'All formats are DRM protected');
+    // Some supported social extractors omit codec names. Unknown metadata must
+    // reach the authoritative local media probe; an explicit absent stream still fails early.
+    if (!usable.some((format) => format.vcodec !== 'none'))
       throw importFailure('NO_VIDEO_FORMAT', `No video formats among ${formats.length}`);
-    if (!usable.some((format) => format.acodec && format.acodec !== 'none'))
+    if (!usable.some((format) => format.acodec !== 'none'))
       throw importFailure('NO_AUDIO_FORMAT', `No audio formats among ${formats.length}`);
     return {
       id: expectedId, duration, availability, liveStatus,
@@ -319,7 +268,7 @@ export class YouTubeImportAdapter {
       const run = await this.run(['--ignore-config', '--no-playlist', '--no-part', '--no-mtime',
         '--socket-timeout', String(this.config.connectTimeoutSec), '--retries', '3',
         '--fragment-retries', '10', '--extractor-retries', '2', '--concurrent-fragments', '4',
-        '--match-filter', '!is_live', '-f', step.format, '-S', step.sort,
+        '--match-filter', '!is_live', '-f', secureFormatSelector(step.format), '-S', step.sort,
         ...(step.merge ? ['--merge-output-format', step.merge] : []),
         '--no-simulate', '-O',
         'after_move:%(.{filepath,format_id,vcodec,acodec,width,height,protocol,requested_formats})j',
@@ -336,7 +285,7 @@ export class YouTubeImportAdapter {
       if (size > this.config.maxBytes) throw new ImportError('SIZE_LIMIT',
         'This video is larger than the import size limit. Upload the file instead.', `bytes=${size}`);
       // A step whose result is missing a stream is a format problem: the next step may fix it.
-      const probe = await probeMedia(filePath).catch(() => null);
+      const probe = await probeMedia(filePath, { localOnly: true }).catch(() => null);
       if (!probe) throw importFailure('MEDIA_INVALID', `ffprobe could not read ${step.name} output`);
       if (!probe.hasVideo) throw importFailure('NO_VIDEO_FORMAT', `${step.name} produced no video stream`);
       if (!probe.hasAudio) throw importFailure('NO_AUDIO_FORMAT', `${step.name} produced no audio stream`);
@@ -389,9 +338,20 @@ export class YouTubeImportAdapter {
     return Object.assign(error, { exitCode: run.code });
   }
 
-  private run(args: string[], signal: AbortSignal, timeoutMs: number): Promise<RunResult> {
+  private async run(args: string[], signal: AbortSignal, timeoutMs: number): Promise<RunResult> {
+    if (args.includes('--version')) return this.spawnRetriever(args, signal, timeoutMs);
+    const proxy = await publicImportProxy(signal);
+    try {
+      return await this.spawnRetriever(['--proxy', proxy.url, '--downloader', 'native',
+        '--hls-prefer-native', '--no-plugin-dirs', '--playlist-items', '1',
+        '--postprocessor-args', 'ffmpeg_i:-protocol_whitelist file,pipe -format_whitelist mov,matroska,webm,mpegts,aac,mp3', ...args], proxy.signal, timeoutMs);
+    } finally { await proxy.close(); }
+  }
+
+  private spawnRetriever(args: string[], signal: AbortSignal, timeoutMs: number): Promise<RunResult> {
     return new Promise((resolve, reject) => {
       const child = spawn(this.config.binary, args, { shell: false, windowsHide: true,
+        env: { ...process.env, NO_PROXY: '', no_proxy: '' },
         detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = ''; let stderr = '';
       let timedOut = false;
@@ -419,7 +379,7 @@ export class YouTubeImportAdapter {
         finish();
         reject(signal.aborted ? abortReason(signal) : error.code === 'ENOENT'
           ? new ImportError('IMPORT_UNAVAILABLE',
-            "YouTube import isn't available right now. You can upload the video file instead.",
+            "Video link import isn't available right now. Please try again later.",
             `Retriever ${this.config.binary} not found`)
           : importFailure('UNKNOWN_PROVIDER_ERROR', error.message));
       });
@@ -470,4 +430,12 @@ async function resolveExecutable(binary: string) {
     try { await access(candidate, constants.X_OK); return candidate; } catch { /* keep looking */ }
   }
   return null;
+}
+
+// Legacy website/tests keep their established import path while using the shared adapter.
+export { SourceImportAdapter as YouTubeImportAdapter };
+/** Network retrieval is native HTTPS/HLS/DASH only; FFmpeg receives local files for merging. */
+export function secureFormatSelector(selector: string) {
+  return selector.split(/([+/])/u).map(part => ['+', '/'].includes(part) ? part :
+    part + '[protocol~="^(https|m3u8_native|m3u8|http_dash_segments|http_dash_segments_generator)$"]').join('');
 }

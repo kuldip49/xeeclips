@@ -7,24 +7,20 @@ import { createWriteStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import { Transform } from 'stream';
 import type { LookupFunction } from 'net';
+import { resolveSourceUrl } from '../videos/source-import-policy';
+import { publicImportProxy, publicImportAddress } from '../videos/source-import-proxy';
 import type { ReframeSocialSource } from '@ai-content-platform/shared';
 const exec=promisify(execFile);
 export const MAX_REFRAME_BYTES=1024*1024*1024;
 export function socialSource(value: unknown) {
-  if(typeof value!=='string'||value.length>2048)throw new BadRequestException('Paste an Instagram or X video link.');
-  let u:URL;try{u=new URL(value);}catch{throw new BadRequestException('Paste a valid HTTPS video link.');}
-  if(u.protocol!=='https:'||u.username||u.password||u.port||u.hash)throw new BadRequestException('Use a public HTTPS video link.');
-  const host=u.hostname.toLowerCase();let platform:'instagram'|'x';
-  if(['instagram.com','www.instagram.com'].includes(host) && /^\/(?:reel|reels|p|tv)\/[a-zA-Z0-9_-]+\/?$/u.test(u.pathname))platform='instagram';
-  else if(['x.com','www.x.com','twitter.com','www.twitter.com'].includes(host) && /^\/[a-zA-Z0-9_]{1,15}\/status\/\d+\/?(?:video\/\d+\/?)?$/u.test(u.pathname))platform='x';
-  else throw new BadRequestException('Use an Instagram Reel/video or X status video link. Upload a file for other sources.');
-  u.search='';return {platform,url:u.toString()};
+  try {
+    const source = resolveSourceUrl(value);
+    if (source.provider !== 'INSTAGRAM' && source.provider !== 'X') throw new Error('unsupported');
+    return { platform: source.provider === 'INSTAGRAM' ? 'instagram' as const : 'x' as const, url: source.sourceUrl };
+  } catch { throw new BadRequestException('Use an Instagram Reel/video or X status video link. Upload a file for other sources.'); }
 }
-function publicAddress(ip:string) {
-  // Pin DNS to a public IPv4 address. IPv6, private and special-purpose ranges are refused.
-  const a=ip.split('.').map(Number);if(a.length!==4||a.some(n=>!Number.isInteger(n)||n<0||n>255))return false;
-  return !(a[0]===0||a[0]===10||a[0]===127||a[0]>=224||a[0]===169&&a[1]===254||a[0]===172&&a[1]>=16&&a[1]<=31||a[0]===192&&[0,168].includes(a[1])||a[0]===100&&a[1]>=64&&a[1]<=127||a[0]===198&&[18,19,51].includes(a[1])||a[0]===203&&a[1]===0&&a[2]===113);
-}
+
+const publicAddress = publicImportAddress;
 const allowedMediaHost=(host:string,platform:string)=>platform==='instagram' ? /(?:^|\.)(?:cdninstagram\.com|fbcdn\.net)$/u.test(host) : /(?:^|\.)twimg\.com$/u.test(host);
 export function pinnedLookup(address: string): LookupFunction {
   return (_host,options,callback)=>callback(null,options.all ? [{address,family:4}] : address,4);
@@ -47,7 +43,10 @@ export async function downloadSocial(value:unknown,path:string,signal:AbortSigna
   signal=AbortSignal.any([signal,AbortSignal.timeout(180000)]);
   const source=socialSource(value);
   if(process.env.QUICK_REFRAME_SOCIAL_IMPORT_APPROVED!=='true')throw new BadRequestException('Automatic social import is unavailable on this deployment. Upload your authorized MP4 or MOV instead.');
-  const {stdout}=await exec(process.env.YOUTUBE_IMPORT_BINARY||'yt-dlp',['--ignore-config','--no-playlist','--no-warnings','--skip-download','--dump-single-json','--socket-timeout','15','-f','best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]','--',source.url],{timeout:60000,maxBuffer:5*1024*1024,signal});
+  const proxy=await publicImportProxy(signal);let stdout:string;
+  try {
+    ({stdout}=await exec(process.env.YOUTUBE_IMPORT_BINARY||'yt-dlp',['--proxy',proxy.url,'--no-plugin-dirs','--ignore-config','--no-playlist','--no-warnings','--skip-download','--dump-single-json','--socket-timeout','15','-f','best[ext=mp4][vcodec!=none][acodec!=none]/best[ext=mp4]','--',source.url],{timeout:60000,maxBuffer:5*1024*1024,signal:proxy.signal,env:{...process.env,NO_PROXY:'',no_proxy:''}}));
+  } finally { await proxy.close(); }
   const meta=JSON.parse(stdout);
   if(meta.webpage_url && socialSource(meta.webpage_url).platform!==source.platform)throw new BadRequestException('The link redirected outside the selected platform. Upload a file instead.');
   // Some eligible Instagram metadata omits duration; actual downloaded media is always probed.

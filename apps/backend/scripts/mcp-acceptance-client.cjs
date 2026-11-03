@@ -22,6 +22,7 @@ const scopes = [
   "account:read",
   "credits:read",
   "sources:read",
+  "sources:import",
   "clips:read",
   "clips:create",
   "clips:edit",

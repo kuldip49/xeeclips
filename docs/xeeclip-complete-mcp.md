@@ -1,6 +1,6 @@
 # XeeClip complete remote MCP
 
-MCP version **1.0.0**. Endpoint: **https://api.xeeclip.me/mcp**. Implementation: `apps/backend/src/modules/mcp`. Deployment evidence belongs in [the release report](xeeclip-complete-mcp-release-report.md).
+MCP version **1.1.0**. Endpoint: **https://api.xeeclip.me/mcp**. Implementation: `apps/backend/src/modules/mcp`. Deployment evidence belongs in [the release report](xeeclip-complete-mcp-release-report.md).
 
 ## Architecture
 
@@ -10,9 +10,9 @@ Assistant → HTTPS MCP → OAuth/scopes → account ownership context → exist
 
 The adapter imports no Prisma, storage client, filesystem, subprocess, FFmpeg or provider API. MCP database access is limited to OAuth, receipts, audit and health. Business services enforce ownership, credits, campaign rules, generation, canonical edits and exports. Even admin MCP users run with their own ownership context. There is no admin tool or second renderer/job/editor system.
 
-Generation uses existing analyzed sources. A trusted internal mode override permits reusing source analysis; public clip-selection parsing cannot accept that override. Rendered clips persist their selected mode so History/editor retain the correct tier. Free prohibits cloud calls. Busy Pro never silently switches to Free.
+Generation uses normal analyzed sources. For an external URL, import it through import_source, poll get_source_import until COMPLETE/sourceStatus READY, then pass its sourceId to the requested workflow. A trusted internal mode override permits reusing source analysis; public clip-selection parsing cannot accept that override. Rendered clips persist their selected mode so History/editor retain the correct tier. Free prohibits cloud calls. Busy Pro never silently switches to Free.
 
-Quick Reframe uses its existing ingest/prepare/analyze/style/result queue and reuses owned source transcripts and compatible prior region analysis. Its existing **180-second** limit remains. Ordinary source upload remains **3 hours / 4 GiB**. Large uploads stay in XeeClip; assistants select an existing source ID.
+Quick Reframe uses its existing ingest/prepare/analyze/style/result queue and reuses owned source transcripts and compatible prior region analysis. Its existing **180-second** limit remains. Ordinary source upload remains **3 hours / 4 GiB**. File uploads stay in XeeClip. Supported public video links can be imported directly by assistants, without visiting the website.
 
 ## OAuth and account integration
 
@@ -30,7 +30,8 @@ The authenticated consent page is `/mcp/authorize`. Login/signup preserve only t
 |---|---|
 | xeeclip:account:read | Account summary |
 | xeeclip:credits:read | Canonical balance |
-| xeeclip:sources:read | Owned sources |
+| xeeclip:sources:read | Owned sources, import status and supported-source discovery |
+| xeeclip:sources:import | Import authorized external video links |
 | xeeclip:clips:read | Clips, jobs and project summaries |
 | xeeclip:clips:create | Create Clips |
 | xeeclip:clips:edit | Canonical edits, restore, Undo/Redo and save |
@@ -51,7 +52,8 @@ All names have prefix **xeeclip_**. `tools/list` provides authoritative strict J
 | Area | Tools | Effects |
 |---|---|---|
 | Account | get_account, get_credits | Read |
-| Sources | list_sources, get_source | Read, bounded pagination |
+| Sources | list_sources, get_source, get_supported_sources, get_source_import | Read, bounded pagination/status/discovery |
+| Source import | import_source | Async admission into the existing owned Project/VideoImport/Video pipeline |
 | Clips | create_clips, get_job, list_clips, get_clip | Create async; other tools read |
 | Reframe | quick_reframe, get_reframe_result | Create async; result reads |
 | Campaign reads | list_campaigns, get_campaign, get_campaign_clip_compliance | Read; no stored compliance/lifecycle refresh |
@@ -68,7 +70,27 @@ All names have prefix **xeeclip_**. `tools/list` provides authoritative strict J
 
 Every business write requires idempotencyKey. Existing-project edits/export require expectedRevision. Select an explicit video element on multi-cut projects. Crop uses normalized edge insets, scale is 0.1–4, and pan is bounded -1–1 then canonically clamped. Caption presets come from the actual canonical list. Text changes preserve manual provenance.
 
-No destructive source/campaign/project deletion, arbitrary URL fetch, storage key, shell, SQL or file path is exposed. Music/images must already belong to the selected project or an owned campaign. Uploads stay in the website.
+No destructive source/campaign/project deletion, generic HTTP fetch, storage key, shell, SQL or file path is exposed. import_source accepts only normalized links recognized by the shared supported-provider policy. Music/images must already belong to the selected project or an owned campaign. Uploads stay in the website.
+
+## External URL workflow
+
+There are **45 tools**. The generic import tools are `xeeclip_import_source`, `xeeclip_get_source_import` and `xeeclip_get_supported_sources`. The provider registry is shared with the website importer and existing Quick Reframe social resolver. The current implemented platforms are **YouTube, Instagram and X/Twitter**, enabled by their existing deployment flags. TikTok, Facebook, Vimeo, Twitch, direct media and other URLs are not implemented and return UNSUPPORTED_SOURCE; yt-dlp's wider extractor catalog is not a support claim.
+
+Call get_supported_sources for current enabled flags, maximum duration/bytes and existing Create defaults. Current Create defaults are XeePro, StyleZero and 3 clips (XeeFree when Pro is administratively disabled). Preserve explicit settings; do not silently switch modes. New import/source analysis is independently XeeFree and consumes no generation credit. Imports do not grant Pro AI consent.
+
+1. Call import_source with `{ "url": "https://…", "idempotencyKey": "stable-action-key" }`; optional title is up to 120 characters. The user must own or be authorized to process the content.
+2. The tool immediately returns importId, normalized provider, QUEUED and recommendedPollAfterMs=5000. Do not hold an HTTP request through download, analysis or rendering.
+3. Poll get_source_import no faster than recommended. QUEUED/PROCESSING do not yet expose a generation-ready sourceId. COMPLETE includes sourceStatus READY, sourceId, title and actual duration. FAILED includes a safe error code/message.
+4. Continue with create_clips/get_job/get_clip; quick_reframe/get_reframe_result; or get_campaign/attach_campaign_source/generate_campaign_clips/get_job/compliance. Respect the existing 180-second Quick Reframe cap and explicit campaign confirmation.
+5. Use normal canonical editor/export tools and normal History. No MCP-specific media model or downloader exists.
+
+Import admission creates/reuses the authenticated user's normal Project/VideoImport records. A per-user/provider/video transaction lock plus the MCP receipt prevents parallel duplication. Retries with the same key return the original reference; different input with that key is rejected. A new key explicitly retries an eligible failed Free import without another source/import row. Queue delivery and orphaned worker recovery use the existing queue with bounded reconciliation, never background retries of terminal failures.
+
+All source inputs require HTTPS, exact allowed host/path syntax and normalized IDs. Tracking query fields are discarded. A private authenticated loopback proxy pins each extractor/media connection to a checked public IPv4 address, rejects mixed/private DNS answers, non-TLS/nonstandard-port connections and XeeClip/internal destinations, and revalidates each redirected connection. Native HTTPS/HLS/DASH retrieval stays behind that proxy; local FFmpeg inputs/probes cannot fetch embedded network resources. IPv6-only destinations are conservatively refused. No browser cookies, platform credentials, DRM bypass, paywall access or private-account access is used.
+
+Only reliably detected access failures receive specific SOURCE_PRIVATE, SOURCE_LOGIN_REQUIRED, SOURCE_DRM_PROTECTED, SOURCE_TOO_LONG or SOURCE_REGION_RESTRICTED codes. Missing/removed videos use SOURCE_UNAVAILABLE; other failures use SOURCE_IMPORT_FAILED. No scraper output or raw storage keys appear in MCP results. Source processing always probes the complete stored video, including social metadata that omits duration. The source cap remains three hours; provider restrictions can still make an individual public post unavailable.
+
+Existing assistant connections need the newly requested **xeeclip:sources:import** permission: refresh the client's discovered tools and reconnect/review consent to import. Existing grants do not silently gain that scope. The optional combined create_clips(sourceUrl) shortcut is intentionally omitted: the explicit asynchronous import/status chain uses the existing queue without creating an extra orchestration job system.
 
 ## Retry, jobs and credits
 
@@ -94,7 +116,7 @@ McpAudit records user/client/connection, tool, safe entity/action IDs, timestamp
 
 Structured events: mcp_connections, mcp_auth_success/failure, mcp_tool_calls/errors, mcp_rate_limits, mcp_create_jobs, mcp_editor_mutations, mcp_exports, mcp_xeepro_busy. `/mcp/health` reports version, transport and database/Redis readiness without secrets.
 
-Stable errors include AUTH_REQUIRED, AUTH_EXPIRED, TOKEN_REVOKED, INSUFFICIENT_SCOPE, INSUFFICIENT_CREDITS, XEEPRO_BUSY, EDIT_CONFLICT, NOT_FOUND, FORBIDDEN, INVALID_INPUT, EDIT_VALIDATION_FAILED, EXPORT_FAILED, GENERATION_FAILED, JOB_FAILED, HEADLINE_DOES_NOT_FIT, AI_CONSENT_REQUIRED, UNSUPPORTED_SOURCE, UNSUPPORTED_OPERATION, IDEMPOTENCY_CONFLICT, OPERATION_INTERRUPTED and RATE_LIMITED. Async failures add friendly errors alongside status/reference data. OAuth uses standard HTTP challenges. MCP responses omit Prisma/FFmpeg/provider diagnostics and stack traces.
+Import errors additionally include SOURCE_UNAVAILABLE, SOURCE_PRIVATE, SOURCE_LOGIN_REQUIRED, SOURCE_DRM_PROTECTED, SOURCE_TOO_LONG, SOURCE_IMPORT_FAILED and SOURCE_REGION_RESTRICTED. Stable errors include AUTH_REQUIRED, AUTH_EXPIRED, TOKEN_REVOKED, INSUFFICIENT_SCOPE, INSUFFICIENT_CREDITS, XEEPRO_BUSY, EDIT_CONFLICT, NOT_FOUND, FORBIDDEN, INVALID_INPUT, EDIT_VALIDATION_FAILED, EXPORT_FAILED, GENERATION_FAILED, JOB_FAILED, HEADLINE_DOES_NOT_FIT, AI_CONSENT_REQUIRED, UNSUPPORTED_SOURCE, UNSUPPORTED_OPERATION, IDEMPOTENCY_CONFLICT, OPERATION_INTERRUPTED and RATE_LIMITED. Async failures add friendly errors alongside status/reference data. OAuth uses standard HTTP challenges. MCP responses omit Prisma/FFmpeg/provider diagnostics and stack traces.
 
 ## Connect ChatGPT
 
@@ -138,6 +160,8 @@ Migration `20261102000000_xeeclip_mcp` creates six metadata tables with indexes/
 Deploy with a fresh restored/verified backup, maintenance, idle checks, the additive migration, backend/static frontend, disposable acceptance, cleanup and fingerprint verification. Keep AI/dependency containers unchanged. Rollback restores the previous backend image and Cloudflare frontend version; leave additive tables unused. Do not reset or destructively restore production as routine rollback.
 
 ## Reproduce acceptance
+
+`npm --workspace apps/backend run test:source-import` builds and checks provider/unsupported policies, three-hour caps, protected media, DNS pinning, real proxy redirect rejection and analysis readiness. `verify-mcp-source-import.cjs` and `verify-mcp-import-flows.cjs` exercise authorized URL admission through actual source, generation, Reframe, campaign and export flows; keep URL fixtures in ignored MCP_IMPORT_URLS_FILE.
 
 `npm --workspace apps/backend run test:mcp` builds and runs schema, scope, idempotency, crash-receipt and cached-export ownership tests. Existing regression suites cover generation/styles, Free policy, Pro busy, upload duration, Reframe, editor/render/export and rematerialization.
 

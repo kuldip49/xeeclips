@@ -2,6 +2,7 @@ import { Injectable } from "@nestjs/common";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { AuthService } from "../auth/auth.service";
 import { requestIdentity } from "../auth/request-context";
+import { VideoImportService } from "../videos/video-import.service";
 import { VideosService } from "../videos/videos.service";
 import { parseClipCreationRequest } from "../videos/clip-selection.service";
 import { QuickReframeService } from "../quick-reframe/quick-reframe.service";
@@ -17,7 +18,7 @@ import {
   createPerformanceTelemetry,
 } from "../processing/performance-telemetry";
 import { mcpConfig } from "./mcp-config";
-import { McpToolError } from "./mcp-operations.service";
+import { McpToolError, safeMcpError } from "./mcp-operations.service";
 const object = (v: unknown): Record<string, any> =>
   v && typeof v === "object" && !Array.isArray(v)
     ? (v as Record<string, any>)
@@ -49,6 +50,7 @@ export class McpAdapterService {
   constructor(
     private readonly auth: AuthService,
     private readonly videos: VideosService,
+    private readonly imports: VideoImportService,
     private readonly quick: QuickReframeService,
     private readonly campaigns: CampaignsService,
     private readonly edit: EditModeService,
@@ -283,6 +285,12 @@ export class McpAdapterService {
             status: u.status,
             unlimited: u.role === "ADMIN",
           };
+    }
+    if (tool === "get_supported_sources") return this.imports.supportedSources();
+    if (tool === "import_source") return this.imports.importSource(a.url, a.title);
+    if (tool === "get_source_import") {
+      const result = await this.imports.sourceImportSummary(a.importId);
+      return 'errorCode' in result ? { ...result, error: safeMcpError(new McpToolError(result.errorCode!, '')) } : result;
     }
     if (tool === "list_sources")
       return this.videos.sourcePage(a.limit, a.cursor);

@@ -35,7 +35,7 @@ const cases = [
   ['ERROR: [youtube] x: This video is only available for registered users', 'metadata', 'LOGIN_REQUIRED'],
   ['ERROR: [youtube] x: The uploader has not made this video available in your country', 'metadata', 'REGION_RESTRICTED'],
   ['ERROR: [youtube] x: This live event will begin in 3 hours.', 'metadata', 'LIVE_STREAM_UNSUPPORTED'],
-  ['ERROR: [youtube] x: This video is DRM protected', 'metadata', 'NO_VIDEO_FORMAT'],
+  ['ERROR: [youtube] x: This video is DRM protected', 'metadata', 'DRM_PROTECTED'],
   ['ERROR: [youtube] x: Requested format is not available. Use --list-formats', 'download', 'NO_VIDEO_FORMAT'],
   ['ERROR: Unable to download webpage: HTTP Error 429: Too Many Requests', 'metadata', 'RATE_LIMITED'],
   ["ERROR: [youtube] x: This content isn't available, try again later. The current session has been rate-limited by YouTube", 'metadata', 'RATE_LIMITED'],

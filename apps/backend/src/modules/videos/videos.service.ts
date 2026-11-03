@@ -765,7 +765,7 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
    */
   async createFromUpload(projectId: string, file: Express.Multer.File, requestedAiMode?: unknown,
     requestedProcessingType?: unknown, requestedAspectRatio?: unknown, requestedPlatform?: unknown,
-    source?: { sourceUrl: string; externalVideoId: string; creditReservationKey?: string | null },
+    source?: { provider?: string; sourceUrl: string; externalVideoId: string; creditReservationKey?: string | null },
     autoGeneration?: ClipCreationRequest | null) {
     try {
       return await this.createFromUploadFile(projectId, file, requestedAiMode, requestedProcessingType,
@@ -777,7 +777,7 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
 
   private async createFromUploadFile(projectId: string, file: Express.Multer.File, requestedAiMode?: unknown,
     requestedProcessingType?: unknown, requestedAspectRatio?: unknown, requestedPlatform?: unknown,
-    source?: { sourceUrl: string; externalVideoId: string; creditReservationKey?: string | null },
+    source?: { provider?: string; sourceUrl: string; externalVideoId: string; creditReservationKey?: string | null },
     autoGeneration?: ClipCreationRequest | null) {
     assertNewProcessingMode(requestedAiMode);
     const aiMode = normalizeAiProcessingMode(requestedAiMode);
@@ -820,7 +820,7 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
       data: {
         projectId,
         originalName: file.originalname,
-        ...(source ? { sourceType: 'YOUTUBE', sourceUrl: source.sourceUrl,
+        ...(source ? { sourceType: source.provider || 'YOUTUBE', sourceUrl: source.sourceUrl,
           externalVideoId: source.externalVideoId } : {}),
         objectKey: stored.objectKey,
         bucket: stored.bucket,

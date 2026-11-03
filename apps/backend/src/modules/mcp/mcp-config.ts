@@ -1,8 +1,9 @@
-export const MCP_VERSION = "1.0.0";
+export const MCP_VERSION = "1.1.0";
 export const MCP_SCOPES = {
   "xeeclip:account:read": "View your account",
   "xeeclip:credits:read": "View your credits",
   "xeeclip:sources:read": "View your source videos",
+  "xeeclip:sources:import": "Import authorized external video links into your source library",
   "xeeclip:clips:read": "View your clips and jobs",
   "xeeclip:clips:create": "Create clips using your credits",
   "xeeclip:clips:edit": "Edit your clips in XeeClip",

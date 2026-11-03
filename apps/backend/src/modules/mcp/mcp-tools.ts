@@ -112,6 +112,20 @@ tool(
   { sourceId: id },
 );
 tool(
+  "get_supported_sources", "xeeclip:sources:read", "READ",
+  "Read the current enabled URL-import platforms, limits and existing Create Clips defaults from XeeClip's existing importer. Public authorized videos only; support does not guarantee that every post is accessible.", {},
+);
+tool(
+  "import_source", "xeeclip:sources:import", "GENERATION",
+  "Imports a supported external video URL into the authenticated user's XeeClip source library. Use this whenever the user provides a video URL that is not already stored in XeeClip. Supported platforms are determined by XeeClip's current import service. After completion, use the returned sourceId with generation, Quick Reframe, or campaign tools. Only import content the user owns or is authorized to process; submitting a URL confirms that authorization. Returns immediately; poll get_source_import until COMPLETE. Import/analysis uses XeeFree with no generation charge. Do not ask for a manual website upload when URL import is supported.",
+  { ...write, url: z.string().trim().min(1).max(2048).url(), title: z.string().trim().min(1).max(120).optional() },
+);
+tool(
+  "get_source_import", "xeeclip:sources:read", "READ",
+  "Poll an owned source import no faster than recommendedPollAfterMs. COMPLETE with sourceStatus READY returns the normal sourceId only after source analysis finishes. Then continue the user's requested clips, Quick Reframe or campaign flow using that ID and their exact settings.",
+  { importId: id },
+);
+tool(
   "create_clips",
   ["xeeclip:clips:create", "xeeclip:sources:read"],
   "GENERATION",

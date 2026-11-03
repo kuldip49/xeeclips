@@ -4,6 +4,8 @@ import Redis from "ioredis";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { PrismaService } from "../database/prisma.service";
 import { requestIdentity } from "../auth/request-context";
+import { ImportError } from "../videos/source-import-errors";
+import { sourceImportErrorCode } from "../videos/source-import-policy";
 import { mcpNumber, scopeNames } from "./mcp-config";
 
 export type McpCategory = "READ" | "EDITOR_WRITE" | "GENERATION" | "EXPORT";
@@ -52,7 +54,14 @@ const messages: Record<string, string> = {
   AI_CONSENT_REQUIRED:
     "Allow AI processing in XeeClip Settings before using XeePro.",
   UNSUPPORTED_SOURCE:
-    "Choose an existing authorized XeeClip source that meets this operation's limits.",
+    "This URL or source is not supported. Check supported sources and operation limits.",
+  SOURCE_UNAVAILABLE: "This video is unavailable or has been removed. Check the link.",
+  SOURCE_PRIVATE: "This video is private and cannot be imported.",
+  SOURCE_LOGIN_REQUIRED: "This video requires sign-in or restricted access and cannot be imported.",
+  SOURCE_DRM_PROTECTED: "This video is protected and cannot be imported.",
+  SOURCE_TOO_LONG: "Source videos can be up to 3 hours long. Choose a shorter video.",
+  SOURCE_REGION_RESTRICTED: "This video is not available in this region.",
+  SOURCE_IMPORT_FAILED: "The source could not be imported. Check the public video link and try again later.",
   UNSUPPORTED_OPERATION:
     "This operation is not currently supported by the canonical XeeClip editor.",
   IDEMPOTENCY_CONFLICT:
@@ -67,6 +76,8 @@ export function safeMcpError(error: any, category: McpCategory = "READ") {
   let code =
     error instanceof McpToolError
       ? error.code
+      : error instanceof ImportError
+        ? sourceImportErrorCode(error.code)
       : typeof body === "object"
         ? body?.code
         : undefined;
@@ -283,6 +294,7 @@ export class McpOperationsService implements OnModuleDestroy {
         input.campaignId,
         input.clipId,
         input.sourceId,
+        input.importId,
         input.reframeId,
         input.campaignClipId,
       ].find((v) => typeof v === "string");
@@ -343,6 +355,7 @@ export class McpOperationsService implements OnModuleDestroy {
         entityId,
         result,
         creditEffect:
+          tool.name === "xeeclip_import_source" ? "NO_CREDIT_CHARGE" :
           tool.category === "GENERATION"
             ? "CANONICAL_LEDGER"
             : tool.category === "EXPORT"

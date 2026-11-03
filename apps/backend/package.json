@@ -85,7 +85,8 @@
     "test:xeepro-availability": "npm run build && node scripts/test-xeepro-availability.cjs",
     "test:xeepro-busy": "npm run build && node scripts/test-xeepro-busy.cjs",
     "test:editor-headline-export": "npm run build && node scripts/test-editor-headline-export.cjs",
-    "test:mcp": "npm run build && node scripts/test-mcp-contract.cjs"
+    "test:mcp": "npm run build && node scripts/test-mcp-contract.cjs",
+    "test:source-import": "npm run build && node scripts/test-source-import.cjs && node scripts/test-youtube-import.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",

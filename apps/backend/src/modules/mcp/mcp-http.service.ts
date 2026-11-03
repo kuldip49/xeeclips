@@ -287,7 +287,7 @@ export class McpHttpService {
         { name: "XeeClip", version: MCP_VERSION },
         {
           instructions:
-            "Use existing owned sources and canonical projects. Generation/export are asynchronous: return job references and poll no faster than recommendedPollAfterMs. XeeFree never uses cloud models; XeePro busy must never silently switch to Free. Read the current project revision before editing. Reuse the same idempotencyKey only for retries of the same action.",
+            "When the user supplies an external video URL, call get_supported_sources, then import_source and poll get_source_import until COMPLETE. Use its sourceId to continue the requested generation, Quick Reframe or campaign steps with the exact user settings; do not require a website visit for supported URLs. Respect explicit user settings. For unspecified Create Clips settings, use generationDefaults from get_supported_sources; never silently change Pro to Free. Only process authorized public content; do not bypass private/login/DRM restrictions. Import analysis uses XeeFree at no generation charge. Otherwise reuse existing owned sources and canonical projects. Import/generation/export are asynchronous: return job references and poll no faster than recommendedPollAfterMs. XeeFree never uses cloud models; XeePro busy must never silently switch to Free. Read the current project revision before editing. Reuse the same idempotencyKey only for retries of the same action.",
         },
       );
       for (const def of MCP_TOOLS) {
