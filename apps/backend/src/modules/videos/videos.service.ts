@@ -1,4 +1,4 @@
-import { assertNewProcessingMode } from '../processing/generation-availability';
+import { assertNewProcessingMode, XEEPRO_BUSY_MESSAGE } from '../processing/generation-availability';
 import { campaignSemanticScores } from '../campaigns/campaign-understanding.service';
 import { UsageService } from '../auth/usage.service';
 import { ModuleRef } from '@nestjs/core';
@@ -323,10 +323,11 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
     const result = await this.getClipResults(job.video.id);
     const settings = job.generationSettings as Record<string, unknown> | null;
     const raw = String(result.deliveryStatus || result.status);
+    // Rendering can finish between reads; classify busy from this result snapshot.
     return { status: ['COMPLETE','COMPLETED'].includes(raw) ? 'COMPLETE' : raw === 'PARTIAL' ? 'PARTIAL' : raw === 'FAILED' ? 'FAILED' : raw === 'QUEUED' ? 'QUEUED' : 'PROCESSING',
       sourceId: job.video.id, mode: settings?.generationMode === 'ONLINE' ? 'XEEPRO' : settings?.generationMode === 'FALLBACK_ONLY' ? 'XEEFREE' : job.aiMode === 'ONLINE' ? 'XEEPRO' : 'XEEFREE',
       template: settings?.templateId || null, requestedClips: job.requestedClipCount, completedClips: result.deliveredClipCount,
-      resultIds: result.clips.map(c => c.id), errorCode: job.errorCode==='XEEPRO_BUSY'?'XEEPRO_BUSY':raw==='FAILED'?'JOB_FAILED':null, recommendedPollAfterMs: 5000 };
+      resultIds: result.clips.map(c => c.id), errorCode: result.error === XEEPRO_BUSY_MESSAGE ? 'XEEPRO_BUSY' : raw === 'FAILED' ? 'JOB_FAILED' : null, recommendedPollAfterMs: 5000 };
   }
 
   async list(projectId?: string) {

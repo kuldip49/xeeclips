@@ -64,7 +64,7 @@ async function request(
     redirect = "follow",
   } = {},
 ) {
-  if (!cookie && process.env.MCP_QA_GATE_STATE) cookie = accounts[0]?.cookie;
+  if (!cookie && process.env.MCP_QA_GATE_STATE && !['/auth/signup','/auth/login'].includes(p)) cookie = accounts[0]?.cookie;
   const r = await fetch(base + p, {
     method,
     redirect,
@@ -213,7 +213,7 @@ async function connect(account) {
     requestInit: {
       headers: {
         Authorization: "Bearer " + account.tokens.access_token,
-        ...(process.env.MCP_QA_GATE_STATE ? { Cookie: account.cookie } : {}),
+        ...(process.env.MCP_QA_GATE_STATE ? { Cookie: account.cookie||accounts[0]?.cookie } : {}),
       },
     },
   });

@@ -260,6 +260,27 @@ const write = {
     (e) => e.getStatus() === 404,
     "shared progress cache must never bypass ownership",
   );
+  // The first job read may precede completion; poll errors must agree with the
+  // later canonical result snapshot, including both busy and generic failures.
+  const { VideosService } = require("../dist/modules/videos/videos.service");
+  const { XEEPRO_BUSY_MESSAGE } = require("../dist/modules/processing/generation-availability");
+  const summaries = Object.create(VideosService.prototype);
+  const requestedAt = Date.now();
+  const earlier = { video: { id: "owned-source" }, clipRequestedAt: new Date(requestedAt),
+    generationSettings: { generationMode: "ONLINE" }, errorCode: null };
+  summaries.prisma = {
+    processingJob: { findUnique: async () => earlier },
+    generatedClip: { findMany: async () => [] },
+  };
+  const terminal = { deliveryStatus: "FAILED", error: XEEPRO_BUSY_MESSAGE,
+    deliveredClipCount: 0, clips: [] };
+  summaries.getClipResults = async () => terminal;
+  assert.equal((await summaries.generationJobSummary("job", requestedAt)).errorCode, "XEEPRO_BUSY",
+    "a transition to busy between reads must retain the retryable busy classification");
+  earlier.errorCode = "XEEPRO_BUSY";
+  terminal.error = "The generation could not finish. Please try again.";
+  assert.equal((await summaries.generationJobSummary("job", requestedAt)).errorCode, "JOB_FAILED",
+    "an older busy code must not override the current result snapshot");
   // Boot the real Nest/Express parser registration order used by main.ts.
   // A bare route-specific jsonParser used to disable JSON bodies for every controller.
   const { Controller, Post, Body, Module } = require("@nestjs/common");

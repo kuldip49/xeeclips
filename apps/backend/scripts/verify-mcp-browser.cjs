@@ -26,6 +26,7 @@ const { chromium, expect } = require("@playwright/test"),
         value: cookie.slice(i + 1),
         url: base,
         httpOnly: true,
+        secure: base.startsWith("https:"),
         sameSite: "Lax",
       },
     ]);
