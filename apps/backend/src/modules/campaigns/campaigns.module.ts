@@ -7,6 +7,6 @@ import { CampaignsService } from './campaigns.service';
 import { CampaignAssetsService } from './campaign-assets.service';
 import { CampaignUnderstandingService } from './campaign-understanding.service';
 import { CampaignsController } from './campaigns.controller';
-@Module({ imports: [VideosModule, EditModeModule, StorageModule, ProcessingModule], controllers: [CampaignsController], providers: [CampaignsService, CampaignAssetsService, CampaignUnderstandingService] })
+@Module({ imports: [VideosModule, EditModeModule, StorageModule, ProcessingModule], controllers: [CampaignsController], providers: [CampaignsService, CampaignAssetsService, CampaignUnderstandingService], exports: [CampaignsService, CampaignAssetsService] })
 export class CampaignsModule {
 }

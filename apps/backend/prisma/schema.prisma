@@ -167,6 +167,10 @@ enum ReservationStatus {
   REFUNDED
 }
 model User {
+  mcpGrants McpGrant[]
+  mcpAuthorizations McpAuthorization[]
+  mcpActions McpAction[]
+  mcpAudit McpAudit[]
   id String @id @default(uuid())
   email String @unique
   passwordHash String
@@ -955,4 +959,95 @@ model EditHistory {
 
   @@unique([editProjectId, revision])
   @@index([editProjectId, createdAt])
+}
+
+
+// Remote MCP metadata only. Media, credits, timelines and jobs stay in their canonical models.
+model McpClient {
+  id String @id
+  name String
+  metadata Json
+  secretHash String?
+  createdAt DateTime @default(now())
+  grants McpGrant[]
+  authorizations McpAuthorization[]
+  @@index([createdAt])
+}
+model McpAuthorization {
+  requestHash String @id
+  clientId String
+  client McpClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  userId String?
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+  redirectUri String
+  resource String
+  challenge String
+  scopes String[]
+  state String?
+  consentHash String?
+  codeHash String? @unique
+  expiresAt DateTime
+  decidedAt DateTime?
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([expiresAt])
+}
+model McpGrant {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId String
+  client McpClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  resource String
+  scopes String[]
+  revokedAt DateTime?
+  lastUsedAt DateTime?
+  createdAt DateTime @default(now())
+  tokens McpToken[]
+  @@index([userId, createdAt])
+}
+model McpToken {
+  hash String @id
+  grantId String
+  grant McpGrant @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  kind String
+  scopes String[]
+  resource String
+  expiresAt DateTime
+  consumedAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([grantId, kind])
+  @@index([expiresAt])
+}
+model McpAction {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId String
+  tool String
+  key String
+  inputHash String
+  status String @default("PENDING")
+  result Json?
+  failureCode String?
+  entityId String?
+  createdAt DateTime @default(now())
+  completedAt DateTime?
+  @@unique([userId, clientId, tool, key])
+  @@index([status, createdAt])
+}
+model McpAudit {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId String
+  connectionId String
+  tool String
+  entityId String?
+  actionId String?
+  result String
+  creditEffect String
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
+  @@index([createdAt])
 }

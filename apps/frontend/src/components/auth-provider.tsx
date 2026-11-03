@@ -23,7 +23,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { clearInterval(timer); window.removeEventListener('focus', focus); window.removeEventListener('pageshow', focus); window.removeEventListener('xeeclip-auth-expired', expired); document.removeEventListener('visibilitychange', hide); };
   }, [refresh]);
   const publicRoute = path === '/login' || path === '/signup';
-  useEffect(() => { if (!loading && !user && !publicRoute && path !== '/') router.replace('/login'); }, [loading, user, path, publicRoute, router]);
+  useEffect(() => { if (!loading && !user && !publicRoute && path !== '/') router.replace(path === '/mcp/authorize' ? '/login?returnTo=' + encodeURIComponent(path + window.location.search) : '/login'); }, [loading, user, path, publicRoute, router]);
   const logout = async () => { await apiFetch('/auth/logout', { method: 'POST' }); setUser(null); router.replace('/login'); };
   const preferences = async (v: { displayName?: string; aiProcessingConsent?: boolean }) => { setUser(await apiFetch<Account>('/auth/preferences', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) })); };
   let content: ReactNode;

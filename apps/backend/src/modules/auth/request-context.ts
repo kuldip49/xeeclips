@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-export type RequestIdentity = { userId?: string; admin?: boolean; adminView?: boolean };
+export type RequestIdentity = { userId?: string; admin?: boolean; adminView?: boolean; operationId?: string };
 export const requestIdentity = new AsyncLocalStorage<RequestIdentity>();
 
 /** All HTTP queries are scoped. Queue workers have no HTTP context and are trusted internally. */

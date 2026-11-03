@@ -21,6 +21,7 @@ export class SecurityGuard implements CanActivate {
   async canActivate(context: ExecutionContext) {
     const req = context.switchToHttp().getRequest<Request>();
     const path = req.path;
+    if (req.method === 'GET' && path === '/mcp/health') return true;
     if (path === '/health' || req.method === 'GET' && path === '/videos/import-capabilities') return true;
     if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       const allowed = (process.env.FRONTEND_ORIGIN ?? 'http://localhost:3000').split(',').map(v => v.trim());

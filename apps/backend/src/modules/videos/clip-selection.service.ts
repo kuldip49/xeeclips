@@ -1,3 +1,4 @@
+import { checkpointOperation } from '../auth/operation-checkpoint';
 import { assertNewProcessingMode, assertProviderNotBusy, isXeeProBusyError, runInProviderBusyScope, XEEPRO_BUSY,
   XEEPRO_BUSY_MESSAGE, XeeProBusyError } from '../processing/generation-availability';
 import { isXeeFree } from '../processing/execution-policy';
@@ -64,7 +65,8 @@ export type GenerationRequest = {
    */
   look?: string | null;
 };
-export type ClipCreationRequest = { requestedClipCount: unknown; outputStyle: OutputStyle | null;
+export type ClipCreationRequest = {
+  generationMode?: 'ONLINE' | 'FALLBACK_ONLY'; requestedClipCount: unknown; outputStyle: OutputStyle | null;
   generation?: GenerationRequest | null;
   /** An explicit user "generate again": a finished identical request is re-run (fresh
    * renders under a new request key) instead of being answered as already satisfied. */
@@ -110,6 +112,7 @@ export function parseClipCreationRequest(value: unknown): ClipCreationRequest {
 
 /** What a request's generation settings persist as (ProcessingJob.generationSettings). */
 export type StoredGenerationSettings = GenerationRequest & {
+  generationMode?: 'ONLINE' | 'FALLBACK_ONLY';
   requestedTemplate: string;
   effectiveTemplate: string;
   interpreted: Pick<InterpretedBrief, 'intent' | 'styleHints' | 'templateHint' | 'source'> & {
@@ -552,7 +555,7 @@ export class ClipSelectionService {
       orderBy: { createdAt: 'asc' },
       include: { candidate: true, editProject: { select: { id: true, settings: true } } } }) : [];
     const byCandidate = new Map(clips.map((clip) => [clip.candidateId, clip]));
-    const effectiveAiMode = jsonObject(job?.telemetry).effectiveAiMode ?? job?.aiMode;
+    const effectiveAiMode = readGenerationSettings(job?.generationSettings)?.generationMode ?? jsonObject(job?.telemetry).effectiveAiMode ?? job?.aiMode;
     const ordered = ids.map((id) => byCandidate.get(id))
       .filter((clip): clip is NonNullable<typeof clip> => !!clip &&
         (!readGenerationSettings(job?.generationSettings) || (clip.generationJobId === job?.id &&
@@ -598,7 +601,7 @@ export class ClipSelectionService {
    */
   async create(videoId: string, request: ClipCreationRequest) {
     const { video, job } = await this.loadVideo(videoId);
-    const executionMode=request.generation?.campaign ? (request.generation.campaign.mode==='XEEPRO'?'ONLINE':'FALLBACK_ONLY') : String(jsonObject(job?.telemetry).effectiveAiMode ?? job?.aiMode);
+    const executionMode=request.generationMode ?? (request.generation?.campaign ? (request.generation.campaign.mode==='XEEPRO'?'ONLINE':'FALLBACK_ONLY') : String(jsonObject(job?.telemetry).effectiveAiMode ?? job?.aiMode));
     assertNewProcessingMode(executionMode);
     if (isVideoTooLong(video.duration)) throw new BadRequestException(VIDEO_TOO_LONG_MESSAGE);
     const maxClipCount = maxClipCountForDuration(video.duration);
@@ -607,12 +610,13 @@ export class ClipSelectionService {
       throw new ConflictException('Video analysis is not complete yet');
     // Brief interpretation may call the Pro provider. If it is busy the request ends here (HTTP 503 XEEPRO_BUSY), before a credit
     // is reserved or any state is written; it never continues on the local interpreter under a Pro label.
-    const generationSettings = await runInProviderBusyScope(async () => {
+    let generationSettings = await runInProviderBusyScope(async () => {
       const settings = await this.buildGenerationSettings(request.generation,
         executionMode);
       assertProviderNotBusy();
       return settings;
     });
+    if (request.generationMode && generationSettings) generationSettings = { ...generationSettings, generationMode: request.generationMode, key: generationSettings.key + ':MODE:' + request.generationMode };
     // A styled automatic request keeps the golden AI_EDITED selection/edit
     // pipeline, then applies only its canonical style delta in EditMode.
     const outputStyle: OutputStyle = request.outputStyle ?? (generationSettings?.resolved.styled
@@ -657,6 +661,7 @@ export class ClipSelectionService {
         const key = previous?.status === 'RESERVED' ? previous.jobKey : `clips:${job.id}:${requestedAt.toISOString()}`;
         await this.usage.reserve(tx, owner.userId, key, 'CREATE_CLIPS', job.id);
         await tx.processingJob.update({ where: { id: job.id }, data: { creditReservationKey: key } });
+        await checkpointOperation(tx, { jobId: 'c:' + job.id + ':' + requestedAt.getTime(), status: 'QUEUED', sourceId: videoId, mode: executionMode === 'ONLINE' ? 'XEEPRO' : 'XEEFREE', requestedClips: requestedClipCount, recommendedPollAfterMs: 5000 }, job.id);
       }
       return result;
     });
@@ -723,7 +728,7 @@ export class ClipSelectionService {
       await this.render(video, job.id, job.requestedClipCount,
         job.maxClipCount ?? maxClipCountForDuration(video.duration), job.outputStyle, update,
         readGenerationSettings(job.generationSettings),
-        readGenerationSettings(job.generationSettings)?.campaign ? (readGenerationSettings(job.generationSettings)!.campaign!.mode==='XEEPRO'?'ONLINE':'FALLBACK_ONLY') : String(jsonObject(job.telemetry).effectiveAiMode ?? job.aiMode), request.requestedAt);
+        readGenerationSettings(job.generationSettings)?.generationMode ?? (readGenerationSettings(job.generationSettings)?.campaign ? (readGenerationSettings(job.generationSettings)!.campaign!.mode==='XEEPRO'?'ONLINE':'FALLBACK_ONLY') : String(jsonObject(job.telemetry).effectiveAiMode ?? job.aiMode)), request.requestedAt);
       await this.settleRequest(request);
       // Styling runs after delivery, in the editor, on each clip's own project.
       if (this.hooks.afterDelivery) void this.hooks.afterDelivery(request.videoId).catch((error) =>
@@ -823,6 +828,7 @@ export class ClipSelectionService {
         try {
           const exported = await this.exporter.export(video, candidate, { processingType, targetPlatform,
             ...(generation?.campaign?{campaignMode:generation.campaign.mode}:{}),
+            ...(generation?.generationMode ? { generationMode: generation.generationMode } : {}),
             aspectRatio: '9:16', rank: index + 1,
             generationJobId: jobId, templateId: effectiveTemplate ?? undefined,
             generationRequestKey: requestedAt ? `${jobId}:${requestedAt}` : undefined,

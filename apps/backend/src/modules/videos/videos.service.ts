@@ -275,6 +275,60 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
     }
   }
 
+  /** Bounded application reads shared by remote integrations; normal request ownership still applies. */
+  async sourcePage(limit = 20, cursor?: string) {
+    const rows = await this.prisma.video.findMany({ orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}), select: { id: true, originalName: true, duration: true, createdAt: true, projectId: true,
+        processingJobs: { orderBy: { createdAt: 'desc' }, take: 1, select: { id: true, status: true, progress: true, errorCode: true } } } });
+    const more = rows.length > limit; const items = rows.slice(0, limit).map(v => ({ sourceId: v.id, name: v.originalName, duration: v.duration,
+      createdAt: v.createdAt, projectId: v.projectId, status: v.processingJobs[0]?.status || 'UNAVAILABLE', progress: v.processingJobs[0]?.progress || 0 }));
+    return { items, nextCursor: more ? items.at(-1)!.sourceId : null };
+  }
+  async sourceSummary(id: string) {
+    const row = await this.prisma.video.findUnique({ where: { id }, select: { id: true, originalName: true, duration: true, createdAt: true,
+      processingJobs: { orderBy: { createdAt: 'desc' }, take: 1, select: { id: true, status: true, progress: true, clipRequestedAt: true, clipRenderStatus: true, errorCode: true } } } });
+    if (!row) throw new NotFoundException('Source not found.');
+    return { sourceId: row.id, name: row.originalName, duration: row.duration, createdAt: row.createdAt, status: row.processingJobs[0]?.status || 'UNAVAILABLE', job: row.processingJobs[0] ? {...row.processingJobs[0],errorCode:row.processingJobs[0].errorCode==='XEEPRO_BUSY'?'XEEPRO_BUSY':row.processingJobs[0].status==='FAILED'?'JOB_FAILED':null} : null };
+  }
+  async clipPage(limit = 20, cursor?: string, sourceId?: string) {
+    if (sourceId) await this.sourceSummary(sourceId);
+    const rows = await this.prisma.generatedClip.findMany({ where: sourceId ? { videoId: sourceId } : {},
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit + 1, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      select: { id: true, videoId: true, duration: true, createdAt: true, requestedTemplate: true, templateId: true,
+        editProject: { select: { id: true, revision: true } }, candidate: { select: { bestHook: true } } } });
+    const items = rows.slice(0, limit).map(c => ({ clipId: c.id, sourceId: c.videoId, title: c.candidate?.bestHook || 'XeeClip clip', duration: c.duration,
+      createdAt: c.createdAt, template: c.requestedTemplate || c.templateId, editProjectId: c.editProject?.id || null, revision: c.editProject?.revision ?? null }));
+    return { items, nextCursor: rows.length > limit ? items.at(-1)!.clipId : null };
+  }
+  async clipSummary(id: string) {
+    const clip = await this.prisma.generatedClip.findUnique({ where: { id }, include: { editProject: { select: { id: true, revision: true, settings: true } }, candidate: { select: { bestHook: true } } } });
+    if (!clip) throw new NotFoundException('Clip not found.');
+    const state = resolveGenerationStyleReadiness(clip);
+    return { clipId: clip.id, sourceId: clip.videoId, title: clip.candidate?.bestHook || 'XeeClip clip', duration: clip.duration,
+      createdAt: clip.createdAt, template: clip.requestedTemplate || clip.templateId, editProjectId: clip.editProject?.id || null,
+      revision: clip.editProject?.revision ?? null, playbackUrl: state?.playbackUrl || '/generated-clips/' + clip.id + '/file' };
+  }
+  async generationJobSummary(id: string, requestedAt: number) {
+    const job = await this.prisma.processingJob.findUnique({ where: { id }, include: { video: { select: { id: true } } } });
+    if (!job) throw new NotFoundException('Job not found.');
+    const current = job.clipRequestedAt?.getTime() === requestedAt;
+    const at = new Date(requestedAt).toISOString();
+    const clips = await this.prisma.generatedClip.findMany({ where: { generationJobId: id, variantKey: { endsWith: ':REQUEST:' + id + ':' + at } },
+      select: { id: true,requestedTemplate:true,templateId:true,editProject:{select:{settings:true}} }, orderBy: { requestedClipIndex: 'asc' }, take: 30 });
+    if (!current) {
+      const ready=clips.filter(c=>(c.requestedTemplate??c.templateId)==='AUTOMATIC_1'||!!resolveGenerationStyleReadiness(c as any)?.playbackUrl);
+      return {status:ready.length&&ready.length===clips.length?'COMPLETE':ready.length?'PARTIAL':'FAILED',sourceId:job.video.id,completedClips:ready.length,
+        resultIds:ready.map(c=>c.id),superseded:true,errorCode:ready.length===clips.length&&ready.length?null:'JOB_FAILED',recommendedPollAfterMs:5000};
+    }
+    const result = await this.getClipResults(job.video.id);
+    const settings = job.generationSettings as Record<string, unknown> | null;
+    const raw = String(result.deliveryStatus || result.status);
+    return { status: ['COMPLETE','COMPLETED'].includes(raw) ? 'COMPLETE' : raw === 'PARTIAL' ? 'PARTIAL' : raw === 'FAILED' ? 'FAILED' : raw === 'QUEUED' ? 'QUEUED' : 'PROCESSING',
+      sourceId: job.video.id, mode: settings?.generationMode === 'ONLINE' ? 'XEEPRO' : settings?.generationMode === 'FALLBACK_ONLY' ? 'XEEFREE' : job.aiMode === 'ONLINE' ? 'XEEPRO' : 'XEEFREE',
+      template: settings?.templateId || null, requestedClips: job.requestedClipCount, completedClips: result.deliveredClipCount,
+      resultIds: result.clips.map(c => c.id), errorCode: job.errorCode==='XEEPRO_BUSY'?'XEEPRO_BUSY':raw==='FAILED'?'JOB_FAILED':null, recommendedPollAfterMs: 5000 };
+  }
+
   async list(projectId?: string) {
     const videos = await this.prisma.video.findMany({
       where: projectId ? { projectId } : undefined,
@@ -504,8 +558,16 @@ export class VideosService implements OnApplicationBootstrap, OnModuleDestroy {
    * large per-row JSON (candidate scoring, edit telemetry, edit settings, job telemetry - about
    * 50 KB per clip): only scalar columns, plus the four JSON keys the cards use, read in SQL.
    */
-  async getHistory() {
+  async historyCursor(id: string) {
+    const clip = await this.prisma.generatedClip.findUnique({ where: { id }, select: { createdAt: true } });
+    if (clip) return clip.createdAt;
+    const quick = await this.prisma.quickReframe.findUnique({ where: { id }, select: { createdAt: true } });
+    if (!quick) throw new NotFoundException('History entry not found.');
+    return quick.createdAt;
+  }
+  async getHistory(page?: { limit: number; before?: Date; beforeId?: string }) {
     const clips = await this.prisma.generatedClip.findMany({
+      ...(page ? { take: page.limit, ...(page.before && page.beforeId ? { where: { OR: [{ createdAt: { lt: page.before } }, { createdAt: page.before, id: { lt: page.beforeId } }] } } : {}) } : {}),
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       select: {
         id: true, createdAt: true, duration: true, processingType: true, thumbnailObjectKey: true,

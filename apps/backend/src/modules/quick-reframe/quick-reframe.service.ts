@@ -1,3 +1,4 @@
+import { checkpointOperation } from '../auth/operation-checkpoint';
 import { assertXeeProAvailable, isXeeProBusyError, XEEPRO_BUSY_MESSAGE, withProviderBusyGuard } from '../processing/generation-availability';
 import { parseReframeMode, reframeMode, reframeAiMode } from './quick-reframe-mode';
 import { refineReframeTranscript } from './quick-reframe-transcript';
@@ -52,7 +53,7 @@ const STYLES:Record<QuickStyle,{name:string;profile:string;template:string}>={
  * the local AI pass (faces, OCR, Whisper); it only runs after the crop is confirmed and an editing mode chosen.
  */
 type Task={id:string;operationId:string;kind:'PLAYBACK'|'ANALYZE'|'PREPARE'|'PREVIEW'|'EXPORT'|'IMPORT';url?:string;resolution?:720|1080;
-  next?:QuickStyle;style?:StyleOptions};
+  next?:QuickStyle;style?:StyleOptions;sourceVideoId?:string;mode?:'XEEFREE'|'XEEPRO';crop?:{x:number;y:number;width:number;height:number}};
 type Loaded=Prisma.QuickReframeGetPayload<{include:typeof include}>;
 type Asset=Loaded['editProject']['assets'][number];
 const activeStatuses=['PLAYBACK','ANALYZE','PREPARE','PREVIEW','EXPORT','IMPORT'];
@@ -93,6 +94,25 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
   async create(){
     const project=await this.prisma.editProject.create({data:{name:'Quick Reframe',settings:{feature:'QUICK_REFRAME',origin:{originKind:'QUICK_REFRAME',aiMode:'FALLBACK_ONLY'},aspectRatio:'SOURCE',reframePolicy:'SOURCE',subtitlePolicy:'OFF',zoomPolicy:'OFF',gradingPolicy:'NONE'},quickReframe:{create:{}}},include:{quickReframe:true}});
     return this.get(project.quickReframe!.id);
+  }
+  /** Start the existing Quick Reframe queue from an already-owned XeeClip source. */
+  async fromSource(sourceId:string, mode:'XEEFREE'|'XEEPRO', style:QuickStyle, crop?:Task['crop']) {
+    const video=await this.prisma.video.findUnique({where:{id:sourceId},include:{project:{select:{userId:true}}}});
+    if(!video||!video.project.userId)throw new NotFoundException('Source not found.');
+    if(!video.duration||video.duration>180||Number(video.sizeBytes)>MAX_REFRAME_BYTES)throw new BadRequestException({code:'UNSUPPORTED_SOURCE',message:'Quick Reframe accepts existing videos up to 180 seconds and 1 GiB.'});
+    if(!Object.hasOwn(STYLES,style)||!['XEEFREE','XEEPRO'].includes(mode))throw new BadRequestException('Unsupported mode or style.');
+    if(mode==='XEEPRO'){assertXeeProAvailable();const user=await this.prisma.user.findUnique({where:{id:video.project.userId},select:{aiProcessingConsentAt:true}});if(!user?.aiProcessingConsentAt)throw new ForbiddenException({code:'AI_CONSENT_REQUIRED',message:'Allow AI processing in Settings first.'});}
+    if(crop&&(crop.x+crop.width>1||crop.y+crop.height>1))throw new BadRequestException('Keep the crop inside the source frame.');
+    const operationId=randomUUID();
+    const q=await this.prisma.$transaction(async tx=>{
+      const p=await tx.editProject.create({data:{userId:video.project.userId,name:'Quick Reframe',settings:{feature:'QUICK_REFRAME',origin:{originKind:'QUICK_REFRAME',aiMode:reframeAiMode(mode)},aspectRatio:'SOURCE',reframePolicy:'SOURCE',subtitlePolicy:'OFF',zoomPolicy:'OFF',gradingPolicy:'NONE'},quickReframe:{create:{status:'IMPORT',operationId,progress:5,message:'Preparing your source',externalAiAuthorized:mode==='XEEPRO'}}},include:{quickReframe:true}});
+      const result=p.quickReframe!;
+      await checkpointOperation(tx,{jobId:'r:'+result.id,reframeId:result.id,status:'QUEUED',recommendedPollAfterMs:5000},result.id);
+      return result;
+    });
+    try{await this.queue.add('IMPORT',{id:q.id,operationId,kind:'IMPORT',sourceVideoId:sourceId,mode,next:style,crop},{jobId:operationId,attempts:1,removeOnComplete:100,removeOnFail:100});}
+    catch{await this.prisma.quickReframe.updateMany({where:{id:q.id,operationId},data:{status:'FAILED',operationId:null,error:'Processing could not start. Please retry.'}});}
+    return {jobId:'r:'+q.id,reframeId:q.id,status:'QUEUED',recommendedPollAfterMs:5000};
   }
   private async load(id:string){const q=await this.prisma.quickReframe.findUnique({where:{id},include});if(!q)throw new NotFoundException('Quick Reframe video not found.');return q;}
   /** Mode changes never restyle the timeline or overwrite manual work. Revision claiming rejects stale tabs. */
@@ -176,12 +196,12 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
   private frameOf(q:Loaded){const original=this.originalOf(q)!;return {width:original.width!,height:original.height!};}
   async get(id:string){return this.view(await this.load(id));}
   async forProject(editProjectId:string){const q=await this.prisma.quickReframe.findUnique({where:{editProjectId},include});if(!q)throw new NotFoundException('This project is not a Quick Reframe video.');return this.view(q);}
-  async history(){const rows=await this.prisma.quickReframe.findMany({where:{OR:[
+  async history(page?:{limit:number;before?:Date;beforeId?:string}){const rows=await this.prisma.quickReframe.findMany({...(page?{take:page.limit}:{}),where:{...(page?.before&&page.beforeId?{AND:[{OR:[{createdAt:{lt:page.before}},{createdAt:page.before,id:{lt:page.beforeId}}]}]}:{}),OR:[
     // Existing exports remain available, including older revisions after a later edit fails.
     {editProject:{assets:{some:{role:'EXPORT',metadata:{path:['quickReframeKind'],equals:'EXPORT'}}}}},
     // A verified styled preview is already a saved result; opening the editor or paying for export is not required.
     {status:{in:['READY','COMPLETE','EDITING']},editPath:{not:null},editProject:{assets:{some:{role:'REFERENCE',metadata:{path:['quickReframeKind'],equals:'PREVIEW'}}}}}
-  ]},include,orderBy:{createdAt:'desc'}});return rows.map(q=>this.view(q));}
+  ]},include,orderBy:[{createdAt:'desc'},{id:'desc'}]});return rows.map(q=>this.view(q));}
   async startUpload(id:string,body:Record<string,unknown>){const q=await this.load(id);if(q.editProject.assets.some(a=>a.role==='SOURCE'))throw new ConflictException('This video already has a source. Start a new Quick Reframe.');
     if(typeof body.size!=='number'||body.size>MAX_REFRAME_BYTES||!['.mp4','.mov','.m4v','.webm'].includes(extname(String(body.name)).toLowerCase()))throw new BadRequestException('Upload an MP4, MOV, M4V, or WebM up to 1 GiB.');
     await this.prisma.quickReframe.update({where:{id},data:{status:'INPUT',message:'Uploading video',error:null}});return this.uploads.create(id,body);}
@@ -254,15 +274,28 @@ export class QuickReframeService implements OnModuleInit,OnModuleDestroy {
     const controller=new AbortController();this.aborts.set(task.id,controller);const dir=await mkdtemp(join(tmpdir(),'quick-reframe-'));let uploaded:{bucket:string;objectKey:string}|null=null;
     try{
       const q=await this.load(task.id);if(q.operationId!==task.operationId)return;
+      if(task.kind==='IMPORT'&&task.sourceVideoId){
+        const video=await this.prisma.video.findFirst({where:{id:task.sourceVideoId,project:{userId:q.editProject.userId}},include:{transcript:{include:{segments:{orderBy:{position:'asc'}}}}}});
+        if(!video)throw new NotFoundException('Source not found.');
+        const input=join(dir,'owned-source'+(extname(video.originalName)||'.mp4'));
+        await this.storage.downloadToFile(video.bucket,video.objectKey,input);
+        await this.ingest(task.id,input,video.originalName,task.operationId);
+        const cached=await this.prisma.editAsset.findFirst({where:{sourceVideoId:video.id,analysis:{not:Prisma.DbNull},editProject:{userId:q.editProject.userId,quickReframe:{isNot:null}}},orderBy:{createdAt:'desc'},select:{analysis:true,transcript:true}});
+        const transcript=cached?.transcript??(video.transcript?{text:video.transcript.text,language:video.transcript.language,language_probability:video.transcript.languageProbability,duration:video.transcript.duration,segments:video.transcript.segments.map(s=>({start:s.start,end:s.end,text:s.text,words:s.words}))}:null);
+        await this.prisma.editAsset.updateMany({where:{editProjectId:q.editProjectId,role:'SOURCE'},data:{sourceVideoId:video.id,...(transcript?{transcript:json(transcript)}:{}),...(cached?.analysis?{analysis:cached.analysis}:{})}});
+        const plan=defaultPlan();if(task.crop)plan.crop={x:task.crop.x,y:task.crop.y,w:task.crop.width,h:task.crop.height};
+        await this.save(task.id,{plan});
+        await this.start(task.id,'PREPARE',{}, {next:task.next,style:task.style});return;
+      }
       if(task.kind==='IMPORT'){const path=join(dir,'import.mp4');const context=await downloadSocial(task.url,path,controller.signal);await this.ingest(task.id,path,'Imported video.mp4',task.operationId,context);return;}
       if(task.kind==='PLAYBACK'){await this.playback(task,q,dir,controller.signal,(v)=>{uploaded=v;});return;}
       if(task.kind==='ANALYZE'){await this.analyze(task,q,controller.signal);if(task.next)await this.continueStyle(task);return;}
-      if(task.kind==='PREPARE'){await this.prepare(task,q,dir,controller.signal,(v)=>{uploaded=v;});return;}
+      if(task.kind==='PREPARE'){await this.prepare(task,q,dir,controller.signal,(v)=>{uploaded=v;});if(task.next){const current=await this.load(task.id);await this.applyStyle(task.id,{...task.style,revision:current.editProject.revision},task.next);}return;}
       await this.compose(task,q,dir,controller.signal,(v)=>{uploaded=v;});
       if(task.kind==='EXPORT')await new UsageService(this.prisma).settle(`reframe:${task.operationId}`,true);
     }catch(error){this.logger.warn(`Quick Reframe ${task.kind} failed: ${error instanceof Error?error.message:String(error)}`);
       const message=isXeeProBusyError(error)?XEEPRO_BUSY_MESSAGE:error instanceof EditExportError&&error.code==='HEADLINE_DOES_NOT_FIT'?HEADLINE_FIT_MESSAGE:error instanceof BadRequestException?error.message:task.kind==='IMPORT'?'This link could not be imported. Upload your authorized video file instead.':'Processing could not finish. Retry or upload another copy of the video.';
-      await this.prisma.quickReframe.updateMany({where:{id:task.id,operationId:task.operationId},data:{status:'FAILED',error:message,message,operationId:null}});
+      await this.prisma.quickReframe.updateMany({where:{id:task.id,OR:[{operationId:task.operationId},...(task.sourceVideoId||task.next?[{operationId:null,status:{in:['INPUT','CROPPED','ANALYZED']}}]:[])]},data:{status:'FAILED',error:message,message,operationId:null}});
       if(task.kind==='EXPORT')await new UsageService(this.prisma).settle(`reframe:${task.operationId}`,false);
     }finally{if(uploaded)await this.storage.removeObject((uploaded as {bucket:string}).bucket,(uploaded as {objectKey:string}).objectKey).catch(()=>undefined);this.aborts.delete(task.id);await rm(dir,{recursive:true,force:true});}
   }

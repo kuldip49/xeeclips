@@ -7,5 +7,5 @@ import { ProviderRegistry } from '../processing/provider-registry';
 import { QuickReframeService } from './quick-reframe.service';
 import { QuickReframeController } from './quick-reframe.controller';
 @Module({imports:[StorageModule,EditModeModule],controllers:[QuickReframeController],
-  providers:[QuickReframeService,LlmProviderService,LlmRouterService,ProviderRegistry]})
+  providers:[QuickReframeService,LlmProviderService,LlmRouterService,ProviderRegistry],exports:[QuickReframeService]})
 export class QuickReframeModule {}

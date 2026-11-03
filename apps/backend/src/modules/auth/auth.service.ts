@@ -71,5 +71,10 @@ export class AuthService implements OnModuleInit {
     if (session.user.status !== 'ACTIVE') throw new UnauthorizedException('Your account is currently unavailable.');
     return session.user;
   }
+  async activeAccount(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: publicUser });
+    if (!user || user.status !== 'ACTIVE') throw new UnauthorizedException('Your account is currently unavailable.');
+    return user;
+  }
   async logout(token?: string) { if (token) await this.prisma.session.deleteMany({ where: { tokenHash: digest(token) } }); }
 }

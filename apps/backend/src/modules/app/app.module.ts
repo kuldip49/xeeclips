@@ -1,3 +1,4 @@
+import { McpModule } from '../mcp/mcp.module';
 import { Module } from "@nestjs/common";
 import { DatabaseModule } from "../database/database.module";
 import { HealthModule } from "../health/health.module";
@@ -10,7 +11,7 @@ import { AuthModule } from '../auth/auth.module';
 import { CampaignsModule } from '../campaigns/campaigns.module';
 
 @Module({
-  imports: [DatabaseModule, AuthModule, HealthModule, ProjectsModule, ProcessingModule, VideosModule,
+  imports: [McpModule,DatabaseModule, AuthModule, HealthModule, ProjectsModule, ProcessingModule, VideosModule,
     EditModeModule, QuickReframeModule, CampaignsModule]
 })
 export class AppModule {}

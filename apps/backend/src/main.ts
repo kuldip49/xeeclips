@@ -1,3 +1,4 @@
+import { McpHttpService } from './modules/mcp/mcp-http.service';
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./modules/app/app.module";
 import { requestIdentity } from './modules/auth/request-context';
@@ -23,6 +24,7 @@ async function bootstrap() {
     exposedHeaders: ["Accept-Ranges", "Content-Range", "Content-Length"]
   });
 
+  app.get(McpHttpService).mount(app.getHttpAdapter().getInstance());
   const port = Number(process.env.PORT ?? 4000);
   await app.listen(port, "0.0.0.0");
 }

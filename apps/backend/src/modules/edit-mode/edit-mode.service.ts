@@ -1,3 +1,4 @@
+import { checkpointOperation } from '../auth/operation-checkpoint';
 import {
   BadRequestException,
   ConflictException,
@@ -3016,6 +3017,7 @@ export class EditModeService {
         actor: actor === 'TEMPLATE_ACTION' ? 'TEMPLATE' : 'ASSISTANT',
         action: 'APPLY_ASSISTANT_EDIT',
         command: historyCommand, beforeState, afterState } });
+      await checkpointOperation(tx, { editProjectId: id, revision, saved: true }, id);
       historyWriteMs = Math.round(performance.now() - historyStarted);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     const canonicalMutationMs = Math.round(performance.now() - mutationStarted);
@@ -3192,6 +3194,7 @@ export class EditModeService {
       const historyStarted = Date.now();
       await tx.editHistory.create({ data: { editProjectId: id, revision, actor: 'USER', action,
         command, beforeState, afterState } });
+      await checkpointOperation(tx, { editProjectId: id, revision, saved: true }, id);
       historyWriteMs = Date.now() - historyStarted;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     const canonicalMutationMs = Date.now() - mutationStarted;
@@ -3272,6 +3275,7 @@ export class EditModeService {
         ...(restoresSettings ? { settings: current.settings } : {}) },
         afterState: serialize({ elements,
           ...(restoresSettings ? { settings: state.settings } : {}) }) as Prisma.InputJsonValue } });
+      await checkpointOperation(tx, { editProjectId: id, revision, saved: true }, id);
       return tx.editProject.findUniqueOrThrow({ where: { id }, include: includeProject });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
   }

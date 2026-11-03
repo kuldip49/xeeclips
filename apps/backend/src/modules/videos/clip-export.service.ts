@@ -42,6 +42,8 @@ import { detectSponsorSegment } from '../editing/sponsor-segment';
 import { probeMedia } from '../processing/media-probe';
 
 export type ClipExportOptions = {
+  /** Trusted generation mode for a new request over cached source analysis. */
+  generationMode?: 'ONLINE' | 'FALLBACK_ONLY';
   /** Server-owned campaign request mode; never accepted by public clip-selection parsing. */
   campaignMode?: 'XEEFREE' | 'XEEPRO';
   processingType: ProcessingType;
@@ -293,7 +295,7 @@ export class ClipExportService {
     const latestJob = async () => {
       if(cachedJob!==undefined)return cachedJob;
       const job=await this.prisma.processingJob.findFirst({where:{videoId:video.id},orderBy:{createdAt:'desc'}});
-      cachedJob=job&&options?.campaignMode?{...job,aiMode:normalizeAiProcessingMode(options.campaignMode==='XEEPRO'?'ONLINE':'FALLBACK_ONLY') as ProcessingJob['aiMode']}:job;
+      cachedJob=job&&(options?.generationMode||options?.campaignMode)?{...job,aiMode:normalizeAiProcessingMode(options.generationMode ?? (options.campaignMode==='XEEPRO'?'ONLINE':'FALLBACK_ONLY')) as ProcessingJob['aiMode']}:job;
       return cachedJob;
     };
     const boundaryMode = normalizeAiProcessingMode((await latestJob())?.aiMode ?? AiProcessingMode.FALLBACK_ONLY);
@@ -369,7 +371,7 @@ export class ClipExportService {
         await this.storage.downloadToFile(video.bucket, video.objectKey, sourcePath);
       const sourcePreparationMs = options?.preparedSourcePath ? 0 : Date.now() - sourcePreparationStarted;
       const job = await latestJob();
-      if (options?.campaignMode || normalize(originalTranscript ?? '') !== normalize(candidate.transcriptText ?? '') ||
+      if (options?.generationMode || options?.campaignMode || normalize(originalTranscript ?? '') !== normalize(candidate.transcriptText ?? '') ||
         !(candidate.creativeCandidates as unknown as {sharedPackage?:CreativePackage}|null)?.sharedPackage) {
         const mode = normalizeAiProcessingMode(job?.aiMode ?? AiProcessingMode.FALLBACK_ONLY);
         const packaging = await performanceContext.run(createPerformanceTelemetry(mode), () => this.contentPackager.create({
@@ -436,7 +438,7 @@ export class ClipExportService {
       const storageMs = Date.now() - storageStarted;
       // Source analysis can be reused across campaign modes. Persist the render's
       // selected mode so History and the canonical editor inherit the correct tier.
-      if (options?.campaignMode) editTelemetry = {
+      if (options?.campaignMode || options?.generationMode) editTelemetry = {
         ...(editTelemetry && typeof editTelemetry === 'object' && !Array.isArray(editTelemetry) ? editTelemetry : {}),
         effectiveAiMode: job!.aiMode, requestedAiMode: job!.aiMode
       };

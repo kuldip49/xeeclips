@@ -1,3 +1,4 @@
+import { checkpointOperation } from '../../auth/operation-checkpoint';
 // EditMode Phase 5 render orchestration.
 //
 // This is EditMode's OWN rendering path. It never calls the frozen processing
@@ -113,20 +114,20 @@ export class EditModeRenderService {
     const progress: EditExportProgress = { exportId: randomUUID(), phase: 'PREPARING',
       percent: PHASE_PERCENT.PREPARING, sourceRevision: revision, startedAt: now,
       updatedAt: now, attempt: 1, assetId: null, errorCode: null, message: null };
-    if (project.quickReframe) {
-      await this.prisma.$transaction(async tx => {
-        const q = project.quickReframe!;
-        const claimed = await tx.quickReframe.updateMany({ where: { id: q.id, operationId: null, status: { notIn: ['EXPORT', 'PREVIEW', 'PREPARE', 'PLAYBACK', 'ANALYZE', 'IMPORT'] } }, data: { status: 'EXPORT', operationId: progress.exportId, progress: 5, error: null, message: 'Exporting video' } });
+    await this.prisma.$transaction(async tx => {
+      if (project.quickReframe) {
+        const q = project.quickReframe;
+        const claimed = await tx.quickReframe.updateMany({ where: { id: q.id, operationId: null, status: { notIn: ['EXPORT','PREVIEW','PREPARE','PLAYBACK','ANALYZE','IMPORT'] } }, data: { status: 'EXPORT', operationId: progress.exportId, progress: 5, error: null, message: 'Exporting video' } });
         if (!claimed.count) throw new ConflictException('Processing is already in progress.');
         await new UsageService(this.prisma).reserve(tx, project.userId, `reframe:${progress.exportId}`, 'QUICK_REFRAME', q.id);
-        // Persist recoverable progress with the reservation: a crash before run() must refund.
-        const settings = project.settings && typeof project.settings === 'object' && !Array.isArray(project.settings) ? project.settings as Record<string, Prisma.JsonValue> : {};
-        await tx.editProject.update({ where: { id }, data: { status: 'EXPORTING', settings: { ...settings, export: progress } as unknown as Prisma.InputJsonValue } });
-      });
-    }
+      }
+      const settings = project.settings && typeof project.settings === 'object' && !Array.isArray(project.settings) ? project.settings as Record<string, Prisma.JsonValue> : {};
+      const claimed = await tx.editProject.updateMany({ where: { id, revision, status: { not: 'EXPORTING' } },
+        data: { status: 'EXPORTING', settings: { ...settings, export: progress } as unknown as Prisma.InputJsonValue } });
+      if (!claimed.count) throw new ConflictException({ code: 'STALE_REVISION', message: 'The project changed or is already exporting.' });
+      await checkpointOperation(tx, { editProjectId: id, exportId: progress.exportId, status: 'QUEUED', recommendedPollAfterMs: 5000 }, id);
+    });
     this.running.set(id, progress);
-    try { await this.persistProgress(id, progress, 'EXPORTING'); }
-    catch (e) { this.running.delete(id); if(project.quickReframe){await this.prisma.quickReframe.updateMany({where:{editProjectId:id,operationId:progress.exportId},data:{status:'FAILED',operationId:null}});await new UsageService(this.prisma).settle(`reframe:${progress.exportId}`,false);} throw e; }
 
     // Direct async execution: no background queue, no worker, no job row.
     void this.run(id, progress).catch((error) => {
@@ -138,11 +139,12 @@ export class EditModeRenderService {
 
   /** Live progress, falling back to the last persisted block after a restart. */
   async progress(id: string): Promise<EditExportProgress | null> {
-    const active = this.running.get(id);
-    if (active) return active;
+    // The in-memory cache is shared by all accounts; authorize before using it.
     const project = await this.prisma.editProject.findUnique({ where: { id },
       select: { settings: true } });
     if (!project) throw new NotFoundException('EditProject not found');
+    const active = this.running.get(id);
+    if (active) return active;
     const settings = project.settings && typeof project.settings === 'object'
       ? project.settings as Record<string, unknown> : {};
     const stored = settings.export;
@@ -171,9 +173,16 @@ export class EditModeRenderService {
     return serialize(this.decorate(asset, project.revision));
   }
 
+  async exportForOperation(id: string, exportId: string) {
+    const project = await this.prisma.editProject.findUnique({ where: { id }, select: { revision: true } });
+    if (!project) throw new NotFoundException('EditProject not found');
+    const asset = await this.prisma.editAsset.findFirst({ where: { editProjectId: id, role: 'EXPORT', metadata: { path: ['exportId'], equals: exportId } }, orderBy: { createdAt: 'desc' } });
+    return asset ? serialize(this.decorate(asset, project.revision)) : null;
+  }
+
   /** An export is stale once the timeline has moved on from the revision it was
    * rendered from. The asset is kept; only its currency changes. */
-  private decorate(asset: { metadata: Prisma.JsonValue } & Record<string, unknown>,
+  private decorate<T extends { metadata: Prisma.JsonValue }>(asset: T,
     currentRevision: number) {
     const metadata = asset.metadata && typeof asset.metadata === 'object'
       ? asset.metadata as Record<string, unknown> : {};
