@@ -542,6 +542,11 @@ function rendererSuite() {
     plain.textOverlays[0].fontSizePx === designPx(60, 1920) &&
     plainAss.content.includes(`,${designPx(60, 1920)},`));
 
+  const outlineValue=plan=>Number(buildEditModeAss(canvas,plan.textOverlays).content.split('\n').find(line=>line.startsWith('Style: Edit0,')).slice(7).split(',')[16]);
+  ok('28b1. explicit stroke-off renders with zero outline', outlineValue(plain)===0);
+  const legacyText=styledText();delete legacyText.properties.stroke;
+  ok('28b2. legacy unstyled text retains its fallback outline',outlineValue(planFor([legacyText]))>0);
+
   const stroked = planFor([styledText({
     stroke: { enabled: true, color: '#ff0000', width: 8 } })]);
   const strokeAss = buildEditModeAss(canvas, stroked.textOverlays);

@@ -1,4 +1,4 @@
-export const MCP_VERSION = "1.2.0";
+export const MCP_VERSION = "1.2.1";
 export const MCP_SCOPES = {
   "xeeclip:account:read": "View your account",
   "xeeclip:credits:read": "View your credits",

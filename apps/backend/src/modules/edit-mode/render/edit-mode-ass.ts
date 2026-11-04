@@ -276,7 +276,7 @@ export function buildEditModeAss(canvas: RenderCanvas,
     // stroke Phase 5 always drew, so nothing regresses.
     const outlineWidth = boxed ? designPx(overlay.background.padding, canvas.width)
       : stroked ? Math.max(1, designPx(overlay.stroke.width, canvas.width))
-        : Math.max(1, Math.round(overlay.fontSizePx * 0.07));
+        : overlay.legacyOutline === false ? 0 : Math.max(1, Math.round(overlay.fontSizePx * 0.07));
     const outlineColour = boxed
       ? toAssColor(overlay.background.color, overlay.background.opacity * overlay.opacity)
       : stroked ? toAssColor(overlay.stroke.color, overlay.opacity)

@@ -125,6 +125,8 @@ export type RenderTextOverlay = {
   // Every size below is already resolved to CANVAS PIXELS, so the ASS builder
   // never has to know about the 600-wide design-unit convention.
   stroke: TextStroke;
+  /** Legacy unstyled text keeps its fallback outline; explicit stroke-off must stay off. */
+  legacyOutline?: boolean;
   shadow: TextShadow;
   background: TextBackground;
   /** Letter spacing in canvas pixels; line spacing as a line-height multiplier. */

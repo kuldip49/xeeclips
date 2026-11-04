@@ -77,6 +77,12 @@ function tool(
     category,
     description:
       description +
+      (name === "get_edit_project" ||
+      (Array.isArray(scope) ? scope : [scope]).some(
+        (s) => s === "xeeclip:clips:edit" || s === "xeeclip:clips:export",
+      )
+        ? " Execute directly on the server with this connection's MCP OAuth Bearer identity. No browser tab, website session cookie or secondary editor sign-in is required. Website links are optional human UI only; never substitute opening them for this tool. Report structured scope/conflict/validation errors instead."
+        : "") +
       (category === "READ"
         ? " Read-only; only your owned resources are accessible."
         : " Mutates your XeeClip state; use a stable idempotencyKey for retries. Changes are visible in XeeClip."),
@@ -342,7 +348,7 @@ tool(
   "get_edit_project",
   "xeeclip:clips:read",
   "READ",
-  "Read the SAME canonical EditProject used by the website, including revision and bounded editable summaries. Supply editProjectId or clipId.",
+  "Read the SAME canonical EditProject used by the website, including revision, all bounded text layers, caption IDs/tracks/boxes and visual layer geometry. Supply editProjectId or clipId. Read textLayers before choosing an exact title, and distinguish editable captions from text already embedded in source video pixels.",
   { editProjectId: id.optional(), clipId: id.optional() },
 );
 tool(
@@ -381,8 +387,49 @@ tool(
   "update_headline",
   "xeeclip:clips:edit",
   "EDITOR_WRITE",
-  "Change the canonical headline text using the existing fit validator. A headline that does not fit is rejected.",
-  { ...selected, text: z.string().min(1).max(1000) },
+  "Change an exact canonical TEXT headline using the existing fit validator. Optional box and text style let you place the title inside an existing bar. Use update_overlay to move/resize it and remove_overlay to remove explicitly selected extra title/caption layers. Never alter source pixels; a headline that does not fit is rejected.",
+  {
+    ...selected,
+    text: z.string().min(1).max(1000),
+    box: rect
+      .extend({ width: unit.min(0.02), height: unit.min(0.02) })
+      .optional(),
+    color: z
+      .string()
+      .regex(/^#[\da-fA-F]{6}$/)
+      .optional(),
+    fontSize: z.number().finite().min(8).max(300).optional(),
+    textAlign: z.enum(["left", "center", "right"]).optional(),
+    stroke: z
+      .object({
+        enabled: z.boolean(),
+        color: z.string().regex(/^#[\da-fA-F]{6}$/),
+        width: z.number().finite().min(0).max(40),
+      })
+      .strict()
+      .optional(),
+    shadow: z
+      .object({
+        enabled: z.boolean(),
+        color: z.string().regex(/^#[\da-fA-F]{6}$/),
+        opacity: unit,
+        blur: z.number().finite().min(0).max(60),
+        offsetX: z.number().finite().min(-60).max(60),
+        offsetY: z.number().finite().min(-60).max(60),
+      })
+      .strict()
+      .optional(),
+    background: z
+      .object({
+        enabled: z.boolean(),
+        color: z.string().regex(/^#[\da-fA-F]{6}$/),
+        opacity: unit,
+        padding: z.number().finite().min(0).max(120),
+        radius: z.number().finite().min(0).max(120),
+      })
+      .strict()
+      .optional(),
+  },
 );
 tool(
   "update_caption",
@@ -448,7 +495,7 @@ tool(
   "update_overlay",
   "xeeclip:clips:edit",
   "EDITOR_WRITE",
-  "Change a canonical image/logo overlay position, size or opacity. Does not accept arbitrary video overlays.",
+  "Move/resize or set opacity of an explicitly selected canonical TEXT headline, SUBTITLE caption or IMAGE/logo layer. Coordinates are normalized top-left canvas boxes. Source VIDEO pixels/audio are untouched. Do not use a browser for this operation.",
   {
     ...edit,
     elementId: id,
@@ -463,8 +510,12 @@ tool(
   "remove_overlay",
   "xeeclip:clips:edit",
   "EDITOR_WRITE",
-  "Remove an image/logo overlay as a reversible canonical edit. This does not delete its media asset.",
-  { ...edit, elementId: id },
+  "Remove explicitly selected editable TEXT titles, SUBTITLE captions or IMAGE/logo layers as one reversible canonical edit. Supply exactly one of elementId or elementIds. Remove only the duplicate caption IDs identified from get_edit_project; keep original captions and source video pixels. Embedded/burned-in source captions are never removed by deleting these layers. This does not delete media assets.",
+  {
+    ...edit,
+    elementId: id.optional(),
+    elementIds: z.array(id).min(1).max(200).optional(),
+  },
 );
 tool(
   "set_filter",
@@ -527,7 +578,7 @@ tool(
   "get_export",
   "xeeclip:clips:export",
   "READ",
-  "Read canonical export progress and obtain an ownership-protected result/download link when complete.",
+  "Read canonical export progress and obtain a Bearer-authorized result/download link when complete. Download using the same MCP OAuth Authorization header; resultUrl is optional human UI and never an editor authentication prerequisite.",
   { editProjectId: id, exportId: id.optional() },
 );
 tool(

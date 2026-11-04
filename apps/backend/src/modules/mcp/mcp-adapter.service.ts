@@ -1,3 +1,4 @@
+import { readTextStyle } from "../edit-mode/edit-mode-text";
 import { Injectable } from "@nestjs/common";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { AuthService } from "../auth/auth.service";
@@ -81,13 +82,22 @@ export class McpAdapterService {
       ) || elements.find((e) => e.type === "TEXT");
     const pickText = (e: any) => ({
       elementId: e.id,
+      type: e.type,
+      track: e.track,
       text: String(e.properties?.content || ""),
       start: e.startTime,
       end: e.startTime + e.duration,
+      hidden: e.properties?.hidden === true,
+      semanticRole:
+        e.properties?.presetRole || e.properties?.templateRole || null,
+      box: {
+        x: e.properties?.x ?? 0,
+        y: e.properties?.y ?? 0,
+        width: e.properties?.width ?? 1,
+        height: e.properties?.height ?? 1,
+      },
       style: {
-        fontFamily: e.properties?.fontFamily,
-        fontSize: e.properties?.fontSize,
-        color: e.properties?.color,
+        ...readTextStyle(e.properties),
         captionStyleId: e.properties?.captionStyleId,
       },
     });
@@ -97,6 +107,19 @@ export class McpAdapterService {
       revision: p.revision,
       updatedAt: p.updatedAt,
       websiteUrl: website("/edit-mode/" + p.id),
+      websiteUrlPurpose: "OPTIONAL_HUMAN_UI_NOT_REQUIRED_FOR_MCP",
+      editorAuthentication: "MCP_OAUTH_BEARER",
+      execution: "SERVER_SIDE_CANONICAL_EDITOR",
+      coordinateSpace: "NORMALIZED_TOP_LEFT_CANVAS",
+      sourceContent:
+        "Editable layers below are separate from embedded source pixels/audio. Removing a layer never erases source captions or titles already present in the video.",
+      textLayers: elements
+        .filter((e) => e.type === "TEXT")
+        .slice(0, 200)
+        .map(pickText),
+      textLayerCount: elements.filter((e) => e.type === "TEXT").length,
+      textLayersTruncated:
+        elements.filter((e) => e.type === "TEXT").length > 200,
       duration: videos.reduce(
         (n, e) => Math.max(n, e.startTime + e.duration),
         0,
@@ -287,11 +310,18 @@ export class McpAdapterService {
             unlimited: u.role === "ADMIN",
           };
     }
-    if (tool === "get_supported_sources") return this.imports.supportedSources();
-    if (tool === "import_source") return this.imports.importSource(a.url, a.title);
+    if (tool === "get_supported_sources")
+      return this.imports.supportedSources();
+    if (tool === "import_source")
+      return this.imports.importSource(a.url, a.title);
     if (tool === "get_source_import") {
       const result = await this.imports.sourceImportSummary(a.importId);
-      return 'errorCode' in result ? { ...result, error: safeMcpError(new McpToolError(result.errorCode!, '')) } : result;
+      return "errorCode" in result
+        ? {
+            ...result,
+            error: safeMcpError(new McpToolError(result.errorCode!, "")),
+          }
+        : result;
     }
     if (tool === "list_sources")
       return this.videos.sourcePage(a.limit, a.cursor);
@@ -601,7 +631,7 @@ export class McpAdapterService {
           authenticationRequired: true,
           resultUrl: website("/edit-mode/" + a.editProjectId),
           downloadAuthentication:
-            "Use this connection’s Bearer token in the Authorization header; open resultUrl to download in your signed-in browser.",
+            "Use this connection’s MCP OAuth Bearer token in the Authorization header. No browser login or session cookie is required. resultUrl is optional human UI only.",
         };
       }
       if (!current)
@@ -634,7 +664,7 @@ export class McpAdapterService {
         authenticationRequired: true,
         resultUrl: website("/edit-mode/" + a.editProjectId),
         downloadAuthentication:
-          "Use this connection’s Bearer token in the Authorization header; open resultUrl to download in your signed-in browser.",
+          "Use this connection’s MCP OAuth Bearer token in the Authorization header. No browser login or session cookie is required. resultUrl is optional human UI only.",
         recommendedPollAfterMs: 5000,
       };
     }
@@ -701,14 +731,77 @@ export class McpAdapterService {
           y: a.y,
         }),
       );
-    else if (tool === "update_headline")
+    else if (tool === "update_headline") {
+      const e = this.target(p, "TEXT", a.elementId);
+      if (a.box) {
+        if (
+          a.box.x + a.box.width > 1 + 1e-6 ||
+          a.box.y + a.box.height > 1 + 1e-6
+        )
+          throw new McpToolError(
+            "EDIT_VALIDATION_FAILED",
+            "The headline box must fit within the canvas.",
+          );
+        commands.push(
+          command("MOVE_ELEMENT", { elementId: e.id, x: a.box.x, y: a.box.y }),
+          command("RESIZE_ELEMENT", {
+            elementId: e.id,
+            width: a.box.width,
+            height: a.box.height,
+          }),
+        );
+      }
+      if (a.color !== undefined)
+        commands.push(
+          command("SET_TEXT_COLOR", { elementId: e.id, color: a.color }),
+        );
+      if (a.fontSize !== undefined)
+        commands.push(
+          command("SET_TEXT_SIZE", { elementId: e.id, fontSize: a.fontSize }),
+        );
+      if (a.textAlign !== undefined)
+        commands.push(
+          command("SET_TEXT_ALIGNMENT", {
+            elementId: e.id,
+            textAlign: a.textAlign,
+          }),
+        );
+      if (a.stroke)
+        commands.push(
+          command("SET_TEXT_STROKE", {
+            elementId: e.id,
+            strokeEnabled: a.stroke.enabled,
+            strokeColor: a.stroke.color,
+            strokeWidth: a.stroke.width,
+          }),
+        );
+      if (a.shadow)
+        commands.push(
+          command("SET_TEXT_SHADOW", {
+            elementId: e.id,
+            shadowEnabled: a.shadow.enabled,
+            shadowColor: a.shadow.color,
+            shadowOpacity: a.shadow.opacity,
+            shadowBlur: a.shadow.blur,
+            shadowOffsetX: a.shadow.offsetX,
+            shadowOffsetY: a.shadow.offsetY,
+          }),
+        );
+      if (a.background)
+        commands.push(
+          command("SET_TEXT_BACKGROUND", {
+            elementId: e.id,
+            backgroundEnabled: a.background.enabled,
+            backgroundColor: a.background.color,
+            backgroundOpacity: a.background.opacity,
+            backgroundPadding: a.background.padding,
+            backgroundRadius: a.background.radius,
+          }),
+        );
       commands.push(
-        command("SET_TEXT_CONTENT", {
-          elementId: this.target(p, "TEXT", a.elementId).id,
-          content: a.text,
-        }),
+        command("SET_TEXT_CONTENT", { elementId: e.id, content: a.text }),
       );
-    else if (tool === "update_caption") {
+    } else if (tool === "update_caption") {
       const e = this.target(p, "SUBTITLE", a.captionElementId);
       if (a.text !== undefined)
         commands.push(
@@ -768,10 +861,33 @@ export class McpAdapterService {
           }),
         );
     } else if (tool === "update_overlay" || tool === "remove_overlay") {
-      const e = this.target(p, "IMAGE", a.elementId);
+      const ids =
+        tool === "remove_overlay"
+          ? a.elementIds || [a.elementId]
+          : [a.elementId];
+      if (
+        tool === "remove_overlay" &&
+        (!!a.elementId === !!a.elementIds || new Set(ids).size !== ids.length)
+      )
+        throw new McpToolError(
+          "INVALID_INPUT",
+          "Choose elementId or unique elementIds.",
+        );
+      const layers = ids.map((id: string) => {
+        const e = p.elements.find((x: any) => x.id === id);
+        if (!e) throw new McpToolError("NOT_FOUND", "Element not found.");
+        if (!["TEXT", "SUBTITLE", "IMAGE"].includes(e.type))
+          throw new McpToolError(
+            "UNSUPPORTED_OPERATION",
+            "Only editable text, captions and image layers are supported.",
+          );
+        return e;
+      });
       if (tool === "remove_overlay")
-        commands.push(command("REMOVE_ELEMENT", { elementId: e.id }));
+        for (const e of layers)
+          commands.push(command("REMOVE_ELEMENT", { elementId: e.id }));
       else {
+        const e = layers[0];
         if (a.x !== undefined || a.y !== undefined)
           commands.push(
             command("MOVE_ELEMENT", {

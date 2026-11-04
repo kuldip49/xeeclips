@@ -420,6 +420,7 @@ function textOverlay(element: PlanElement, properties: Record<string, unknown>,
     presetRole: typeof properties.templateRole === 'string' ? properties.templateRole
       : typeof properties.presetRole === 'string' ? properties.presetRole : null,
     stroke: style.stroke,
+    legacyOutline: typeof record(properties.stroke).enabled !== 'boolean',
     shadow: style.shadow,
     background: style.background,
     // Letter spacing travels in DESIGN units; the ASS builder converts it with
