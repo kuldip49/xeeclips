@@ -242,22 +242,57 @@ export class McpOperationsService implements OnModuleDestroy {
             );
             return action.result;
           }
-          if (action.status === "FAILED")
-            throw new McpToolError(
-              action.failureCode || "JOB_FAILED",
-              messages[action.failureCode || "JOB_FAILED"],
-            );
-          if (Date.now() - action.createdAt.getTime() > 120000)
-            throw new McpToolError(
-              "OPERATION_INTERRUPTED",
-              messages.OPERATION_INTERRUPTED,
-            );
-          return {
-            actionId,
-            status: "QUEUED",
-            requestInProgress: true,
-            recommendedPollAfterMs: 5000,
-          };
+          if (action.status === "FAILED") {
+            // These consent guards run before generation, reservations or edits.
+            // A saved consent change must unblock the SAME assistant request.
+            const consentRetry =
+              action.failureCode === "AI_CONSENT_REQUIRED" &&
+              input.mode === "XEEPRO" &&
+              [
+                "xeeclip_create_clips",
+                "xeeclip_quick_reframe",
+                "xeeclip_understand_campaign",
+                "xeeclip_generate_campaign_clips",
+              ].includes(tool.name) &&
+              !!(await this.prisma.user.findUnique({
+                where: { id: identity.userId },
+                select: { aiProcessingConsentAt: true },
+              }))?.aiProcessingConsentAt;
+            if (!consentRetry)
+              throw new McpToolError(
+                action.failureCode || "JOB_FAILED",
+                messages[action.failureCode || "JOB_FAILED"],
+              );
+            // Only one concurrent retry may reclaim the failed precondition.
+            const claimed = await this.prisma.mcpAction.updateMany({
+              where: {
+                id: action.id,
+                inputHash,
+                status: "FAILED",
+                failureCode: "AI_CONSENT_REQUIRED",
+              },
+              data: {
+                status: "PENDING",
+                failureCode: null,
+                completedAt: null,
+                createdAt: new Date(),
+              },
+            });
+            ownsAction = claimed.count === 1;
+          }
+          if (!ownsAction) {
+            if (action.status !== "FAILED" && Date.now() - action.createdAt.getTime() > 120000)
+              throw new McpToolError(
+                "OPERATION_INTERRUPTED",
+                messages.OPERATION_INTERRUPTED,
+              );
+            return {
+              actionId,
+              status: "QUEUED",
+              requestInProgress: true,
+              recommendedPollAfterMs: 5000,
+            };
+          }
         }
         actionId = action.id;
         ownsAction = true;

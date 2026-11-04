@@ -53,6 +53,7 @@ function database() {
     );
   return {
     rows,
+    consent: null,
     mcpAction: {
       async create({ data }) {
         if (
@@ -82,7 +83,7 @@ function database() {
       },
       async updateMany({ where, data }) {
         const r = find(where);
-        if (!r || (where.status && r.status !== where.status))
+        if (!r || Object.entries(where).some(([key, value]) => r[key] !== value))
           return { count: 0 };
         Object.assign(r, data);
         return { count: 1 };
@@ -241,6 +242,72 @@ const write = {
     "PENDING",
     "a retry must not mark the original running action failed",
   );
+  // Consent failures happen before side effects. After the saved preference
+  // changes, the same key can proceed exactly once, including concurrent retries.
+  const consentDb = database();
+  consentDb.user = { async findUnique({ where }) {
+    assert.equal(where.id, auth.extra.userId);
+    return { aiProcessingConsentAt: consentDb.consent };
+  }};
+  const consentOps = new McpOperationsService(consentDb);
+  const generation = { name: "xeeclip_create_clips", scopes: [], category: "GENERATION" };
+  const consentInput = { mode: "XEEPRO", idempotencyKey: "consent-retry-001" };
+  let generationStarts = 0;
+  const requireConsent = async () => {
+    if (!consentDb.consent) throw new McpToolError("AI_CONSENT_REQUIRED", "Consent required");
+    generationStarts++;
+    return { jobId: "same-canonical-job", status: "QUEUED" };
+  };
+  for (let i = 0; i < 2; i++)
+    await assert.rejects(() => consentOps.invoke(auth, generation, consentInput, requireConsent),
+      e => e.code === "AI_CONSENT_REQUIRED");
+  assert.equal(generationStarts, 0);
+  consentDb.consent = new Date();
+  await assert.rejects(() => consentOps.invoke(auth, generation,
+    { ...consentInput, mode: "XEEFREE" }, requireConsent), e => e.code === "IDEMPOTENCY_CONFLICT");
+  const consentRow = [...consentDb.rows.values()][0];
+  consentRow.createdAt = new Date(Date.now() - 180000);
+  let finishConsentRetry;
+  const consentBarrier = new Promise(resolve => { finishConsentRetry = resolve; });
+  const resumed = consentOps.invoke(auth, generation, consentInput, async () => {
+    const result = await requireConsent();
+    await consentBarrier;
+    return result;
+  });
+  const duplicateRetry = consentOps.invoke(auth, generation, consentInput, requireConsent);
+  const queuedRetry = await duplicateRetry;
+  assert.equal(queuedRetry.requestInProgress, true);
+  assert.equal(generationStarts, 1);
+  finishConsentRetry();
+  const resumedJob = await resumed;
+  assert.deepEqual(await consentOps.invoke(auth, generation, consentInput, requireConsent), resumedJob);
+  assert.equal(generationStarts, 1, "consent retries must not start or charge twice");
+  assert.equal(consentRow.failureCode, null);
+  assert(consentRow.createdAt.getTime() > Date.now() - 120000);
+  consentDb.consent = null;
+  await assert.rejects(() => consentOps.invoke(auth, generation,
+    { mode: "XEEPRO", idempotencyKey: "consent-revoked-001" }, requireConsent),
+    e => e.code === "AI_CONSENT_REQUIRED");
+  assert.equal(generationStarts, 1, "revoking consent must block new work");
+  consentDb.consent = new Date();
+  const otherFailure = { mode: "XEEPRO", idempotencyKey: "other-failure-001" };
+  await assert.rejects(() => consentOps.invoke(auth, generation, otherFailure, async () => {
+    throw new McpToolError("XEEPRO_BUSY", "Busy");
+  }), e => e.code === "XEEPRO_BUSY");
+  await assert.rejects(() => consentOps.invoke(auth, generation, otherFailure, requireConsent),
+    e => e.code === "XEEPRO_BUSY");
+  assert.equal(generationStarts, 1, "other terminal failures retain their original receipt");
+  for (const name of ["xeeclip_quick_reframe", "xeeclip_understand_campaign", "xeeclip_generate_campaign_clips"]) {
+    const tool = { ...generation, name }, input = { mode: "XEEPRO", idempotencyKey: "consent-" + name };
+    consentDb.consent = null;
+    await assert.rejects(() => consentOps.invoke(auth, tool, input, requireConsent),
+      e => e.code === "AI_CONSENT_REQUIRED");
+    consentDb.consent = new Date();
+    const done = await consentOps.invoke(auth, tool, input, requireConsent);
+    assert.deepEqual(await consentOps.invoke(auth, tool, input, requireConsent), done);
+  }
+  assert.equal(generationStarts, 4);
+  await consentOps.onModuleDestroy();
   const render = new EditModeRenderService(
     {
       editProject: {
@@ -325,7 +392,7 @@ const write = {
   }
   await ops.onModuleDestroy();
   console.log(
-    "PASS MCP strict schemas, redirect policy, safe errors, trusted mode parsing, scopes, ALS isolation, exact/parallel retries, conflicting keys, crash receipts, interrupted actions and cached export ownership.",
+    "PASS MCP strict schemas, redirect policy, safe errors, trusted mode parsing, scopes, ALS isolation, exact/parallel retries, saved-consent retry/revocation, conflicting keys, crash receipts, interrupted actions and cached export ownership.",
   );
 })().catch((e) => {
   console.error(e);

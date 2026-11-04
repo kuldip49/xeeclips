@@ -47,13 +47,28 @@ const { chromium, expect } = require("@playwright/test"),
         page.getByRole("heading", { name: "AI Assistants", exact: true }),
       ).toBeVisible({ timeout: 60000 });
       await expect(
-        page.getByText(base + "/mcp", { exact: true }),
+        page.getByRole("switch", { name: "Allow AI processing", exact: true }),
       ).toBeVisible();
+      const aiSwitch = page.getByRole("switch", { name: "Allow AI processing", exact: true });
+      await expect(aiSwitch).toHaveAttribute("aria-checked", "false");
+      await aiSwitch.click();
+      await expect(page.getByRole("status").filter({ hasText: "AI processing is on." })).toBeVisible();
+      await expect(aiSwitch).toHaveAttribute("aria-checked", "true");
+      await page.reload();
+      await expect(aiSwitch).toHaveAttribute("aria-checked", "true");
+      await aiSwitch.click();
+      await expect(page.getByRole("status").filter({ hasText: "AI processing is off." })).toBeVisible();
+      await expect(aiSwitch).toHaveAttribute("aria-checked", "false");
+      await page.reload();
+      await expect(aiSwitch).toHaveAttribute("aria-checked", "false");
+      await expect(page.getByText(base + "/mcp", { exact: true })).toHaveCount(0);
+      await expect(page.getByText("Remote MCP address", { exact: true })).toHaveCount(0);
       await page
-        .getByRole("button", { name: "Revoke", exact: true })
+        .getByRole("button", { name: "Disconnect", exact: true })
         .first()
         .scrollIntoViewIfNeeded();
       await fits("Settings " + width);
+      await page.evaluate(() => window.scrollTo(0, 0));
       await page.screenshot({
         path: path.join(
           process.env.MCP_QA_DIR ||
@@ -154,7 +169,7 @@ const { chromium, expect } = require("@playwright/test"),
       }),
     });
     await expect(card).toBeVisible({ timeout: 30000 });
-    await card.getByRole("button", { name: "Revoke", exact: true }).click();
+    await card.getByRole("button", { name: "Disconnect", exact: true }).click();
     await expect(card).toHaveCount(0);
     await request("/auth/session", { cookie: accounts[0].cookie });
     fs.writeFileSync(
@@ -164,6 +179,8 @@ const { chromium, expect } = require("@playwright/test"),
           passed: true,
           widths: [1440, 375, 390],
           settings: true,
+          aiProcessingOnOffPersists: true,
+          simplifiedAssistantDisplay: true,
           consent: true,
           grant: true,
           revoke: true,

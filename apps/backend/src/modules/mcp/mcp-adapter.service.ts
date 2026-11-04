@@ -283,6 +283,7 @@ export class McpAdapterService {
         : {
             displayName: u.displayName,
             status: u.status,
+            aiProcessingConsent: !!u.aiProcessingConsentAt,
             unlimited: u.role === "ADMIN",
           };
     }
