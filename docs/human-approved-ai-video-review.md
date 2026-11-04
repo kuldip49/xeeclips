@@ -1,6 +1,6 @@
 # Human-approved AI video review
 
-MCP 1.2.0 adds five tools and the opt-in `xeeclip:media:review` scope. Production rollout evidence is recorded below after deployment. Existing connections are not expanded: reconnect and explicitly select the new permission. AI processing consent for generation remains a separate setting.
+MCP 1.2.0 adds five tools and the opt-in `xeeclip:media:review` scope. Deployed and healthy on 2026-11-04. Production rollout evidence is recorded below. Existing connections are not expanded. Register/re-add the assistant connection with the new permission, then explicitly approve it. A client registration that cached the old scope list must be registered again; a token refresh cannot add permission. AI processing consent for generation remains a separate setting.
 
 ## Privacy and use
 
@@ -34,11 +34,11 @@ Review-only OAuth clients cannot get accounts, credits, sources, History, campai
 |6|ReviewGrant|Four additive request/grant/pass/audit tables; DB scope/pass/evidence constraints|
 |7|Temporary duration|15-minute grant, 10-minute pending request, completion ends access|
 |8|Protected media|HMAC ticket + exact MCP bearer; hidden metadata removed|
-|9|No second login|Official SDK approved-client playback without human cookie passed locally|
+|9|No second login|Official SDK approved-client playback without human cookie passed in production|
 |10|Media output|Minimal duration/MIME/deadline/evidence coverage; no storage paths|
 |11|Review tool|Actual JPEG frames + WAV audio; findings completion requires evidence|
 |12|Evidence marker|METADATA_ONLY descriptor vs ACTUAL_RENDERED_MEDIA delivery; sampled coverage explicit|
-|13|Edit integration|Canonical headline/edit/export and changed-render re-review passed locally|
+|13|Edit integration|Canonical headline/edit/export and changed-render re-review passed in production|
 |14|Bounded re-review|Default one version, explicit maximum three; no grant extension|
 |15|Review-only client|Actual review succeeds, unrelated tools deny by scope|
 |16|Account isolation|Cross-user and account/library/campaign/admin/credit probes denied|
@@ -51,12 +51,29 @@ Review-only OAuth clients cannot get accounts, credits, sources, History, campai
 |23|Audit|Lifecycle events verified; no media/URL/token log fields|
 |24|MCP regression|50 tools; strict schemas/PKCE/refresh/revocation/rates/idempotency/IDOR; all Free styles, mocked Pro success/busy refund, Reframe, campaigns, canonical edits/export, source-import units|
 |25|Website regression|Review dialogs, Settings/OAuth at 1440/375/390; Create/Reframe/Clippers/campaign/History/editor/result fit all widths|
-|26|Production test|Pending gated disposable acceptance and exact cleanup|
-|27|Commit|Recorded in final deployment evidence|
-|28|Deployed version|Pending; candidate MCP 1.2.0|
+|26|Production test|A–H security/media/edit acceptance passed; responsive UI passed; all disposable users/media removed; original data/storage preserved; maintenance OFF|
+|27|Commit|Release application `842b2c2a2f253b3916c5a4418d773870bc343f78`, pushed normally through feature branch and main|
+|28|Deployed version|MCP 1.2.0, 50 tools, 15 scopes; Cloudflare `47d75bdd-a40a-45bf-a671-97ae67ff3ed1`|
 
 ## Database and rollback
 
 Migration `20261104000000_human_approved_video_review` is additive and transactional. No reset/down migration is used. Release requires a fresh custom-format production backup, successful isolated restore and SQL rehearsal, unchanged canonical fingerprints for existing rows, false review setting for all restored users and four empty new tables. Backend/frontend rollback artifacts are retained. An application rollback keeps the additive schema; old code ignores it. Existing AI, database, Redis, MinIO and local frontend containers must remain untouched.
 
-Private acceptance artifacts, disposable identities and configuration snapshots stay in ignored `.cache` and the private durable storage backup directory. They are never committed. Production status is not claimed until post-release smoke, original-data preservation, cleanup and maintenance-off health checks pass.
+Private acceptance artifacts, disposable identities and configuration snapshots stay in ignored `.cache` and the private durable storage backup directory. They are never committed. Post-release smoke, original-data preservation, cleanup and maintenance-off health checks all passed.
+
+## Final production evidence
+
+- Release application: `842b2c2a2f253b3916c5a4418d773870bc343f78`; backend image `sha256:ce89cdfd934d62360405a352c09fa96815228fe310484d4cb0716bb4f4c83432`. MCP endpoint remains `https://api.xeeclip.me/mcp`.
+- Frontend version: `47d75bdd-a40a-45bf-a671-97ae67ff3ed1`. The public review bundle exactly matches the tested artifact (SHA-256 `e8c63df6528c5815ab0bad197f2a7a3e191bc28c6b0c5e3f383efad1950a72c4`).
+- Migration 39, `20261104000000_human_approved_video_review`, is applied. First restore/rehearsal validated all 40 original tables and four added empty tables. Final cleanup preserved all 44 current table fingerprints and all 50,644 original rows. All original users remain review OFF. All four review tables are empty after disposable cleanup.
+- Fresh final backup: `C:\projects\ai-content-platform\storage\xeeclip-human-review-20261104\production-1793808724698.dump`, 33,638,957 bytes, SHA-256 `d14d836899a98be8976c392243fa12688d653640056793c78cbe8a209694f053`. Restore and migration checksum verified; original pre-migration backup is also retained in the same private directory.
+- All 669 original storage objects preserved, inventory SHA-256 `818d4e5535e5af667fdd1584e0500a8afe8daef6c60884759ab69890e6a801b8`. No original OAuth records changed or expired during final preservation checks.
+- Production SDK acceptance passed OFF, ON without approval, human Allow Once, actual sanitized MP4/native JPEG/WAV delivery, different user/client/owned clip denial, metadata-only completion denial, expiry, revoke, OFF invalidation, audit and canonical headline edit/export/re-review. Actual returned QA frames were visually inspected before/after; the headline changed in rendered pixels. Media delivery/decoding is distinct from subjective model comprehension.
+- Production regression passed all three XeeFree styles, Quick Reframe, campaign logo/music → Free understanding → confirmation → generation → canonical assets/captions → compliance (WARN, with no FAIL/UNKNOWN), OAuth/refresh/replay/revoke, and one bounded real XeePro attempt returning XEEPRO_BUSY with its credit refund verified. Mocked Pro success/refund and source-import validation/security suites also passed locally; no new live external URL import was needed for this unchanged import pipeline.
+- Production human approval UI and website smoke passed at 1440, 375 and 390 pixels: explicit On/Off, playable preview, unchecked revision default, Cancel, Allow Once, optional session revisions, Revoke, History Check with AI privacy, Create, Reframe/result, Clippers/campaign, History and editor. No horizontal overflow.
+- Two earlier attempts automatically restored the prior backend/frontend when release checks failed. Release tooling was corrected to handle Windows background handles and public asset propagation. The remaining UI test read Cancel before its asynchronous save completed; the test now waits for the exact save/revoke response. No product authorization change was necessary. The unchanged immutable image's passed production security/campaign/credit evidence was retained, and final UI/site gates were rerun with fresh disposable users. All attempts cleaned their disposable data; no original rows/media were lost.
+- Final health at 2026-11-04 16:26:27 UTC: site/API/MCP/OAuth healthy, maintenance OFF, queues idle, no live reservations. AI service, PostgreSQL, Redis, MinIO and local frontend container identities/images unchanged. Tunnel configuration restored exactly. Prior backend image and Cloudflare version `94ced590-6608-41bf-9d9f-d45e431d475d` retained for rollback; no destructive schema rollback is required.
+
+Evidence is stored privately under `.cache/human-approved-review-release/` (final UI/site/cleanup) and its `attempt-2/production-qa/` directory (unchanged-image security/media/campaign/credit acceptance). No actual ChatGPT/Claude branded conversation was run as part of this QA: official MCP SDK, decoded media, inspected frames and the real XeeClip browser UI were tested. Hosts must support/forward the relevant native media blocks; assistants must identify any unreviewed audio or unsampled portions. Findings link to existing canonical projects; unmaterialized clips retain the existing explicit Edit Video/restore flow. No outstanding P0/P1 release blockers.
+
+Final status: **XEECLIP_HUMAN_APPROVED_AI_REVIEW_DEPLOYED_AND_HEALTHY**

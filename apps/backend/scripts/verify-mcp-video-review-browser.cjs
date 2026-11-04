@@ -102,9 +102,11 @@ const dir = path.resolve(
         fullPage: false,
       });
       if (width === 1440) {
-        await dialog
-          .getByRole("button", { name: "Cancel", exact: true })
-          .click();
+        await Promise.all([
+          page.waitForResponse(r => r.url().endsWith(`/mcp/reviews/${review.reviewRequestId}/decision`) && r.request().method() === "POST" && r.status() === 201),
+          dialog.getByRole("button", { name: "Cancel", exact: true }).click(),
+        ]);
+        await expect(dialog).toHaveCount(0);
         const denied = await c.callTool({
           name: "xeeclip_get_review_media",
           arguments: { reviewRequestId: review.reviewRequestId },
@@ -140,7 +142,10 @@ const dir = path.resolve(
         }
         const card = page.locator("article").filter({ hasText: purpose });
         await expect(card).toBeVisible();
-        await card.getByRole("button", { name: "Revoke", exact: true }).click();
+        await Promise.all([
+          page.waitForResponse(r => r.url().endsWith(`/mcp/reviews/${review.reviewRequestId}/revoke`) && r.request().method() === "POST" && r.status() === 201),
+          card.getByRole("button", { name: "Revoke", exact: true }).click(),
+        ]);
         const revoked = await c.callTool({
           name: "xeeclip_get_review_media",
           arguments: { reviewRequestId: review.reviewRequestId },
