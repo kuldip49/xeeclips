@@ -1,0 +1,41 @@
+{
+  "status": "XEECLIP_MCP_FULL_EDITOR_CONTROL_DEPLOYED_AND_HEALTHY",
+  "releaseCommit": "21d4c14483e7543d90f373d96b1063029ed73fb6",
+  "backendImage": "sha256:2f1b9690568f03d71927a2d2f16431026ee85cdb4ef44d184b6d61bba3da7467",
+  "mcpVersion": "1.3.0",
+  "tools": 60,
+  "editorActions": 76,
+  "backup": {
+    "bytes": 33842978,
+    "sha256": "acb637b5d9a2a97a784df3c91b0ba146d987def1cd9b26fef83852df39ccf53e",
+    "restoreTested": true,
+    "tables": 44
+  },
+  "newMigrations": 0,
+  "existingMigrations": 39,
+  "productionReports": {
+    "auth-acceptance": true,
+    "server-edit-acceptance": true,
+    "full-editor-acceptance": true,
+    "full-editor-security": true,
+    "campaign-acceptance": true,
+    "full-editor-campaign": true,
+    "editor-assets-acceptance": true,
+    "ownership-acceptance": true,
+    "bounded-pro-acceptance": true,
+    "site-regression": true
+  },
+  "browserCookieMcpRequests": 0,
+  "bearerRequests": 98,
+  "widths": [
+    1440,
+    375,
+    390
+  ],
+  "originalDataPreserved": true,
+  "unchangedServicesPreserved": true,
+  "frontendUnchanged": true,
+  "maintenanceOff": true,
+  "rollbackInvoked": false,
+  "completedAt": "2026-11-04T20:32:44.660Z"
+}

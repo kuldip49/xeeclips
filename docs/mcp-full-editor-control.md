@@ -2,7 +2,7 @@
 
 MCP **1.3.0**, **60 tools**, **76 typed editor actions**. Endpoint remains `https://api.xeeclip.me/mcp`. This upgrade uses the website's existing EditProject, commands, history, style compiler and renderer. No database migration or new OAuth scope is needed. No account setting or review approval is enabled for an existing user.
 
-Production status: **pending final release gates**. The final deployment record will replace this line after backup/restore, deployment, disposable acceptance and preservation verification.
+Production status: **XEECLIP_MCP_FULL_EDITOR_CONTROL_DEPLOYED_AND_HEALTHY**. Completed 2026-11-04T20:32:44.660Z. Release commit **21d4c14483e7543d90f373d96b1063029ed73fb6**, pushed normally to main. Disposable production QA and cleanup passed; maintenance is off.
 
 | # | Requirement | Implementation / evidence |
 |---|---|---|
@@ -37,9 +37,9 @@ Production status: **pending final release gates**. The final deployment record 
 | 29 | Security | Cross-user project/asset/saved-template denial; review/edit/export/account scopes independent; no raw settings/DB/CSS/URLs; malformed schemas, conflicts and denial-preservation tested. |
 | 30 | OpenAI/ChatGPT | Independent OpenAI-compatible MCP SDK scenario passes review→edits→three styles→CTA→export→review. Branded ChatGPT browser UI is not available in this environment; no claim that it was exercised. |
 | 31 | Claude | Independent Claude-compatible MCP SDK session passes complex editing, template hook placement, audio/filter/zoom, undo/redo and rendered re-review. Branded Claude UI was not available. |
-| 32 | Discovery | Official MCP Inspector 2.13.0 discovers all 60 tools and the complete typed batch schema; final production discovery is a deployment gate. |
-| 33 | Regression | 30 broad suites, 17 Clipper suites, review/sanitization, campaign suites, real Free all-three-style generation, Quick Reframe result, mocked Pro success/busy refund. Desktop/375/390 seven-route browser smoke and website/MCP history parity pass. |
-| 34 | Commit/deployed version | MCP 1.3.0; immutable release commit/image and restored-backup record are added after final deployment. |
+| 32 | Discovery | Official MCP Inspector 2.13.0 discovers all 60 tools and the complete typed batch schema; production discovery passed with all 60 tools. |
+| 33 | Regression | 30 broad suites, 17 Clipper suites, review/sanitization, campaign suites, real Free all-three-style generation, Quick Reframe result, mocked Pro success/busy refund. Desktop/375/390 seven-route browser smoke and website/MCP history parity pass locally and in production. Production also passed all three Free styles, Quick Reframe export/charging, campaign generation and edit compliance, ownership/admin/credit checks, plus one bounded real Pro attempt. |
+| 34 | Commit/deployed version | MCP 1.3.0; release commit 21d4c14483e7543d90f373d96b1063029ed73fb6; immutable image sha256:2f1b9690568f03d71927a2d2f16431026ee85cdb4ef44d184b6d61bba3da7467. Backend only; frontend unchanged. |
 
 ## Acceptance artifacts
 
@@ -54,3 +54,14 @@ A client that caches an older tool catalog needs a new connection/chat catalog r
 ## Release and rollback
 
 Release is gated on a fresh database/config backup, isolated restore with all-table fingerprints, production idle/maintenance, immutable backend-only deployment, disposable production acceptance, exact cleanup, original database/MinIO preservation and maintenance off. Existing AI/database/Redis/MinIO/frontend containers must remain unchanged. The previous backend image is retained for immediate rollback; no destructive schema action is permitted.
+
+## Final production record
+
+- Release commit: `21d4c14483e7543d90f373d96b1063029ed73fb6`. Backend image: `sha256:2f1b9690568f03d71927a2d2f16431026ee85cdb4ef44d184b6d61bba3da7467` (`xeeclip-backend:full-editor-21d4c14`).
+- Database: no new migration; all 39 existing migrations complete. No reset or destructive schema operation.
+- Backup: `C:/projects/ai-content-platform/storage/xeeclip-mcp-full-editor-20261105/production-1793822621879.dump`, 33,842,978 bytes, SHA-256 `acb637b5d9a2a97a784df3c91b0ba146d987def1cd9b26fef83852df39ccf53e`. Independent PostgreSQL restore matched all 44 business-table fingerprints before release. Configuration and tunnel snapshots retained with the backup.
+- Production: full editor scenarios through independent OpenAI/Claude-compatible MCP sessions passed; actual rendered JPEG/WAV evidence before and after; official Inspector 2.13.0 discovered 60 tools. New full-editor MCP traffic sent zero browser cookies (98 Bearer requests).
+- Real Pro: one attempt, XEEPRO_BUSY, credit delta 0; no silent Free fallback or provider configuration change. Mocked success/busy/refund and zero-cloud Free checks also passed locally.
+- Preservation: all original business data/review settings and MinIO objects verified after exact disposable cleanup. Any ordinary expired OAuth retention is reconciled against the restored backup in the private preservation record. All unrelated containers and the deployed frontend remained unchanged. Site/API/database/Redis/MinIO/tunnel are healthy and idle; original tunnel bytes restored; maintenance OFF.
+- Rollback: not invoked. Prior backend image `sha256:406e7c36d8b42bc68b4fd041c0fc97133f05403a4fa7c2be2eaf4b83f1873713` retained as `xeeclip-backend-rollback:before-xeeclip-full-editor`; database/config backup and verified restore available.
+- Remaining issues: no P0/P1 found in acceptance. Existing ASS plate/font approximations are P2 renderer limitations; cached client catalog refresh guidance is P3. Branded ChatGPT/Claude UIs were unavailable; the report claims the actual compatible MCP protocol tests only.
