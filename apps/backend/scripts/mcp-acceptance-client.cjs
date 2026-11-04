@@ -19,6 +19,7 @@ if (
 )
   throw Error("Explicit disposable MCP QA target required");
 const scopes = [
+  "media:review",
   "account:read",
   "credits:read",
   "sources:read",
@@ -111,8 +112,8 @@ async function request(
   }
   return { value, r };
 }
-async function grant(account, selected = scopes, confidential = false) {
-  const { value: client } = await request("/register", {
+async function grant(account, selected = scopes, confidential = false, existingClient) {
+  const { value: client } = existingClient ? { value: existingClient } : await request("/register", {
     method: "POST",
     expected: 201,
     body: {
@@ -294,7 +295,7 @@ async function main() {
       ),
     );
     const account = await call(a, "get_account");
-    assert.equal(account.displayName, "Disposable MCP QA 0");
+    assert.match(account.displayName, /^Disposable (MCP|consent) QA 0$/);
     assert(!account.email && !account.passwordHash);
     const malformed = await a.callTool({
       name: "xeeclip_get_account",

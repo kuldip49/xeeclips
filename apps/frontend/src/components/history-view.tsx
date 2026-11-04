@@ -1,5 +1,7 @@
 'use client';
 
+import { CheckWithAi } from "@/components/ai-video-review";
+
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -67,6 +69,7 @@ function HistoryCard({ clip, onDelete }: { clip: HistoryClip; onDelete?: (clip: 
           <button type='button' onClick={() => onDelete(clip)} className='inline-flex h-11 items-center justify-center gap-1.5 rounded-xl sm:h-10 border border-danger/25 px-3 text-sm font-medium text-danger transition-colors hover:bg-danger/10'><Trash2 size={15} />Delete</button>
         </> : null}
       </div>
+      {clip.exportable && <CheckWithAi clipId={clip.id} />}
       {error ? <p role='alert' className='text-xs text-danger-soft'>{error}</p> : null}
     </div>
   </article>;

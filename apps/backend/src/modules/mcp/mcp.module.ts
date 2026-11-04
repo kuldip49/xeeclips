@@ -1,3 +1,4 @@
+import { MediaReviewModule } from "../media-review/media-review.module";
 import { Module } from "@nestjs/common";
 import { VideosModule } from "../videos/videos.module";
 import { EditModeModule } from "../edit-mode/edit-mode.module";
@@ -9,7 +10,13 @@ import { McpAdapterService } from "./mcp-adapter.service";
 import { McpHttpService } from "./mcp-http.service";
 import { McpController } from "./mcp.controller";
 @Module({
-  imports: [VideosModule, EditModeModule, QuickReframeModule, CampaignsModule],
+  imports: [
+    MediaReviewModule,
+    VideosModule,
+    EditModeModule,
+    QuickReframeModule,
+    CampaignsModule,
+  ],
   controllers: [McpController],
   providers: [
     McpOAuthService,

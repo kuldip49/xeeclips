@@ -12,6 +12,9 @@ export class OwnershipInterceptor implements NestInterceptor {
     if (!requestIdentity.getStore()?.userId || requestIdentity.getStore()?.adminView) return;
     const mapping: Record<string, string> = { projectId: 'project', sourceProjectId: 'project', videoId: 'video', sourceVideoId: 'video', originalVideoId: 'video', clipId: 'generatedClip', generatedClipId: 'generatedClip', candidateId: 'clipCandidate', editProjectId: 'editProject', fromProjectId: 'editProject', assetId: 'editAsset', elementId: 'editElement', fromElementId: 'editElement', referenceId: 'referenceAsset', styleId: 'savedStyle', templateId: 'editTemplate' };
     const path = req.path as string;
+    // Review targets may be owned Quick Reframe or editor export results.
+    // The review resolver validates these exact rendered resources server-side.
+    if (path.startsWith('/mcp/reviews')) delete mapping.clipId;
     if(path.startsWith('/campaigns')||path.startsWith('/campaign-clips')){
       mapping.campaignId='campaign';mapping.assetId='campaignAsset';mapping.assetKey='campaignAsset';mapping.sourceId='campaignSource';
       if(req.params.id)mapping.id=path.startsWith('/campaign-clips')?'campaignClip':'campaign';

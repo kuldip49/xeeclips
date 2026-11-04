@@ -1,9 +1,10 @@
-export const MCP_VERSION = "1.1.0";
+export const MCP_VERSION = "1.2.0";
 export const MCP_SCOPES = {
   "xeeclip:account:read": "View your account",
   "xeeclip:credits:read": "View your credits",
   "xeeclip:sources:read": "View your source videos",
-  "xeeclip:sources:import": "Import authorized external video links into your source library",
+  "xeeclip:sources:import":
+    "Import authorized external video links into your source library",
   "xeeclip:clips:read": "View your clips and jobs",
   "xeeclip:clips:create": "Create clips using your credits",
   "xeeclip:clips:edit": "Edit your clips in XeeClip",
@@ -13,6 +14,8 @@ export const MCP_SCOPES = {
   "xeeclip:campaigns:create": "Create campaigns and understand rules",
   "xeeclip:campaigns:generate": "Generate campaign clips using your credits",
   "xeeclip:history:read": "View your History",
+  "xeeclip:media:review":
+    "Request human-approved access to one rendered video and audio",
   offline_access: "Keep this assistant connected until you revoke access",
 } as const;
 export type McpScope = keyof typeof MCP_SCOPES;

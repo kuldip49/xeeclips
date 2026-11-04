@@ -29,7 +29,7 @@ async function main() {
   try {
     const before = await call(c, "get_credits");
     const catalog = await c.listTools();
-    assert.equal(catalog.tools.length, 45);
+    assert.equal(catalog.tools.length, 50);
     await preference(false);
     // A nonexistent source guarantees the test cannot start generation or spend credits.
     // OFF fails on consent; the SAME key after ON must reach the source lookup.
@@ -48,7 +48,7 @@ async function main() {
     await preference(false);
     assert.equal(await errorCode({ ...input, idempotencyKey: input.idempotencyKey + "-off" }), "AI_CONSENT_REQUIRED");
     assert.deepEqual(await call(c, "get_credits"), before);
-    const report = { passed: true, at: new Date().toISOString(), tools: 45, preferencePersists: true,
+    const report = { passed: true, at: new Date().toISOString(), tools: 50, preferencePersists: true,
       sameKeyRetryAfterConsent: true, revocationBlocksNewWork: true, accountIsolation: true, noCreditChange: true, noGenerationStarted: true };
     fs.writeFileSync(path.join(dir, "consent-acceptance.json"), JSON.stringify(report, null, 2));
     console.log("PASS saved consent reaches MCP; the same blocked request resumes after ON; OFF blocks new work; credits and other accounts are unchanged.");

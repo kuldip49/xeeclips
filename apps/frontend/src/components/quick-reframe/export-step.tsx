@@ -1,4 +1,6 @@
 'use client';
+
+import { CheckWithAi } from "@/components/ai-video-review";
 import { useAuth } from '@/components/auth-provider';
 import { useState } from 'react';
 import Link from 'next/link';
@@ -72,6 +74,7 @@ export function ExportStep({ session, onSession, onBack, onError, onEdit, result
       {done ? <div className='grid gap-2'>
         <p className='flex items-center gap-2 text-sm text-success'><Check size={16} />Your video is ready and saved in History.</p>
         <Button type='button' size='lg' className='h-12' asChild><a href={`${mediaUrl(latest.url)}?download=1`} download data-testid='download-video'><Download size={16} />Download Video</a></Button>
+        <CheckWithAi clipId={session.id} />
         <Button type='button' variant='secondary' asChild><Link href='/history'><History size={15} />Open History</Link></Button>
         <Button type='button' variant='ghost' disabled={busy || noCredits} onClick={() => void run('export')}>Export again at {quality}p</Button>
       </div> : <Button type='button' size='lg' className='h-12' disabled={busy || processing || noCredits} onClick={() => void run('export')} data-testid='export-video'>

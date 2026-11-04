@@ -548,11 +548,41 @@ export class McpOAuthService implements OAuthServerProvider {
     };
   }
   async revokeConnection(id: string, userId: string) {
-    const result = await this.prisma.mcpGrant.updateMany({
-      where: { id, userId },
-      data: { revokedAt: new Date() },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${userId} FOR UPDATE`;
+      const result = await tx.mcpGrant.updateMany({
+        where: { id, userId },
+        data: { revokedAt: new Date() },
+      });
+      if (!result.count) throw new NotFoundException("Connection not found.");
+      const reviews = await tx.aiVideoReviewRequest.findMany({
+        where: {
+          userId,
+          connectionId: id,
+          status: {
+            in: ["PENDING_USER_APPROVAL", "APPROVED", "REVIEWING", "FAILED"],
+          },
+        },
+      });
+      await tx.aiVideoReviewRequest.updateMany({
+        where: { id: { in: reviews.map((r) => r.id) } },
+        data: { status: "REVOKED" },
+      });
+      await tx.aiVideoReviewGrant.updateMany({
+        where: { userId, reviewRequestId: { in: reviews.map((r) => r.id) } },
+        data: { status: "REVOKED", revokedAt: new Date() },
+      });
+      if (reviews.length)
+        await tx.aiVideoReviewAudit.createMany({
+          data: reviews.map((r) => ({
+            userId,
+            clientId: r.clientId,
+            clipId: r.clipId,
+            reviewRequestId: r.id,
+            event: "REVOKED",
+          })),
+        });
     });
-    if (!result.count) throw new NotFoundException("Connection not found.");
     this.logger.log(
       JSON.stringify({
         event: "mcp_connections",

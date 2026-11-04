@@ -5,6 +5,8 @@ export const requestIdentity = new AsyncLocalStorage<RequestIdentity>();
 
 /** All HTTP queries are scoped. Queue workers have no HTTP context and are trusted internally. */
 export function ownerFilter(model: string, userId: string): Record<string, unknown> | null {
+  if (['AiVideoReviewRequest','AiVideoReviewGrant','AiVideoReviewAudit'].includes(model)) return { userId };
+  if (model === 'AiVideoReviewPass') return { grant: { userId } };
   if(model==='Campaign')return {userId};
   if(['CampaignBrief','CampaignAsset','CampaignSource','CampaignRun','CampaignClip'].includes(model))return{campaign:{userId}};
   if(model==='CampaignPost')return{campaignClip:{campaign:{userId}}};

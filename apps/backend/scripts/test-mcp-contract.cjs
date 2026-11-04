@@ -308,6 +308,17 @@ const write = {
   }
   assert.equal(generationStarts, 4);
   await consentOps.onModuleDestroy();
+  // OFF is checked before replaying a previously completed request receipt.
+  const reviewDb=database();let reviewEnabled=false,reviewStarts=0;
+  reviewDb.user={findUnique:async()=>({status:"ACTIVE",aiVideoReviewEnabled:reviewEnabled})};
+  const reviewOps=new McpOperationsService(reviewDb),reviewAuth={...auth,scopes:["xeeclip:media:review"]};
+  const reviewTool={name:"xeeclip_request_video_review",scopes:["xeeclip:media:review"],category:"EDITOR_WRITE"};
+  const reviewArgs={idempotencyKey:"review-cache-off-001"},reviewRun=async()=>{reviewStarts++;return{reviewRequestId:"one-request",status:"AWAITING_USER_APPROVAL"};};
+  await assert.rejects(()=>reviewOps.invoke(reviewAuth,reviewTool,reviewArgs,reviewRun),e=>e.code==="AI_VIDEO_REVIEW_DISABLED");
+  assert.equal(reviewDb.rows.size,0);
+  reviewEnabled=true;await reviewOps.invoke(reviewAuth,reviewTool,reviewArgs,reviewRun);assert.equal(reviewStarts,1);
+  reviewEnabled=false;await assert.rejects(()=>reviewOps.invoke(reviewAuth,reviewTool,reviewArgs,reviewRun),e=>e.code==="AI_VIDEO_REVIEW_DISABLED");
+  assert.equal(reviewStarts,1);await reviewOps.onModuleDestroy();
   const render = new EditModeRenderService(
     {
       editProject: {

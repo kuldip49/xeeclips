@@ -1,4 +1,6 @@
 'use client';
+
+import { CheckWithAi } from "@/components/ai-video-review";
 import Link from 'next/link';
 import { useAuth } from '@/components/auth-provider';
 
@@ -218,6 +220,7 @@ function ResultCard({ clip, onRetry }: { clip: ClipCard; onRetry: () => Promise<
             <a href={`${src}${src.includes('?') ? '&' : '?'}download=1`} download aria-label={`Export clip ${clip.position}`}><Download size={15} />Export</a>
           </Button>}
       </div>
+      {!styleBlocked && <CheckWithAi clipId={clip.id} disabled={styleBusy} />}
       <Button type='button' variant='ghost' className='h-10 w-fit justify-start px-2 text-danger-soft hover:bg-danger/10'
         disabled={deleting || styleBusy} onClick={() => setConfirmDelete(true)}><Trash2 size={15} />{deleting ? 'Deleting…' : 'Delete'}</Button>
       <ConfirmDialog open={confirmDelete} title='Delete this clip?' busy={deleting}

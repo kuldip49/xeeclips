@@ -180,6 +180,10 @@ model User {
   creditBalance Int @default(0)
   creditsConsumed Int @default(0)
   aiProcessingConsentAt DateTime?
+  aiVideoReviewEnabled Boolean @default(false)
+  videoReviewRequests AiVideoReviewRequest[]
+  videoReviewGrants AiVideoReviewGrant[]
+  videoReviewAudit AiVideoReviewAudit[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   lastLoginAt DateTime?
@@ -1050,4 +1054,78 @@ model McpAudit {
   createdAt DateTime @default(now())
   @@index([userId, createdAt])
   @@index([createdAt])
+}
+
+/// Explicit per-render approval. Not a replacement for OAuth or account consent.
+model AiVideoReviewRequest {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clipId String
+  clientId String
+  connectionId String
+  purpose String
+  status String @default("PENDING_USER_APPROVAL")
+  mediaKind String
+  mediaId String
+  renderFingerprint String
+  projectId String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+  decidedAt DateTime?
+  grant AiVideoReviewGrant?
+  audit AiVideoReviewAudit[]
+  @@index([userId, status, createdAt])
+  @@index([expiresAt])
+}
+model AiVideoReviewGrant {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clipId String
+  clientId String
+  reviewRequestId String @unique
+  request AiVideoReviewRequest @relation(fields: [reviewRequestId], references: [id], onDelete: Cascade)
+  scope String @default("REVIEW_MEDIA_ONLY")
+  grantedAt DateTime @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  consumedAt DateTime?
+  status String @default("APPROVED")
+  allowRevisions Boolean @default(false)
+  maxPasses Int @default(1)
+  passes AiVideoReviewPass[]
+  @@index([userId, status, expiresAt])
+}
+model AiVideoReviewPass {
+  id String @id @default(uuid())
+  grantId String
+  grant AiVideoReviewGrant @relation(fields: [grantId], references: [id], onDelete: Cascade)
+  renderFingerprint String
+  mediaKind String
+  mediaId String
+  duration Float
+  status String @default("APPROVED")
+  verdict String?
+  evidenceType String @default("METADATA_ONLY")
+  coverage Json @default("[]")
+  findings Json @default("[]")
+  evidenceCalls Int @default(0)
+  lockUntil DateTime?
+  createdAt DateTime @default(now())
+  accessedAt DateTime?
+  completedAt DateTime?
+  @@unique([grantId, renderFingerprint])
+}
+model AiVideoReviewAudit {
+  id String @id @default(uuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId String
+  clipId String
+  reviewRequestId String?
+  request AiVideoReviewRequest? @relation(fields: [reviewRequestId], references: [id], onDelete: SetNull)
+  event String
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
 }

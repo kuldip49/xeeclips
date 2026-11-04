@@ -1,4 +1,5 @@
 'use client';
+import { authReturnPath } from '@/lib/auth-return-path';
 import { useEffect, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -8,11 +9,11 @@ import { BrandMark } from './brand';
 export function AuthForm({ signup = false }: { signup?: boolean }) {
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const [returnTo,setReturnTo]=useState('');
-  useEffect(()=>{const value=new URLSearchParams(window.location.search).get('returnTo');if(value&&/^\/mcp\/authorize\?request=[A-Za-z0-9_-]{43}$/.test(value))setReturnTo('?returnTo='+encodeURIComponent(value));},[]);
+  useEffect(()=>{const value=new URLSearchParams(window.location.search).get('returnTo');const target=authReturnPath(value);if(target)setReturnTo('?returnTo='+encodeURIComponent(target));},[]);
   const router = useRouter(); const { refresh } = useAuth();
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault(); setBusy(true); setError(''); const data = new FormData(e.currentTarget);
-    try { await apiFetch('/auth/' + (signup ? 'signup' : 'login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: data.get('email'), password: data.get('password'), displayName: data.get('displayName') }) }); await refresh(); const back = new URLSearchParams(window.location.search).get('returnTo'); router.replace(back && /^\/mcp\/authorize\?request=[A-Za-z0-9_-]{43}$/.test(back) ? back : '/'); }
+    try { await apiFetch('/auth/' + (signup ? 'signup' : 'login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: data.get('email'), password: data.get('password'), displayName: data.get('displayName') }) }); await refresh(); const back = new URLSearchParams(window.location.search).get('returnTo'); router.replace(authReturnPath(back) ?? '/'); }
     catch (e) { setError(e instanceof Error ? e.message : 'Please try again.'); } finally { setBusy(false); }
   }
   return <div className='mx-auto flex min-h-screen max-w-md flex-col justify-center px-5 py-12'><Link href='/' className='mb-8 flex items-center justify-center gap-3 font-display text-xl font-bold'><BrandMark className='h-11 w-11 rounded-xl'/>XeeClip</Link>

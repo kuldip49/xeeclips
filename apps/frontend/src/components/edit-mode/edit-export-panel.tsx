@@ -1,5 +1,7 @@
 'use client';
 
+import { CheckWithAi } from "@/components/ai-video-review";
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, Download, Film, LoaderCircle, Play, Upload } from 'lucide-react';
 import { editExportFileUrl, EditModeApiError, listEditExports, getEditExportProgress,
@@ -156,6 +158,7 @@ export function EditExportPanel({ projectId, revision, hasSource, disabled, onSt
               className='flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-medium'>
               <Download size={12} />Download</a>
           </div>
+          {item.current && <div className='mt-2'><CheckWithAi clipId={projectId} /></div>}
           {preview === item.id && <video controls preload='metadata' className='mt-2 w-full rounded-lg bg-black'
             src={editExportFileUrl(item.id)} />}
         </li>;

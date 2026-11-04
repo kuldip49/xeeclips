@@ -1,4 +1,6 @@
 'use client';
+
+import { CheckWithAi } from "@/components/ai-video-review";
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { CheckCircle2, Download, Pencil, Clipboard, ShieldCheck } from 'lucide-react';
@@ -49,6 +51,7 @@ export function CampaignClipCard({ clip, onChange, onError }: {
   <div className='flex flex-wrap gap-2'>
    {clip.previewUrl&&<Button variant='secondary' onClick={()=>{video.current?.focus();void video.current?.play().catch(()=>onError('Use the video controls to start playback.'));}}>Preview</Button>}
    {clip.editorUrl && <Button asChild variant='secondary'><Link href={clip.editorUrl} prefetch={false} onClick={()=>sessionStorage.setItem('xeeclip-campaign-return',JSON.stringify({project:clip.editProjectId||clip.editorUrl?.split('/').at(-1),campaign:clip.campaignId}))}><Pencil size={15}/>Edit Video</Link></Button>}
+   {clip.editProjectId && clip.previewUrl && <CheckWithAi clipId={clip.editProjectId} disabled={busy} />}
    {clip.downloadUrl && <Button asChild variant='secondary'><a href={campaignMedia(clip.downloadUrl)} download><Download size={15}/>Download</a></Button>}
    <Button disabled={busy || !clip.editorUrl} variant='secondary' onClick={() => void run('export')}>Export latest</Button>
    {clip.compliance.checks?.some(c => c.fixable && ['FAIL','WARN'].includes(c.status)) && <Button disabled={busy} variant='secondary' onClick={() => void run('fix')}>Fix Automatically</Button>}

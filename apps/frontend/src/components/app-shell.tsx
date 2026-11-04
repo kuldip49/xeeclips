@@ -1,5 +1,6 @@
 'use client';
 
+import { ReviewRequestNotice } from "./review-request-notice";
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -44,7 +45,7 @@ export function AppShell({ children, navigationPath }: { children: ReactNode; na
         <div className='flex shrink-0 items-center gap-2 text-xs'><Link href='/settings' className='text-secondary-soft'>{user?.role === 'ADMIN' ? 'Owner' : `${user?.creditBalance ?? 0} credits`}</Link><button onClick={() => void logout()} className='min-h-11 text-soft'>Logout</button></div>
       </div>
     </header>
-    <main className='page-enter pb-mobile-nav mx-auto min-w-0 max-w-[1200px] px-4 pt-7 sm:px-6 md:pt-10 lg:px-8'>{children}</main>
+    <main className='page-enter pb-mobile-nav mx-auto min-w-0 max-w-[1200px] px-4 pt-7 sm:px-6 md:pt-10 lg:px-8'><ReviewRequestNotice />{children}</main>
     <MobileNav navigationPath={pathname}/>
   </div>;
 }

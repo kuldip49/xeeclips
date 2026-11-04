@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { AiVideoReviews } from "./ai-video-review";
 import { Link2 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -53,6 +54,7 @@ export function McpIntegrations() {
         </article>
       ))}
       {!data && !error && <p role="status" className="text-sm">Loading connections…</p>}
+      <AiVideoReviews />
       {error && <p role="alert" className="break-words text-sm text-danger-soft">{error}</p>}
     </section>
   );

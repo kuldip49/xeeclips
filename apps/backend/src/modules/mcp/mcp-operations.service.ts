@@ -1,3 +1,7 @@
+import {
+  VideoReviewError,
+  reviewMessages,
+} from "../media-review/media-review.policy";
 import { createHash } from "node:crypto";
 import { Injectable, Logger, OnModuleDestroy } from "@nestjs/common";
 import Redis from "ioredis";
@@ -31,6 +35,7 @@ const stable = (v: unknown): string =>
       : v,
   );
 const messages: Record<string, string> = {
+  ...reviewMessages,
   AUTH_REQUIRED: "Connect your XeeClip account.",
   AUTH_EXPIRED: "Reconnect XeeClip to continue.",
   TOKEN_REVOKED: "This connection was revoked. Reconnect XeeClip.",
@@ -55,13 +60,17 @@ const messages: Record<string, string> = {
     "Allow AI processing in XeeClip Settings before using XeePro.",
   UNSUPPORTED_SOURCE:
     "This URL or source is not supported. Check supported sources and operation limits.",
-  SOURCE_UNAVAILABLE: "This video is unavailable or has been removed. Check the link.",
+  SOURCE_UNAVAILABLE:
+    "This video is unavailable or has been removed. Check the link.",
   SOURCE_PRIVATE: "This video is private and cannot be imported.",
-  SOURCE_LOGIN_REQUIRED: "This video requires sign-in or restricted access and cannot be imported.",
+  SOURCE_LOGIN_REQUIRED:
+    "This video requires sign-in or restricted access and cannot be imported.",
   SOURCE_DRM_PROTECTED: "This video is protected and cannot be imported.",
-  SOURCE_TOO_LONG: "Source videos can be up to 3 hours long. Choose a shorter video.",
+  SOURCE_TOO_LONG:
+    "Source videos can be up to 3 hours long. Choose a shorter video.",
   SOURCE_REGION_RESTRICTED: "This video is not available in this region.",
-  SOURCE_IMPORT_FAILED: "The source could not be imported. Check the public video link and try again later.",
+  SOURCE_IMPORT_FAILED:
+    "The source could not be imported. Check the public video link and try again later.",
   UNSUPPORTED_OPERATION:
     "This operation is not currently supported by the canonical XeeClip editor.",
   IDEMPOTENCY_CONFLICT:
@@ -74,13 +83,13 @@ export function safeMcpError(error: any, category: McpCategory = "READ") {
   const body =
     typeof error?.getResponse === "function" ? error.getResponse() : undefined;
   let code =
-    error instanceof McpToolError
+    error instanceof McpToolError || error instanceof VideoReviewError
       ? error.code
       : error instanceof ImportError
         ? sourceImportErrorCode(error.code)
-      : typeof body === "object"
-        ? body?.code
-        : undefined;
+        : typeof body === "object"
+          ? body?.code
+          : undefined;
   if (code === "NO_CREDITS") code = "INSUFFICIENT_CREDITS";
   if (code === "STALE_REVISION") code = "EDIT_CONFLICT";
   const status =
@@ -196,6 +205,18 @@ export class McpOperationsService implements OnModuleDestroy {
           messages.INSUFFICIENT_SCOPE,
         );
       await this.rate(auth, tool.category);
+      // This is a field projection, not a consent initializer. OFF must also
+      // block cached idempotent receipts, without widening any OAuth scope.
+      if (tool.scopes.includes("xeeclip:media:review")) {
+        const reviewAccount = await this.prisma.user.findUnique({
+          where: { id: identity.userId },
+          select: { aiVideoReviewEnabled: true, status: true },
+        });
+        if (!reviewAccount || reviewAccount.status !== "ACTIVE")
+          throw new McpToolError("AUTH_REQUIRED", messages.AUTH_REQUIRED);
+        if (!reviewAccount.aiVideoReviewEnabled)
+          throw new VideoReviewError("AI_VIDEO_REVIEW_DISABLED");
+      }
       if (tool.category !== "READ") {
         const key = input.idempotencyKey;
         if (typeof key !== "string" || !/^[A-Za-z0-9._:-]{8,100}$/.test(key))
@@ -254,11 +275,46 @@ export class McpOperationsService implements OnModuleDestroy {
                 "xeeclip_understand_campaign",
                 "xeeclip_generate_campaign_clips",
               ].includes(tool.name) &&
-              !!(await this.prisma.user.findUnique({
-                where: { id: identity.userId },
-                select: { aiProcessingConsentAt: true },
-              }))?.aiProcessingConsentAt;
-            if (!consentRetry)
+              !!(
+                await this.prisma.user.findUnique({
+                  where: { id: identity.userId },
+                  select: { aiProcessingConsentAt: true },
+                })
+              )?.aiProcessingConsentAt;
+            const reviewRetry =
+              action.failureCode === "AI_VIDEO_REVIEW_DISABLED" &&
+              tool.name === "xeeclip_request_video_review" &&
+              !!(
+                await this.prisma.user.findUnique({
+                  where: { id: identity.userId },
+                  select: { aiVideoReviewEnabled: true },
+                })
+              )?.aiVideoReviewEnabled;
+            const evidenceRetry =
+              action.failureCode === "AI_VIDEO_REVIEW_EVIDENCE_REQUIRED" &&
+              tool.name === "xeeclip_complete_video_review" &&
+              typeof input.reviewPassId === "string" &&
+              typeof input.reviewRequestId === "string" &&
+              !!(await this.prisma.aiVideoReviewPass.findFirst({
+                where: {
+                  id: input.reviewPassId,
+                  accessedAt: { not: null },
+                  evidenceType: "ACTUAL_RENDERED_MEDIA",
+                  grant: {
+                    userId: identity.userId,
+                    clientId: identity.clientId,
+                    reviewRequestId: input.reviewRequestId,
+                    scope: "REVIEW_MEDIA_ONLY",
+                    status: "APPROVED",
+                    revokedAt: null,
+                    consumedAt: null,
+                    expiresAt: { gt: new Date() },
+                    request: { connectionId: identity.connectionId },
+                  },
+                },
+                select: { id: true },
+              }));
+            if (!consentRetry && !reviewRetry && !evidenceRetry)
               throw new McpToolError(
                 action.failureCode || "JOB_FAILED",
                 messages[action.failureCode || "JOB_FAILED"],
@@ -269,7 +325,7 @@ export class McpOperationsService implements OnModuleDestroy {
                 id: action.id,
                 inputHash,
                 status: "FAILED",
-                failureCode: "AI_CONSENT_REQUIRED",
+                failureCode: action.failureCode,
               },
               data: {
                 status: "PENDING",
@@ -281,7 +337,10 @@ export class McpOperationsService implements OnModuleDestroy {
             ownsAction = claimed.count === 1;
           }
           if (!ownsAction) {
-            if (action.status !== "FAILED" && Date.now() - action.createdAt.getTime() > 120000)
+            if (
+              action.status !== "FAILED" &&
+              Date.now() - action.createdAt.getTime() > 120000
+            )
               throw new McpToolError(
                 "OPERATION_INTERRUPTED",
                 messages.OPERATION_INTERRUPTED,
@@ -390,12 +449,13 @@ export class McpOperationsService implements OnModuleDestroy {
         entityId,
         result,
         creditEffect:
-          tool.name === "xeeclip_import_source" ? "NO_CREDIT_CHARGE" :
-          tool.category === "GENERATION"
-            ? "CANONICAL_LEDGER"
-            : tool.category === "EXPORT"
-              ? "CANONICAL_EXPORT_POLICY"
-              : "NONE",
+          tool.name === "xeeclip_import_source"
+            ? "NO_CREDIT_CHARGE"
+            : tool.category === "GENERATION"
+              ? "CANONICAL_LEDGER"
+              : tool.category === "EXPORT"
+                ? "CANONICAL_EXPORT_POLICY"
+                : "NONE",
       },
     });
     this.logger.log(

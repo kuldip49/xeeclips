@@ -21,7 +21,7 @@ const file = path.join(
   r = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file)) : {},
   save = () => fs.writeFileSync(file, JSON.stringify(r, null, 2));
 const provider = (change) => {
-  const f = path.join(artifactDir, "provider-state.json");
+  const f = (process.env.MCP_QA_PROVIDER_STATE || path.join(artifactDir, "provider-state.json"));
   fs.writeFileSync(
     f,
     JSON.stringify({ ...JSON.parse(fs.readFileSync(f)), ...change }),
@@ -97,7 +97,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       );
     }
     const telemetry = JSON.parse(
-      fs.readFileSync(path.join(artifactDir, "provider-state.json")),
+      fs.readFileSync((process.env.MCP_QA_PROVIDER_STATE || path.join(artifactDir, "provider-state.json"))),
     );
     assert.equal(telemetry.freeAttempts, 0);
     assert.equal(telemetry.transportAttempts, 0);
