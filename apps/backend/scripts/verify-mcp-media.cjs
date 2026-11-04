@@ -266,7 +266,7 @@ async function editor(client) {
     const job = await call(client, "export_clip", {
       editProjectId: id,
       expectedRevision: p.revision,
-      idempotencyKey: "mcp-export-editor-001",
+      idempotencyKey: "mcp-export-editor-001-r" + p.revision,
     });
     const done = await poll(
       client,
@@ -294,6 +294,8 @@ async function editor(client) {
       probe.streams.some((s) => s.codec_type === "video") &&
         probe.streams.some((s) => s.codec_type === "audio"),
     );
+    const foreignClient = await connect(accounts[1]);
+    await foreignClient.close();
     const denied = await fetch(done.downloadUrl, {
       headers: { Authorization: "Bearer " + accounts[1].tokens.access_token },
     });

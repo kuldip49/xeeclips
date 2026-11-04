@@ -311,6 +311,8 @@ export class CampaignsService implements OnApplicationBootstrap, OnModuleDestroy
     }
     async ownClip(id: string) { const clip = await this.prisma.campaignClip.findFirst({ where: { id, campaign: { userId: campaignOwner() } }, include: { campaign: { include: { brief: true } }, post:true,editProject:{select:{id:true,revision:true}},generatedClip:{select:{editTelemetry:true,contentPackaging:true,candidate:{select:{title:true}}}} } }); if (!clip)
         throw new NotFoundException('Campaign clip not found.'); return clip; }
+    /** Recompute owned campaign compliance from the current canonical edit; never regenerates media. */
+    async refreshForEditor(editProjectId:string){const rows=await this.prisma.campaignClip.findMany({where:{editProjectId},select:{id:true}});for(const row of rows)await this.checkClip(row.id);}
     async checkClip(id:string,force=false,attempt=0,persist=true):Promise<any>{
         const clip=await this.ownClip(id),brief=clip.campaign.brief;
         const p=clip.editProjectId?await this.edit.get(clip.editProjectId):null;

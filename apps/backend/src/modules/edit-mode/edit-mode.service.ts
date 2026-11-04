@@ -1,3 +1,4 @@
+import { PHASE3_ACTIONS } from './edit-command-actions';
 import { checkpointOperation } from '../auth/operation-checkpoint';
 import {
   BadRequestException,
@@ -88,53 +89,7 @@ export const resolveMediaByteRange = (header: string | undefined, size: number) 
   }
   return { start, end: Math.min(size - 1, requestedEnd) };
 };
-const PHASE3_ACTIONS = [
-  'ADD_IMAGE', 'ADD_LOGO', 'ADD_TEXT', 'ADD_AUDIO', 'MOVE_ELEMENT', 'RESIZE_ELEMENT',
-  'SET_ELEMENT_TIMING', 'SET_ELEMENT_OPACITY', 'SET_ELEMENT_Z_INDEX', 'UPDATE_TEXT',
-  'SET_AUDIO_VOLUME', 'SET_AUDIO_MUTED', 'SET_AUDIO_FADE', 'DUPLICATE_ELEMENT', 'REMOVE_ELEMENT',
-  // Manual transform. Crop, rotation and flip apply to the VIDEO track and to
-  // IMAGE/LOGO overlays; scale, position and speed are VIDEO-only. They are
-  // ordinary typed commands, so they inherit validation, history and undo, and
-  // an assistant bundle reaches them by exactly the same path the editor does.
-  'SET_VIDEO_CROP', 'SET_VIDEO_ROTATION', 'SET_VIDEO_FLIP', 'SET_VIDEO_SCALE',
-  'SET_VIDEO_POSITION', 'SET_SPEED',
-  // Workstream C: professional text. Each property is its own typed, validated,
-  // undoable command rather than one JSON patch, so an assistant turn and the
-  // inspector reach exactly the same code with exactly the same bounds.
-  'SET_TEXT_CONTENT', 'SET_TEXT_FONT', 'SET_TEXT_SIZE', 'SET_TEXT_WEIGHT', 'SET_TEXT_COLOR',
-  'SET_TEXT_ALIGNMENT', 'SET_TEXT_STROKE', 'SET_TEXT_SHADOW', 'SET_TEXT_BACKGROUND',
-  'SET_TEXT_SPACING', 'SET_TEXT_STYLE_PRESET', 'SET_TEXT_CASE', 'SET_TEXT_RUNS',
-  // Workstream C: captions. Generation, wording, split, merge and style are all
-  // canonical element mutations on the same SUBTITLE elements the renderer reads.
-  'GENERATE_CAPTIONS', 'REMOVE_CAPTIONS', 'SET_CAPTIONS_VISIBLE', 'SET_CAPTION_TEXT',
-  'SPLIT_CAPTION', 'MERGE_CAPTION', 'SET_CAPTION_STYLE', 'SET_CAPTION_ACTIVE_WORD',
-  'APPLY_CAPTION_STYLE_TO_ALL',
-  // Workstream D: professional colour. One typed command per control rather
-  // than a generic SET_VIDEO_COLOR_PROPERTIES patch, so every change is
-  // independently validated, independently undoable, and reachable by name from
-  // a later assistant turn ("make it warmer") without a JSON schema in between.
-  'SET_VIDEO_EXPOSURE', 'SET_VIDEO_BRIGHTNESS', 'SET_VIDEO_CONTRAST', 'SET_VIDEO_HIGHLIGHTS',
-  'SET_VIDEO_SHADOWS', 'SET_VIDEO_SATURATION', 'SET_VIDEO_TEMPERATURE', 'SET_VIDEO_TINT',
-  'SET_VIDEO_SHARPNESS', 'SET_VIDEO_FADE', 'SET_VIDEO_VIGNETTE',
-  'RESET_VIDEO_ADJUSTMENTS', 'APPLY_COLOR_FILTER', 'PASTE_VIDEO_ADJUSTMENTS',
-  // Workstream D: audio. The source video's own level, a music clip's source
-  // trim, and speech ducking.
-  'SET_SOURCE_AUDIO_VOLUME', 'SET_SOURCE_AUDIO_MUTED', 'SET_AUDIO_TRIM', 'SET_AUDIO_DUCKING',
-  // Workstream E: the two pieces of timeline track state that have to survive a
-  // reload and reach the renderer. Both already existed as stored properties
-  // (`hidden` was honoured by the render plan, `locked` by the preview) with no
-  // command able to set them; these close that gap rather than inventing state.
-  'SET_ELEMENT_VISIBLE', 'SET_ELEMENT_LOCKED',
-  // Workstream G: a zoom is an editable EFFECT element, so "make this zoom
-  // deeper" changes that one event rather than re-planning every zoom.
-  'ADD_ZOOM', 'SET_ZOOM_SCALE', 'REMOVE_ZOOM',
-  // Step 5: canonical scope primitives. Whole-project framing and reframe
-  // policy, relative zoom strength, and explicit caption regeneration (the only
-  // command besides SET_CAPTION_TEXT allowed to rewrite caption wording).
-  'SET_VIDEO_FRAMING', 'SET_REFRAME_POLICY', 'ADJUST_ZOOM_STRENGTH', 'REGENERATE_CAPTIONS',
-  // Step 10: what shows behind a fitted (letterboxed) frame.
-  'SET_FIT_BACKGROUND'
-] as const;
+
 
 /** Caption wording provenance. Legacy captions read from `manualEdited`. */
 export const CAPTION_TEXT_SOURCES = ['TRANSCRIPT_GENERATED', 'MANUAL_EDITED', 'AI_REWRITTEN'] as const;
@@ -243,7 +198,7 @@ const MANUAL_ACTIONS = new Set(['TRIM_ELEMENT', 'SPLIT_ELEMENT', 'DELETE_ELEMENT
   'MOVE_ELEMENT', 'ADJUST_SOURCE_RANGE', 'APPLY_PRESET', 'APPLY_ASSISTANT_EDIT',
   'APPLY_TEMPLATE', ...PHASE3_ACTIONS]);
 const ELEMENT_ORIGINS = new Set(['USER', 'PRESET', 'ASSISTANT']);
-const PRESET_ROLES = new Set(['HOOK', 'SUBTITLE', 'KEY_POINT', 'CTA', 'PRODUCT', 'LOGO', 'MUSIC']);
+const PRESET_ROLES = new Set(['HOOK', 'HEADLINE', 'TITLE', 'LABEL', 'OTHER_TEXT', 'SUBTITLE', 'KEY_POINT', 'CTA', 'PRODUCT', 'LOGO', 'MUSIC']);
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 const AUDIO_CONTENT_TYPES: Record<string, string> = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav',
@@ -890,6 +845,7 @@ export class EditModeService {
           startDelta: startDelta ?? null, endDelta: endDelta ?? null },
         beforeState: { elements: serialize(before), settings: current.settings },
         afterState: { elements: serialize(after), settings } } });
+      await checkpointOperation(tx, {editProjectId:id,revision,saved:true}, id);
       return tx.editProject.findUniqueOrThrow({ where: { id }, include: includeProject });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
   }
@@ -1651,7 +1607,7 @@ export class EditModeService {
         const item = requireTarget();
         if (item.type === 'VIDEO') throw new BadRequestException('VIDEO elements cannot be duplicated');
         return add({ ...item, id: randomUUID(), position: nextPosition(item.track),
-          properties: { ...(item.properties as Record<string, unknown>) } as Prisma.InputJsonValue });
+          properties: { ...(item.properties as Record<string, unknown>), ...(input.origin ? this.originProperties(input) : {}) } as Prisma.InputJsonValue });
       }
       if (action === 'REMOVE_ELEMENT') {
         const item = requireTarget();
@@ -2596,6 +2552,7 @@ export class EditModeService {
           commandCount: bundle.commands.length, summary: bundle.summary },
         beforeState: { elements: serialize(before), settings: settingsBefore as Prisma.InputJsonValue },
         afterState: { elements: serialize(elements), settings: settingsAfter } } });
+      await checkpointOperation(tx, {editProjectId:id,revision,saved:true}, id);
       return tx.editProject.findUniqueOrThrow({ where: { id }, include: includeProject });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
   }
@@ -2628,6 +2585,8 @@ export class EditModeService {
     defaults: Record<string, unknown>;
     /** Optional task constraints from the caller (e.g. an AI task applying a template). */
     constraints?: EditConstraint[];
+    onBlocked?: 'ABORT';
+    validatePlannedState?: (elements:TimelineElement[],settings:Record<string,unknown>)=>void;
   }) {
     const expectedRevision = parseRevision(revisionValue);
     if (!/^[A-Za-z0-9_-]{1,64}$/u.test(bundle.templateId)) {
@@ -2671,6 +2630,7 @@ export class EditModeService {
             if (!(key in payload)) continue;
             const blocked = blockingEditConstraint(action, 'TEMPLATE_ACTION', constraints, videos);
             if (!blocked) continue;
+            if(bundle.onBlocked==='ABORT')throw new BadRequestException({code:'EDIT_CONSTRAINT_BLOCKED',message:'A protected editor setting blocks this template.'});
             delete payload[key];
             commandResults.push({ index, action, status: 'BLOCKED_BY_CONSTRAINT', scope: 'PROJECT',
               affectedElementIds: [], affectedCount: 0, constraint: blocked.type });
@@ -2683,6 +2643,7 @@ export class EditModeService {
         const blocked = blockingEditConstraint(command.action, 'TEMPLATE_ACTION', constraints,
           this.constraintTargets(command.action, command.payload, elements));
         if (blocked) {
+          if(bundle.onBlocked==='ABORT')throw new BadRequestException({code:'EDIT_CONSTRAINT_BLOCKED',message:'A protected editor layer blocks this template.'});
           commandResults.push({ index, action: command.action, status: 'BLOCKED_BY_CONSTRAINT',
             scope: this.resultScope(command.action, command.payload), affectedElementIds: [],
             affectedCount: 0, constraint: blocked.type });
@@ -2717,7 +2678,7 @@ export class EditModeService {
         // silently skipped restyling it (found by Workstream G - the AI chat also
         // lost "the hook" after any template apply).
         const textRole = [properties.templateRole, properties.presetRole]
-          .find((role) => role === 'HOOK' || role === 'CTA');
+          .find((role) => ['HOOK','HEADLINE','TITLE','CTA','LABEL','OTHER_TEXT'].includes(String(role)));
         return { ...element, properties: {
           ...properties,
           templateId: bundle.templateId,
@@ -2726,6 +2687,7 @@ export class EditModeService {
         } as Prisma.InputJsonValue };
       });
 
+      bundle.validatePlannedState?.(elements,{...settingsBefore,...style});
       await this.replaceElements(tx, id, elements);
       const templateRun = {
         templateId: bundle.templateId, templateName: bundle.templateName,
@@ -2745,6 +2707,7 @@ export class EditModeService {
         beforeState: { elements: serialize(before),
           settings: settingsBefore as Prisma.InputJsonValue },
         afterState: { elements: serialize(elements), settings: settingsAfter } } });
+      await checkpointOperation(tx, {editProjectId:id,revision,saved:true}, id);
       const project = await tx.editProject.findUniqueOrThrow({ where: { id }, include: includeProject });
       return { ...project, commandResults };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }));
@@ -2785,6 +2748,9 @@ export class EditModeService {
     /** Who is executing. Defaults to AI_ACTION. */
     actor?: EditCommandActor;
     onInvalid?: 'ABORT' | 'CONTINUE';
+    /** Internal domain callers may require atomic refusal instead of partial protected edits. */
+    onBlocked?: 'ABORT';
+    validatePlannedState?: (elements: TimelineElement[], settings: Record<string, unknown>) => void;
     /** Persisted alongside the edit so the thread and the timeline stay in step. */
     chat?: Prisma.InputJsonValue;
   }) {
@@ -2827,6 +2793,7 @@ export class EditModeService {
         const record = (result: Omit<EditCommandResult, 'index' | 'action'>) => {
           commandResults.push({ index, action: command.action, ...result });
           if (result.status === 'BLOCKED_BY_CONSTRAINT') {
+            if (bundle.onBlocked === 'ABORT') throw new BadRequestException({code:'EDIT_CONSTRAINT_BLOCKED',message:'This edit is protected by an editor constraint.'});
             this.logger.log(JSON.stringify({ event: 'edit_constraint_blocked', editProjectId: id,
               action: command.action, actor: bundle.actor ?? 'AI_ACTION' }));
           }
@@ -2901,7 +2868,7 @@ export class EditModeService {
           continue;
         }
 
-        const creates = command.action.startsWith('ADD_');
+        const creates = command.action.startsWith('ADD_') || command.action === 'DUPLICATE_ELEMENT';
         if (creates) {
           payload.origin = 'ASSISTANT';
           payload.createdAtRevision = revision;
@@ -2982,6 +2949,7 @@ export class EditModeService {
       if (refreshed) settingsPatch = { ...settingsPatch, resolvedVisualLayout: refreshed };
     }
     const styleSettingsAfter = { ...styleSettingsBefore, ...style, ...settingsPatch, ...originPatch };
+    bundle.validatePlannedState?.(elements, styleSettingsAfter);
     const settingsAfter = { ...styleSettingsAfter,
       ...(bundle.chat === undefined ? (settingsBefore.chat === undefined
         ? {} : { chat: settingsBefore.chat }) : { chat: bundle.chat }) } as Prisma.InputJsonValue;

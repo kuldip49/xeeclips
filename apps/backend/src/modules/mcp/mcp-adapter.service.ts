@@ -1,3 +1,4 @@
+import {EditorControlService} from '../edit-mode/editor-control.service';
 import { readTextStyle } from "../edit-mode/edit-mode-text";
 import { Injectable } from "@nestjs/common";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
@@ -57,6 +58,7 @@ export class McpAdapterService {
     private readonly edit: EditModeService,
     private readonly render: EditModeRenderService,
     private readonly materializer: GeneratedClipEditProjectMaterializerService,
+    private readonly editorControl?: EditorControlService,
   ) {}
   private async pro(mode: string, userId: string) {
     if (
@@ -297,8 +299,23 @@ export class McpAdapterService {
   }
   /** Arguments have passed the strict catalog schema. Only named application commands are constructed here. */
   async execute(name: string, a: any, auth: AuthInfo): Promise<any> {
+    const result=await this.executeOperation(name,a,auth);
+    if(result?.editProjectId && typeof result.revision==='number' && name!=='xeeclip_get_edit_project' && auth.scopes.includes('xeeclip:clips:edit') && !['xeeclip_list_edit_elements','xeeclip_get_edit_layout','xeeclip_preview_element_placement','xeeclip_check_edit_requirements','xeeclip_get_export'].includes(name)) await this.campaigns.refreshForEditor(result.editProjectId);
+    return result;
+  }
+  private async executeOperation(name:string,a:any,auth:AuthInfo):Promise<any> {
     const userId = String(auth.extra!.userId),
       tool = name.replace(/^xeeclip_/, "");
+    if(tool==='get_editor_capabilities')return this.editorControl!.capabilities();
+    if(tool==='list_edit_elements')return this.editorControl!.elements(a.editProjectId,a.offset,a.limit);
+    if(tool==='get_edit_layout')return this.editorControl!.layout(a.editProjectId);
+    if(tool==='preview_element_placement'){const {editProjectId,...input}=a;return this.editorControl!.placement(editProjectId,input);}
+    if(tool==='check_edit_requirements')return this.editorControl!.requirements(a.editProjectId,a.requirements);
+    if(tool==='apply_edit_commands')return this.editorControl!.apply(a.editProjectId,a.expectedRevision,a.commands);
+    if(tool==='remove_caption_group')return this.editorControl!.removeCaptionGroup(a.editProjectId,a.expectedRevision,a.groupId);
+    if(tool==='change_template')return this.editorControl!.template(a.editProjectId,a.expectedRevision,a.targetTemplate);
+    if(tool==='apply_editor_preset')return this.editorControl!.preset(a.editProjectId,a.expectedRevision,a.presetId);
+    if(tool==='adjust_source_range'){const r=await this.edit.adjustSourceRange(a.editProjectId,{revision:a.expectedRevision,start:a.start,end:a.end,startDelta:a.startDelta,endDelta:a.endDelta});return {editProjectId:r.id,revision:r.revision,saved:true};}
     if (tool === "get_account" || tool === "get_credits") {
       const u = await this.auth.activeAccount(userId);
       return tool === "get_credits"

@@ -54,6 +54,11 @@ const messages: Record<string, string> = {
   GENERATION_FAILED:
     "Clips could not be started. Check the source in XeeClip and retry.",
   JOB_FAILED: "Processing could not finish. Review the job in XeeClip.",
+  HOOK_DOES_NOT_FIT: 'This hook does not fit. Shorten it or adjust its text box.',
+  TEXT_DOES_NOT_FIT: 'This text does not fit. Shorten it, reduce its size or resize its box.',
+  PLACEMENT_CONFLICT: 'The selected region has no safe free space. Choose another region or adjust its layers.',
+  PLACEMENT_TARGET_REQUIRED: 'Choose the existing element whose geometry should be reused.',
+  EDIT_CONSTRAINT_BLOCKED: 'An editor protection blocks this change. Review the protected edit before retrying.',
   HEADLINE_DOES_NOT_FIT:
     "This headline does not fit. Shorten it and try again.",
   AI_CONSENT_REQUIRED:

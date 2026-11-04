@@ -1,3 +1,4 @@
+import { EditorControlService } from './editor-control.service';
 import { Module } from '@nestjs/common';
 import { StorageModule } from '../storage/storage.module';
 import { LlmProviderService } from '../processing/llm-provider.service';
@@ -28,13 +29,13 @@ import { SavedStylesService } from './styles/saved-styles.service';
 @Module({
   imports: [StorageModule],
   controllers: [EditModeController],
-  providers: [EditModeService, GeneratedClipEditProjectMaterializerService,
+  providers: [EditorControlService, EditModeService, GeneratedClipEditProjectMaterializerService,
     EditModeAnalysisService, EditModePresetService, EditTemplateService,
     EditModeRenderService, EditModeRecoveryService,
     EditChatService, EditChatProposalStore,
     EditReviewService, EditReviewStore, EditBriefService, EditBriefPlanStore, EditAgentService,
     GenerationStylingService, ReferenceAnalysisService, SavedStylesService,
     LlmProviderService, ProviderRegistry, LlmRouterService],
-  exports: [GenerationStylingService, SavedStylesService, EditModeService, EditModeRenderService, GeneratedClipEditProjectMaterializerService]
+  exports: [EditorControlService, GenerationStylingService, SavedStylesService, EditModeService, EditModeRenderService, GeneratedClipEditProjectMaterializerService]
 })
 export class EditModeModule {}

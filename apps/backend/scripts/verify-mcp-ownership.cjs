@@ -126,9 +126,13 @@ const fs = require("fs"),
       body: { mode: "ADD", amount: 999, reason: "unauthorized" },
     });
     const listed = await call(b, "list_sources", {});
-    assert.equal(listed.items.length, 0);
+    const ownedSources=(await request('/videos',{cookie:accounts[1].cookie})).value;
+    assert(listed.items.every(item=>ownedSources.some(v=>v.id===item.sourceId)));
+    assert(!listed.items.some(item=>item.sourceId===accounts[0].sourceId));
     const clips = await call(b, "list_clips", {});
-    assert.equal(clips.items.length, 0);
+    const ownedClips=(await request('/history/clips',{cookie:accounts[1].cookie})).value;
+    assert(clips.items.every(item=>ownedClips.some(v=>v.id===item.clipId)));
+    assert(!clips.items.some(item=>media.create.some(own=>own.clipId===item.clipId)));
     fs.writeFileSync(
       path.join(artifactDir, "ownership-acceptance.json"),
       JSON.stringify(

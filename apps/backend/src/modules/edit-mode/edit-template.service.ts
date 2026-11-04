@@ -1,3 +1,4 @@
+import {requestIdentity} from '../auth/request-context';
 // EditMode Workstream F: template orchestration.
 //
 //   template (built-in or user-saved)
@@ -75,7 +76,7 @@ export class EditTemplateService {
   async get(templateId: string): Promise<EditTemplate> {
     if (isBuiltinTemplateId(templateId)) return BUILTIN_TEMPLATES[templateId];
     const row = await this.prisma.editTemplate.findUnique({ where: { id: templateId } });
-    if (!row || row.ownerScope !== OWNER_SCOPE) throw new NotFoundException('Template not found');
+    if (!row || row.ownerScope !== (requestIdentity.getStore()?.userId ?? OWNER_SCOPE)) throw new NotFoundException('Template not found');
     return this.fromRow(row);
   }
 
@@ -161,7 +162,8 @@ export class EditTemplateService {
   /** APPLY: one transaction, one TEMPLATE history revision, one undo. */
   async apply(editProjectId: string, input: { templateId?: unknown; revision?: unknown;
     /** Task constraints of an automated caller (the AI agent); enforced per command. */
-    constraints?: EditConstraint[] }) {
+    constraints?: EditConstraint[]; onBlocked?: 'ABORT';
+    validatePlannedState?: (elements:any[],settings:Record<string,unknown>)=>void }) {
     const started = Date.now();
     const { plan, revision, template } = await this.buildPlan(editProjectId, input.templateId,
       input.revision);
@@ -170,7 +172,7 @@ export class EditTemplateService {
       templateId: template.id, templateName: template.name, templateRunId,
       source: template.source, summary: plan.summary, commands: plan.commands,
       imprints: plan.imprints, defaults: templateDefaults(template),
-      ...(input.constraints ? { constraints: input.constraints } : {})
+      ...(input.constraints ? { constraints: input.constraints } : {}), onBlocked:input.onBlocked, validatePlannedState:input.validatePlannedState
     });
     this.logger.log(JSON.stringify({ event: 'edit_template_apply', editProjectId,
       templateId: template.id, templateRunId, commandCount: plan.commands.length,
@@ -329,7 +331,7 @@ export class EditTemplateService {
         message: 'Built-in templates cannot be changed or deleted. Duplicate one instead.' });
     }
     const row = await this.prisma.editTemplate.findUnique({ where: { id: templateId } });
-    if (!row || row.ownerScope !== OWNER_SCOPE) throw new NotFoundException('Template not found');
+    if (!row || row.ownerScope !== (requestIdentity.getStore()?.userId ?? OWNER_SCOPE)) throw new NotFoundException('Template not found');
     return row;
   }
 

@@ -90,8 +90,8 @@ const edit = {
     return { revision: 10 };
   },
 };
-const a = new McpAdapterService(null, null, null, null, null, edit, null, null),
-  auth = { extra: { userId: "owner" } };
+const a = new McpAdapterService(null, null, null, null, {refreshForEditor:async()=>{}}, edit, null, null),
+  auth = { scopes:["xeeclip:clips:edit"], extra: { userId: "owner" } };
 (async () => {
   const summary = await a.execute(
     "xeeclip_get_edit_project",
